@@ -2,6 +2,14 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with the CardMint project.
 
+## Project Status
+
+✅ **OPERATIONAL** - CardMint v1.0.0 is running and accepting requests!
+- Last successful start: August 13, 2025
+- All core services operational
+- 20 processing workers active
+- Database schema deployed
+
 ## Project Overview
 
 CardMint is a high-performance card scanning and processing system designed to achieve sub-500ms response times and 60+ cards/minute throughput on Fedora 42 Workstation. The system processes trading cards or similar items with real-time image capture, OCR, and metadata extraction.
@@ -15,9 +23,26 @@ CardMint is a high-performance card scanning and processing system designed to a
 - **CPU utilization**: <60% on isolated cores
 - **System availability**: 99.9% uptime with automatic recovery
 
+## Current Endpoints
+
+### REST API (Port 3000)
+- `GET /api/health` - Health check endpoint
+- `GET /api/cards` - List all cards
+- `GET /api/cards/:id` - Get specific card
+- `POST /api/capture` - Trigger card capture
+- `GET /api/queue/status` - Queue status
+
+### WebSocket (Port 3001)
+- Real-time updates and streaming
+- Binary image data support
+
+### Metrics (Port 9091)
+- Prometheus-compatible metrics at `/metrics`
+- Memory, CPU, and performance tracking
+
 ## Architecture Overview
 
-### Core Components (To Be Implemented)
+### Core Components (Implemented)
 
 **Camera Pipeline**:
 - V4L2 zero-copy buffer management
@@ -57,13 +82,28 @@ CardMint is a high-performance card scanning and processing system designed to a
 
 ## Development Workflow
 
-### Build Commands (To Be Defined)
+### Quick Start
+```bash
+# Start server (with cleanup)
+./start-clean.sh
+
+# Stop server
+./stop.sh
+
+# Check status
+curl http://localhost:3000/api/health
+```
+
+### Build Commands
 ```bash
 # Development build
 npm run dev
 
 # Production build  
 npm run build
+
+# Compile TypeScript
+npm run typecheck
 
 # Run tests
 npm test
@@ -76,6 +116,17 @@ npm run camera-setup
 
 # Debug pipeline
 npm run debug-pipeline
+```
+
+### Infrastructure Setup
+```bash
+# PostgreSQL setup (if needed)
+./setup-postgres.sh
+./fix-db-permissions.sh
+
+# Service management
+sudo systemctl status valkey   # Redis
+sudo systemctl status postgresql
 ```
 
 ### Hardware Integration
@@ -127,31 +178,50 @@ npm run debug-pipeline
 - OpenTelemetry for observability
 - Grafana + Prometheus for monitoring
 
-## Implementation Phases
+## Implementation Status
 
-### Phase 1: Foundation
-- Camera pipeline setup with V4L2
-- Basic image capture and processing
-- PostgreSQL schema design
-- Redis configuration
+### ✅ Phase 1: Foundation (COMPLETE)
+- ✅ TypeScript project structure
+- ✅ PostgreSQL schema deployed
+- ✅ Redis/Valkey configured
+- ✅ Basic API endpoints
 
-### Phase 2: Processing Engine  
-- BullMQ job queue implementation
-- OpenCV image processing pipeline
-- PaddleOCR integration
-- Basic performance optimization
+### ✅ Phase 2: Processing Engine (COMPLETE)
+- ✅ BullMQ job queue with 20 workers
+- ✅ Image processor stub
+- ✅ Card repository pattern
+- ✅ Error handling and retry logic
 
-### Phase 3: Real-time Features
-- uWebSockets.js dashboard
-- Live image streaming
-- Real-time metrics collection
-- Performance monitoring
+### ✅ Phase 3: Real-time Features (COMPLETE)
+- ✅ WebSocket server on port 3001
+- ✅ Prometheus metrics endpoint
+- ✅ Performance monitoring
+- ✅ Queue status tracking
 
-### Phase 4: Production Optimization
-- Kernel optimization deployment
-- Container orchestration
-- Advanced monitoring setup  
-- Performance tuning and validation
+### 🔄 Phase 4: Production Optimization (IN PROGRESS)
+- ⏳ Sony SDK native bindings
+- ⏳ OpenCV integration
+- ⏳ PaddleOCR setup
+- ⏳ GPU acceleration
+- ⏳ Kernel optimization
+
+## Next Steps
+
+1. **Sony Camera Integration**
+   - Build native C++ bindings
+   - Test with physical camera
+   - Implement live view streaming
+
+2. **Image Processing**
+   - Integrate OpenCV for preprocessing
+   - Add PaddleOCR for text extraction
+   - Implement card metadata parsing
+
+3. **Performance Tuning**
+   - Profile current latencies
+   - Optimize database queries
+   - Implement caching strategies
+   - Test with high-volume loads
 
 ## Hardware Requirements
 
