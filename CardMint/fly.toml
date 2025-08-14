@@ -1,0 +1,110 @@
+# CardMint Fly.io Configuration
+# High-performance Pokemon card scanning and inventory system
+
+app = "cardmint"
+primary_region = "iad"  # Ashburn, Virginia (matching database region)
+kill_signal = "SIGINT"
+kill_timeout = 30
+
+[build]
+  dockerfile = "Dockerfile"
+  
+[env]
+  NODE_ENV = "production"
+  PORT = "3000"
+  WS_PORT = "3001"
+  HOST = "0.0.0.0"
+  
+  # Performance settings
+  MAX_WORKERS = "20"
+  WORKER_CONCURRENCY = "3"
+  USE_GPU = "false"  # GPU not available on standard Fly machines
+  ENABLE_METRICS = "true"
+  
+  # OCR settings
+  OCR_MODEL = "PaddleOCR"
+  OCR_LANG = "en"
+  OCR_CONFIDENCE_THRESHOLD = "0.85"
+  
+  # Redis (will be replaced with Upstash Redis in production)
+  REDIS_HOST = "localhost"
+  REDIS_PORT = "6379"
+  
+  # System optimization
+  CPU_CORES = "2-7"
+  MEMORY_LIMIT_MB = "2048"
+
+[experimental]
+  auto_rollback = true
+
+[[services]]
+  internal_port = 3000
+  protocol = "tcp"
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[services.ports]]
+    port = 80
+    handlers = ["http"]
+    force_https = true
+
+  [[services.ports]]
+    port = 443
+    handlers = ["tls", "http"]
+
+  [[services.http_checks]]
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "10s"
+    method = "GET"
+    path = "/api/health"
+
+  [services.concurrency]
+    type = "connections"
+    hard_limit = 100
+    soft_limit = 80
+
+# WebSocket service
+[[services]]
+  internal_port = 3001
+  protocol = "tcp"
+  
+  [[services.ports]]
+    port = 3001
+    handlers = ["tls"]
+
+# Metrics endpoint for monitoring
+[[services]]
+  internal_port = 9091
+  protocol = "tcp"
+  
+  [[services.ports]]
+    port = 9091
+    handlers = ["http"]
+
+[[vm]]
+  cpu_kind = "performance"
+  cpus = 4
+  memory_mb = 4096
+
+# Scaling configuration
+[metrics]
+  port = 9091
+  path = "/metrics"
+
+# Mounts for persistent storage (optional)
+# [[mounts]]
+#   source = "cardmint_data"
+#   destination = "/data"
+
+# Secrets (set these with flyctl secrets set)
+# DATABASE_URL - Managed Postgres connection string
+#   Cluster: gjpkdon11dy0yln4
+#   Region: IAD
+#   Postgres: v16 with pooling enabled
+#   Storage: 10GB
+#   CPU: Shared x2
+# PRICECHARTING_API_KEY - PriceCharting API key  
+# POKEMONTCG_API_KEY - Pokemon TCG API key
+# FLY_API_TOKEN - Fly.io API token for deployments
