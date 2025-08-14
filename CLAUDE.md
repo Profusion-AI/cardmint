@@ -15,15 +15,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with th
 
 ## Project Overview
 
-CardMint is a high-performance Pokemon card scanning and inventory management system achieving 99%+ OCR accuracy through multi-API validation. Features sub-500ms response times, 60+ cards/minute throughput, and comprehensive pricing integration with PriceCharting and Pokemon TCG APIs. The system processes trading cards with real-time image capture, advanced OCR with Pokemon-specific patterns, visual validation against official card images, and automated pricing updates.
+CardMint is a high-accuracy Pokemon card scanning and inventory management system achieving 99.9% pipeline accuracy through multi-API validation. The MVP prioritizes accuracy over speed, targeting one successful scan every 10 seconds with comprehensive data validation. The system processes trading cards with precise image capture, advanced OCR with Pokemon-specific patterns, visual validation against official card images, automated pricing updates, and reliable database entry for inventory management.
 
-## Performance Requirements
+## Performance Requirements (MVP)
 
 ### Critical Targets
-- **Response time**: <500ms per card (targeting <200ms)
-- **Throughput**: Minimum 60 cards/minute (targeting 80+)
-- **Memory usage**: Keep heap under 2GB
-- **CPU utilization**: <60% on isolated cores
+- **Accuracy**: 99.9% pipeline accuracy (OCR + validation + database entry)
+- **Scan rate**: 1 successful scan every 10 seconds (6 cards/minute)
+- **Validation**: Multi-source verification (OCR, Pokemon TCG API, PriceCharting)
+- **Data integrity**: 100% accurate database entries for inventory
+- **Error handling**: Automatic flagging for manual review when confidence < 95%
 - **System availability**: 99.9% uptime with automatic recovery
 
 ## Current Endpoints
@@ -144,19 +145,28 @@ sudo systemctl status postgresql
 - Pyroscope continuous profiling
 - Multi-burn rate alerting
 
-## Key Performance Metrics
+## Key Performance Metrics (MVP Focus)
 
-**Latency Breakdown (Target)**:
-- Camera capture: 16ms
-- GPU processing: 45ms  
-- OCR extraction: 120ms
-- Total pipeline: ~180ms (well under 500ms target)
+**Accuracy Pipeline**:
+- OCR confidence threshold: >95%
+- API match validation: >90%
+- Visual similarity score: >85%
+- Combined confidence: >99%
+- Manual review trigger: <95% confidence
 
-**Throughput Metrics**:
-- `cards_processed_total`: Counter for throughput validation
-- `capture_response_seconds_bucket`: P95 latency histogram
-- `queue_depth_current`: Backpressure detection
-- `worker_utilization_percentage`: Scaling indicators
+**Processing Time Budget (10 seconds)**:
+- Camera capture & stabilization: 1-2s
+- OCR extraction: 2-3s
+- API validation (Pokemon TCG + PriceCharting): 2-3s
+- Visual validation: 1-2s
+- Database entry & verification: 1s
+- Buffer for retries: 1-2s
+
+**Quality Metrics**:
+- `accuracy_rate`: 99.9% target for inventory accuracy
+- `validation_confidence`: Multi-source confidence scoring
+- `review_queue_size`: Cards requiring manual verification
+- `data_completeness`: All required fields populated
 
 ## Technology Stack
 
@@ -204,9 +214,10 @@ sudo systemctl status postgresql
 
 ### ✅ Phase 1: Foundation (COMPLETE)
 - ✅ TypeScript project structure
-- ✅ PostgreSQL schema deployed
+- ✅ PostgreSQL schema deployed (Fly.io Managed Postgres)
 - ✅ Redis/Valkey configured
 - ✅ Basic API endpoints
+- ✅ Fly.io integration complete
 
 ### ✅ Phase 2: Processing Engine (COMPLETE)
 - ✅ BullMQ job queue with 20 workers
@@ -228,17 +239,17 @@ sudo systemctl status postgresql
 - ⏳ PaddleOCR setup - Next phase
 - ⏳ GPU acceleration - Next phase
 
-### 🚀 Phase 5: Inventory System (IN PROGRESS)
+### ✅ Phase 5: Inventory System (COMPLETE)
 - ✅ PriceCharting API integration
 - ✅ Pokemon TCG API integration  
 - ✅ Pokemon-specific OCR patterns
 - ✅ Visual validation service
 - ✅ Combined card matcher utility
-- ⏳ Enhanced database schema with pricing
-- ⏳ Inventory management API
-- ⏳ Batch processing workflows
+- ✅ Enhanced database schema with pricing
+- ✅ Fly.io Managed Postgres integration
+- ✅ Test suite with official images
+- ⏳ Real card testing with camera
 - ⏳ Dashboard and reporting
-- ⏳ Real card testing suite
 
 ## Camera Integration Details
 
@@ -293,6 +304,23 @@ cd /home/profusionai/CardMint/CrSDK_v2.00.00_20250805a_Linux64PC/build
 - Multi-pass OCR with confidence aggregation
 - Special edition and variant detection
 
+## Database Integration
+
+### Fly.io Managed Postgres
+- **Status**: ✅ Connected and operational
+- **Cluster**: cardmint-db (gjpkdon11dy0yln4)
+- **Region**: IAD (Ashburn, Virginia)
+- **Version**: PostgreSQL 16.8 with pooling
+- **Storage**: 10GB (1.2GB used)
+- **Connection**: Via proxy on localhost:16380
+- **Schema**: Enhanced Pokemon tables deployed
+
+### Database Features
+- Automatic backups and point-in-time recovery
+- Built-in connection pooling (PgBouncer)
+- Automatic failover for high availability
+- Optimized for inventory management workload
+
 ## API Keys & Environment
 
 ```bash
@@ -301,30 +329,37 @@ PRICECHARTING_API_KEY=0a312991655c1fcab8be80b01e016fe3e9fcfffc
 
 # Pokemon TCG API (Configured)  
 POKEMONTCG_API_KEY=8560cda2-6058-41fd-b862-9f4cad531730
+
+# Fly.io Database (Configured)
+DATABASE_URL=postgresql://[configured]
 ```
 
 ## Next Steps
 
-1. **Database Schema Enhancement**
-   - Implement enhanced schema from ENHANCED_OCR_PLAN.md
-   - Add Pokemon TCG and pricing fields
-   - Create migration scripts
+### MVP Priority: Accuracy First
 
-2. **Testing with Real Cards**
-   - Build test suite with 40+ Pokemon cards
-   - Validate 99% accuracy target
-   - Tune confidence thresholds
+1. **Real Card Testing** (Priority 1)
+   - Test with physical Pokemon cards using camera
+   - Validate 99.9% accuracy target
+   - Fine-tune OCR confidence thresholds
+   - Optimize for 1 scan per 10 seconds
 
-3. **Production Integration**
-   - Connect services to camera pipeline
-   - Implement real-time processing flow
-   - Add monitoring and metrics
+2. **Pipeline Refinement**
+   - Implement retry logic for failed scans
+   - Add manual review queue for low-confidence cards
+   - Ensure 100% accurate database entries
+   - Test with various card conditions and lighting
 
-4. **Dashboard & Analytics**
-   - Real-time inventory dashboard
-   - Price tracking and alerts
-   - Collection analytics
-   - Export capabilities
+3. **Production Deployment**
+   - Deploy to Fly.io when accuracy targets met
+   - Monitor real-world performance
+   - Gather feedback on inventory accuracy
+
+4. **Future Enhancements** (Post-MVP)
+   - Dashboard for inventory visualization
+   - Batch processing optimization
+   - Speed improvements (after accuracy proven)
+   - Export capabilities for collection management
 
 ## Hardware Requirements
 

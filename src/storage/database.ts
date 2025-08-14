@@ -7,19 +7,31 @@ const logger = createLogger('database');
 let pool: Pool | null = null;
 
 export async function initializeDatabase(): Promise<void> {
-  const poolConfig: PoolConfig = {
-    host: config.database.host,
-    port: config.database.port,
-    database: config.database.name,
-    user: config.database.user,
-    password: config.database.password,
-    min: config.database.poolMin,
-    max: config.database.poolMax,
-    idleTimeoutMillis: 30000,
-    connectionTimeoutMillis: 5000,
-    statement_timeout: 30000,
-    query_timeout: 30000,
-  };
+  // Use DATABASE_URL if available (Fly.io Managed Postgres)
+  const poolConfig: PoolConfig = config.database.connectionString
+    ? {
+        connectionString: config.database.connectionString,
+        min: config.database.poolMin,
+        max: config.database.poolMax,
+        idleTimeoutMillis: 30000,
+        connectionTimeoutMillis: 5000,
+        statement_timeout: 30000,
+        query_timeout: 30000,
+        ssl: config.database.ssl,
+      }
+    : {
+        host: config.database.host,
+        port: config.database.port,
+        database: config.database.name,
+        user: config.database.user,
+        password: config.database.password,
+        min: config.database.poolMin,
+        max: config.database.poolMax,
+        idleTimeoutMillis: 30000,
+        connectionTimeoutMillis: 5000,
+        statement_timeout: 30000,
+        query_timeout: 30000,
+      };
   
   try {
     pool = new Pool(poolConfig);

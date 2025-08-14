@@ -14,6 +14,8 @@ export const config = {
   },
   
   database: {
+    // Support DATABASE_URL for Fly.io Managed Postgres
+    connectionString: process.env.DATABASE_URL || undefined,
     host: process.env.DB_HOST || 'localhost',
     port: parseInt(process.env.DB_PORT || '5432', 10),
     name: process.env.DB_NAME || 'cardmint',
@@ -21,6 +23,10 @@ export const config = {
     password: process.env.DB_PASSWORD || '',
     poolMin: parseInt(process.env.DB_POOL_MIN || '2', 10),
     poolMax: parseInt(process.env.DB_POOL_MAX || '20', 10),
+    // SSL configuration for production
+    ssl: process.env.NODE_ENV === 'production' && !process.env.DATABASE_URL?.includes('sslmode=disable')
+      ? { rejectUnauthorized: false }
+      : undefined,
   },
   
   redis: {
