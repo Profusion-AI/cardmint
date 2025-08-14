@@ -15,7 +15,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with th
 
 ## Project Overview
 
-CardMint is a high-performance card scanning and processing system designed to achieve sub-500ms response times and 60+ cards/minute throughput on Fedora 42 Workstation. The system processes trading cards or similar items with real-time image capture, OCR, and metadata extraction.
+CardMint is a high-performance Pokemon card scanning and inventory management system achieving 99%+ OCR accuracy through multi-API validation. Features sub-500ms response times, 60+ cards/minute throughput, and comprehensive pricing integration with PriceCharting and Pokemon TCG APIs. The system processes trading cards with real-time image capture, advanced OCR with Pokemon-specific patterns, visual validation against official card images, and automated pricing updates.
 
 ## Performance Requirements
 
@@ -168,8 +168,27 @@ sudo systemctl status postgresql
 
 **Image Processing**:
 - OpenCV with GPU acceleration
-- PaddleOCR for text recognition
+- PaddleOCR for Pokemon card text recognition
 - V4L2 for camera control
+- Sharp for image manipulation
+
+**OCR & Card Recognition**:
+- PaddleOCR PP-OCRv5 models
+- Pokemon-specific pattern matching
+- Multi-pass OCR with confidence scoring
+- Region-based field extraction
+
+**API Integrations**:
+- PriceCharting API for market pricing
+- Pokemon TCG API for card identification
+- TCGPlayer pricing data
+- Dual-source price validation
+
+**Visual Validation**:
+- SSIM structural similarity
+- Perceptual hash comparison
+- Histogram matching
+- ORB feature detection
 
 **Frontend/Dashboard**:
 - uWebSockets.js for real-time communication
@@ -209,12 +228,17 @@ sudo systemctl status postgresql
 - ⏳ PaddleOCR setup - Next phase
 - ⏳ GPU acceleration - Next phase
 
-### 🚀 Phase 5: Inventory System (STARTING)
-- ⏳ Card database schema
+### 🚀 Phase 5: Inventory System (IN PROGRESS)
+- ✅ PriceCharting API integration
+- ✅ Pokemon TCG API integration  
+- ✅ Pokemon-specific OCR patterns
+- ✅ Visual validation service
+- ✅ Combined card matcher utility
+- ⏳ Enhanced database schema with pricing
 - ⏳ Inventory management API
 - ⏳ Batch processing workflows
-- ⏳ Card recognition algorithms
 - ⏳ Dashboard and reporting
+- ⏳ Real card testing suite
 
 ## Camera Integration Details
 
@@ -237,24 +261,69 @@ cd /home/profusionai/CardMint/CrSDK_v2.00.00_20250805a_Linux64PC/build
 # Then type: capture, capture, quit
 ```
 
+## Current Services & APIs
+
+### PriceCharting Service (`src/services/PriceChartingService.ts`)
+- Real-time market pricing for Pokemon cards
+- PSA/BGS graded card prices
+- 24-hour cache with CSV bulk download
+- Match confidence scoring algorithm
+
+### Pokemon TCG Service (`src/services/PokemonTCGService.ts`)
+- Official card data and high-res images
+- Lucene-like search syntax
+- TCGPlayer pricing integration
+- Set information and card variants
+
+### Image Validation Service (`src/services/ImageValidationService.ts`)  
+- Multi-algorithm image comparison (SSIM, perceptual hash, histogram, ORB)
+- Quality assessment for OCR processing
+- Special edition detection (1st Edition, shadowless, holo)
+- Visual validation against official images
+
+### Card Matcher Utility (`src/utils/cardMatcher.ts`)
+- Orchestrates OCR, Pokemon TCG, and PriceCharting data
+- Weighted confidence scoring (99% accuracy target)
+- Automatic review flagging for high-value cards
+- Batch processing support
+
+### Pokemon OCR Service (`src/ocr/pokemon_ocr_service.py`)
+- Region-based extraction (header, artwork, attacks, footer)
+- Pokemon-specific pattern matching
+- Multi-pass OCR with confidence aggregation
+- Special edition and variant detection
+
+## API Keys & Environment
+
+```bash
+# PriceCharting API (Configured)
+PRICECHARTING_API_KEY=0a312991655c1fcab8be80b01e016fe3e9fcfffc
+
+# Pokemon TCG API (Configured)  
+POKEMONTCG_API_KEY=8560cda2-6058-41fd-b862-9f4cad531730
+```
+
 ## Next Steps
 
-1. **Inventory System Implementation**
-   - Design card database schema
-   - Build inventory management API
-   - Create batch processing workflows
-   - Implement card recognition/matching
+1. **Database Schema Enhancement**
+   - Implement enhanced schema from ENHANCED_OCR_PLAN.md
+   - Add Pokemon TCG and pricing fields
+   - Create migration scripts
 
-2. **Image Processing Pipeline**
-   - Integrate OpenCV for preprocessing
-   - Add PaddleOCR for text extraction
-   - Implement card metadata parsing
-   - Build image quality checks
+2. **Testing with Real Cards**
+   - Build test suite with 40+ Pokemon cards
+   - Validate 99% accuracy target
+   - Tune confidence thresholds
 
-3. **Dashboard & Analytics**
+3. **Production Integration**
+   - Connect services to camera pipeline
+   - Implement real-time processing flow
+   - Add monitoring and metrics
+
+4. **Dashboard & Analytics**
    - Real-time inventory dashboard
-   - Processing statistics
-   - Card value tracking
+   - Price tracking and alerts
+   - Collection analytics
    - Export capabilities
 
 ## Hardware Requirements
