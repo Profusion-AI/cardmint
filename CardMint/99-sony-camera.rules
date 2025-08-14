@@ -1,0 +1,10 @@
+# Sony Camera USB permissions for CardMint
+# Sony ZV-E10M2
+SUBSYSTEM=="usb", ATTRS{idVendor}=="054c", ATTRS{idProduct}=="0ee9", MODE="0666", GROUP="users"
+
+# Generic Sony cameras
+SUBSYSTEM=="usb", ATTRS{idVendor}=="054c", MODE="0666", GROUP="users"
+
+# Disable USB autosuspend for Sony cameras
+ACTION=="add", SUBSYSTEM=="usb", ATTRS{idVendor}=="054c", TEST=="power/control", ATTR{power/control}="on"
+ACTION=="add", SUBSYSTEM=="usb", ATTRS{idVendor}=="054c", TEST=="power/autosuspend", ATTR{power/autosuspend}="-1"

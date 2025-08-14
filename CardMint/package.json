@@ -1,0 +1,65 @@
+{
+  "name": "cardmint",
+  "version": "1.0.0",
+  "description": "High-performance card scanning and processing system",
+  "main": "dist/index.js",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "test": "jest",
+    "lint": "eslint src/**/*.ts",
+    "typecheck": "tsc --noEmit",
+    "profile": "node --inspect dist/index.js",
+    "camera-setup": "tsx src/utils/camera-setup.ts",
+    "debug-pipeline": "tsx src/utils/debug-pipeline.ts",
+    "camera": "tsx src/camera/cli.ts",
+    "camera-test": "tsx src/camera/cli.ts capture test",
+    "camera-reliability": "tsx src/camera/cli.ts reliability 500"
+  },
+  "keywords": [
+    "card",
+    "scanning",
+    "ocr",
+    "real-time",
+    "processing"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@opentelemetry/api": "^1.9.0",
+    "@opentelemetry/auto-instrumentations-node": "^0.54.0",
+    "@opentelemetry/exporter-prometheus": "^0.57.0",
+    "@opentelemetry/sdk-node": "^0.57.0",
+    "@types/commander": "^2.12.0",
+    "bullmq": "^5.57.0",
+    "commander": "^12.1.0",
+    "dotenv": "^16.4.7",
+    "ioredis": "^5.7.0",
+    "pg": "^8.16.3",
+    "pg-pool": "^3.7.0",
+    "pino": "^9.5.0",
+    "pino-pretty": "^13.0.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.3",
+    "@types/jest": "^29.5.14",
+    "@types/node": "^22.12.0",
+    "@types/pg": "^8.11.10",
+    "@types/ws": "^8.5.14",
+    "@typescript-eslint/eslint-plugin": "^8.21.0",
+    "@typescript-eslint/parser": "^8.21.0",
+    "eslint": "^9.18.0",
+    "express": "^5.1.0",
+    "jest": "^30.0.0-alpha.7",
+    "node-addon-api": "^8.5.0",
+    "node-gyp": "^11.0.0",
+    "ts-jest": "^29.2.5",
+    "tsx": "^4.19.2",
+    "typescript": "^5.9.2"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
