@@ -8,14 +8,15 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "test": "jest",
+    "test:camera": "tsx test-camera-production.ts",
     "lint": "eslint src/**/*.ts",
     "typecheck": "tsc --noEmit",
     "profile": "node --inspect dist/index.js",
-    "camera-setup": "tsx src/utils/camera-setup.ts",
-    "debug-pipeline": "tsx src/utils/debug-pipeline.ts",
-    "camera": "tsx src/camera/cli.ts",
-    "camera-test": "tsx src/camera/cli.ts capture test",
-    "camera-reliability": "tsx src/camera/cli.ts reliability 500"
+    "camera:setup": "tsx src/utils/camera-setup.ts",
+    "camera:build": "cd src/camera && node-gyp rebuild && cd ../.. && g++ -std=c++17 -o CrSDK_v2.00.00_20250805a_Linux64PC/build/sony-cli src/camera/sony-cli-wrapper.cpp -I CrSDK_v2.00.00_20250805a_Linux64PC/app -L CrSDK_v2.00.00_20250805a_Linux64PC/build -lCr_Core -Wl,-rpath,CrSDK_v2.00.00_20250805a_Linux64PC/build",
+    "camera:test": "cd CrSDK_v2.00.00_20250805a_Linux64PC/build && ./sony-cli list",
+    "camera:capture": "cd CrSDK_v2.00.00_20250805a_Linux64PC/build && echo -e 'capture\\ncapture\\nquit' | ./sony-cli session",
+    "debug-pipeline": "tsx src/utils/debug-pipeline.ts"
   },
   "keywords": [
     "card",
