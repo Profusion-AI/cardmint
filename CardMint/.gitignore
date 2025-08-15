@@ -72,3 +72,27 @@ isolate-*.log
 captured-images/
 processed-cards/
 exports/
+cache/
+
+# Sony SDK (proprietary)
+CrSDK_v2.00.00_20250805a_Linux64PC/
+
+# Test outputs
+test-*.jpg
+test-*.png
+
+# Sensitive files
+*.pem
+*.key
+*.cert
+.env.production
+.env.local
+
+# OS specific
+.DS_Store
+Thumbs.db
+
+# Backup files
+*.backup
+*.bak
+*~
