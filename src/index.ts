@@ -5,6 +5,8 @@ import { initializeDatabase } from './storage/database';
 import { initializeRedis } from './storage/redis';
 import { QueueManager } from './queue/QueueManager';
 import { MetricsCollector } from './utils/metrics';
+import { CaptureWatcher } from './services/CaptureWatcher';
+import { CardRepository } from './storage/CardRepository';
 import { gracefulShutdown } from './utils/shutdown';
 
 dotenv.config();
@@ -27,12 +29,17 @@ async function main() {
     const metrics = new MetricsCollector();
     await metrics.start();
     
+    logger.info('Initializing capture watcher...');
+    const cardRepository = new CardRepository();
+    const captureWatcher = new CaptureWatcher(queueManager, cardRepository);
+    await captureWatcher.start();
+    
     logger.info('Starting CardMint server...');
     const server = new CardMintServer(queueManager, metrics);
     await server.start();
     
-    process.on('SIGTERM', () => gracefulShutdown(server, queueManager));
-    process.on('SIGINT', () => gracefulShutdown(server, queueManager));
+    process.on('SIGTERM', () => gracefulShutdown(server, queueManager, captureWatcher));
+    process.on('SIGINT', () => gracefulShutdown(server, queueManager, captureWatcher));
     
     logger.info('CardMint System is running successfully');
     logger.info(`API: http://localhost:${process.env.PORT || 3000}`);

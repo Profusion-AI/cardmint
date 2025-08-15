@@ -32,6 +32,18 @@ export interface OCRResult {
     card_number: string | null;
     rarity: string | null;
     card_type: string | null;
+    hp: number | null;
+    stage: string | null;
+    pokemon_type: string | null;
+    attacks: Array<{
+      name: string;
+      damage: string | null;
+      confidence: number;
+    }>;
+    weakness: string | null;
+    resistance: string | null;
+    retreat_cost: string | null;
+    illustrator: string | null;
     text_sections: Array<{
       text: string;
       confidence: number;
@@ -105,31 +117,34 @@ export class OCRService {
         this.highAccuracyMode.toString(),
       ];
       
-      const pythonProcess = spawn('python3', args);
+      // Redirect stderr to /dev/null to avoid JSON parsing issues with PaddleOCR warnings
+      const pythonProcess = spawn('python3', args, {
+        stdio: ['pipe', 'pipe', 'ignore']  // ignore stderr
+      });
       
       let stdout = '';
-      let stderr = '';
       
       pythonProcess.stdout.on('data', (data) => {
         stdout += data.toString();
       });
       
-      pythonProcess.stderr.on('data', (data) => {
-        stderr += data.toString();
-      });
-      
       pythonProcess.on('close', (code) => {
         if (code !== 0) {
-          logger.error('Python OCR process failed', { code, stderr });
-          reject(new Error(`OCR process exited with code ${code}: ${stderr}`));
+          logger.error('Python OCR process failed', { code });
+          reject(new Error(`OCR process exited with code ${code}`));
           return;
         }
         
         try {
           const result = JSON.parse(stdout);
+          logger.info('Parsed OCR result keys', { 
+            keys: Object.keys(result),
+            hasExtractedInfo: !!result.extracted_card_info,
+            extractedKeys: result.extracted_card_info ? Object.keys(result.extracted_card_info) : null
+          });
           resolve(result);
         } catch (parseError) {
-          logger.error('Failed to parse OCR result', { stdout, parseError });
+          logger.error('Failed to parse OCR result', { stdout: stdout.substring(0, 200), parseError });
           reject(new Error('Invalid OCR result format'));
         }
       });
