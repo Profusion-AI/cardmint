@@ -324,15 +324,17 @@ cd /home/profusionai/CardMint/CrSDK_v2.00.00_20250805a_Linux64PC/build
 ## API Keys & Environment
 
 ```bash
-# PriceCharting API (Configured)
-PRICECHARTING_API_KEY=0a312991655c1fcab8be80b01e016fe3e9fcfffc
+# PriceCharting API
+PRICECHARTING_API_KEY=<your_api_key_here>
 
-# Pokemon TCG API (Configured)  
-POKEMONTCG_API_KEY=8560cda2-6058-41fd-b862-9f4cad531730
+# Pokemon TCG API  
+POKEMONTCG_API_KEY=<your_api_key_here>
 
-# Fly.io Database (Configured)
-DATABASE_URL=postgresql://[configured]
+# Database Configuration
+DATABASE_URL=<your_database_url_here>
 ```
+
+See `.env.example` for complete environment configuration.
 
 ## Next Steps
 
