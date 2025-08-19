@@ -1,15 +1,30 @@
 {
   "vlm_success_count": 0,
-  "vlm_failure_count": 0,
+  "vlm_failure_count": 1,
   "ocr_success_count": 1,
   "ocr_failure_count": 0,
   "vlm_total_time_ms": 0,
-  "ocr_total_time_ms": 9944.389286951988,
-  "shadow_mode_comparisons": [],
-  "session_start": "2025-08-19T11:40:29.216128",
+  "ocr_total_time_ms": 8829.664623771445,
+  "shadow_mode_comparisons": [
+    {
+      "request_id": "1755624217.172548-75d3375b",
+      "timestamp": "2025-08-19T12:23:48.282092",
+      "comparison": {
+        "agreement": false,
+        "ocr_success": true,
+        "vlm_success": false,
+        "ocr_name": "Pikachu",
+        "vlm_name": null,
+        "ocr_time_ms": 8829.664623771445,
+        "vlm_time_ms": 10627.81548500061,
+        "speedup": 0.8308071057719288
+      }
+    }
+  ],
+  "session_start": "2025-08-19T12:22:57.089628",
   "vlm_success_rate": 0.0,
   "ocr_success_rate": 1.0,
   "vlm_avg_time_ms": 0.0,
-  "ocr_avg_time_ms": 9944.389286951988,
-  "last_updated": "2025-08-19T11:40:40.839472"
+  "ocr_avg_time_ms": 8829.664623771445,
+  "last_updated": "2025-08-19T12:23:48.282513"
 }
