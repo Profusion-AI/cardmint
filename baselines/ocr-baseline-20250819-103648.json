@@ -1,0 +1,87 @@
+{
+  "created_at": "2025-08-19T10:36:24.273504",
+  "system_info": {
+    "cpu_count": 8,
+    "cpu_model": "Intel Core i5 10th Gen",
+    "total_memory_gb": 31.036956787109375,
+    "python_version": "3.13.6 (main, Aug  7 2025, 00:00:00) [GCC 15.2.1 20250808 (Red Hat 15.2.1-1)]"
+  },
+  "camera_capture": {
+    "available": true,
+    "capture_time_ms": 35.69769859313965,
+    "success": false,
+    "output": "/home/profusionai/CardMint/CrSDK_v2.00.00_20250805a_Linux64PC/build/sony-capture: error while loading shared libraries: libCr_Core.so: cannot open shared object file: No such file or directory"
+  },
+  "ocr_tests": [
+    {
+      "success": true,
+      "image_path": "test-images/test-card.jpg",
+      "processing_time_ms": 10777.890920639038,
+      "ocr_result": {
+        "card_name": "Lightning Dragon",
+        "confidence": 0.9751517325639725,
+        "regions_detected": 8,
+        "requires_review": false
+      },
+      "resources": {
+        "cpu_usage_percent": 29.799999999999983,
+        "memory_usage_mb": 621.55859375,
+        "threads": 38
+      },
+      "timestamp": "2025-08-19T10:36:37.092949"
+    },
+    {
+      "success": false,
+      "image_path": "test-images/blissey_test.jpg",
+      "processing_time_ms": 0.2956390380859375,
+      "ocr_result": {
+        "card_name": "Unknown",
+        "confidence": 0,
+        "regions_detected": 0,
+        "requires_review": false
+      },
+      "resources": {
+        "cpu_usage_percent": -43.50000000000001,
+        "memory_usage_mb": 0.125,
+        "threads": 38
+      },
+      "timestamp": "2025-08-19T10:36:39.097148"
+    },
+    {
+      "success": true,
+      "image_path": "test-images/test_clear_blissey.jpg",
+      "processing_time_ms": 7638.936996459961,
+      "ocr_result": {
+        "card_name": "Blissey",
+        "confidence": 0.987201486315046,
+        "regions_detected": 7,
+        "requires_review": false
+      },
+      "resources": {
+        "cpu_usage_percent": 151.39999999999998,
+        "memory_usage_mb": 157.984375,
+        "threads": 38
+      },
+      "timestamp": "2025-08-19T10:36:48.739588"
+    }
+  ],
+  "summary": {
+    "total_tests": 3,
+    "successful_tests": 2,
+    "success_rate": 0.6666666666666666,
+    "processing_time": {
+      "min_ms": 7638.936996459961,
+      "max_ms": 10777.890920639038,
+      "avg_ms": 9208.4139585495,
+      "median_ms": 10777.890920639038
+    },
+    "cpu_usage": {
+      "avg_percent": 90.59999999999998,
+      "max_percent": 151.39999999999998
+    },
+    "memory_usage": {
+      "avg_mb": 389.771484375,
+      "max_mb": 621.55859375
+    }
+  }
+}
