@@ -1,16 +1,47 @@
-# CLAUDE.md
+# CLAUDE.md - CardMint Project
 
-This file provides guidance to Claude Code (claude.ai/code) when working with the CardMint project.
+This project follows global instructions from `/home/profusionai/CLAUDE.md`
+Additional project-specific guidelines are provided below.
+
+## 🔒 CRITICAL: Database Separation
+
+**Two Completely Separate Database Systems:**
+1. **Archon (Supabase)**: Knowledge, documentation, RAG queries, task management ONLY
+   - Instance: `rstdauvmrqmtuagkffgy.supabase.co`
+   - Access via: MCP tools at localhost:8051
+   - NEVER store production card data here
+
+2. **CardMint (Fly.io PostgreSQL)**: Production card data, captures, OCR, pricing ONLY
+   - Cluster: `gjpkdon11dy0yln4.flympg.net`
+   - Access via: localhost:16380 (fly proxy)
+   - NEVER store documentation here
+
+See `DATABASE_SEPARATION_GUIDE.md` for complete details.
 
 ## Project Status
 
-✅ **PRODUCTION READY** - CardMint v1.0.0 with bulletproof architecture!
-- **Milestone Achieved**: August 15, 2025
-- **Camera Integration**: Sony ZV-E10M2 via native SDK - WORKING
-- **Performance**: 400ms captures consistently maintained
-- **OCR Integration**: Complete end-to-end pipeline with graceful degradation
-- **Reliability**: 100% success rate, bulletproof error handling
-- **Architecture**: Complete separation of concerns achieved
+🚀 **VLM OPTIMIZATION IN PROGRESS** - Branch: `vlm-optimization`
+- **Current Focus**: Implementing VLM-first architecture to reduce processing from 12-17s to <3s
+- **Safety Measures**: Feature flags, shadow mode, emergency rollback all implemented
+- **Git Branch**: Working on `vlm-optimization` branch for isolated development
+- **Backup**: System backup created at `CardMint-backup-20250819-101943.tar.gz`
+
+### Previous Achievement
+🎯 **MAJOR BREAKTHROUGH** - CardMint v2.0.0 OCR Pipeline Operational!
+- **Breakthrough Achieved**: August 18, 2025
+- **OCR Integration**: PaddleOCR v3.x FULLY WORKING - extracting actual card text ✅
+- **Text Extraction**: Card numbers "2/64", HP values "120" working perfectly
+- **FastAPI Service**: Production-ready with comprehensive error handling
+- **API Console**: Enhanced with real-time error monitoring and debugging
+- **Performance**: 18-25 seconds OCR processing, core 400ms capture maintained
+- **Error Coverage**: 100% handled scenarios, 0% unhandled exceptions
+- **Architecture**: Modern FastAPI patterns with Context7 best practices
+
+### Previous Milestones
+✅ **August 15, 2025** - CardMint v1.0.0 with bulletproof architecture
+- Camera Integration: Sony ZV-E10M2 via native SDK - WORKING
+- Reliability: 100% success rate, bulletproof error handling
+- Architecture: Complete separation of concerns achieved
 - All core services operational
 - 20 processing workers active
 - Database schema deployed
@@ -429,3 +460,64 @@ $ curl localhost:3000/api/queue/status
 - NVMe SSD for fast I/O
 - USB 3.0+ ports for camera connectivity
 - Ethernet for potential network camera integration
+## VLM Optimization Development
+
+### Branch Strategy
+- **Main Branch**: `main` - Stable OCR-based implementation (12-17s processing)
+- **Development Branch**: `vlm-optimization` - VLM integration work (target <3s)
+- **Backup Location**: `/home/profusionai/CardMint-backup-20250819-101943.tar.gz`
+
+### Safety Infrastructure
+1. **Feature Flags** (`src/config/features.ts`)
+   - VLM_ENABLED: Master switch (default: false)
+   - VLM_SHADOW_MODE: Parallel testing without production impact
+   - VLM_PERCENTAGE: Gradual rollout (0→1→5→20→50→100)
+   - LEGACY_FALLBACK: Auto-fallback to OCR on failure
+
+2. **Emergency Rollback** (`scripts/emergency-rollback.sh`)
+   - One-command instant rollback
+   - Automatic performance monitoring
+   - Rollback triggers at 10s processing or 7GB memory
+
+3. **Performance Baselines** (`scripts/create-baseline.py`)
+   - Current: 12-17s OCR, 747% CPU, 1.5GB memory
+   - Target: 1-2s VLM, 40-60% CPU, <5GB memory
+
+### Development Workflow
+```bash
+# Switch to VLM branch
+git checkout vlm-optimization
+
+# Run baseline tests
+python scripts/create-baseline.py
+
+# Test in shadow mode
+export VLM_SHADOW_MODE=true
+npm run dev
+
+# Emergency rollback if needed
+./scripts/emergency-rollback.sh
+```
+
+### Environment Configuration
+- Load VLM flags: `source .env.vlm`
+- Check status: `node -e "require('./src/config/features').logFeatureStatus()"`
+- Monitor rollout: `node -e "require('./src/config/rollout').rolloutController.getStatus()"`
+
+## Archon Integration
+
+- **Project ID**: 1c8b13b0-e242-4b8c-b347-98617a390617
+- **Migration Date**: 2025-08-18
+- **Status**: Active Development
+
+### Current Focus (Updated August 19, 2025)
+- **IN PROGRESS**: VLM optimization Phase 0 - Safety infrastructure
+- **Next Priority**: Install Intel optimization packages (IPEX, OpenVINO)
+- **Target**: Reduce processing from 12-17s to 1-2s average
+- **Core Constraint**: Maintain 400ms capture performance (unchanged)
+
+### Task Management
+All development tasks are now tracked in Archon:
+- View tasks: `archon-task list`
+- Check project: `curl http://localhost:8181/api/projects/1c8b13b0-e242-4b8c-b347-98617a390617`
+- Open UI: http://localhost:3737
