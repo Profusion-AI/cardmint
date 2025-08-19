@@ -157,6 +157,22 @@ export class OCRService {
   }
 
   /**
+   * Map OCR region type to our standard type
+   */
+  private mapRegionType(ocrType: string): 'title' | 'description' | 'stats' | 'other' {
+    switch (ocrType) {
+      case 'title':
+        return 'title';
+      case 'body':
+        return 'description';
+      case 'metadata':
+        return 'stats';
+      default:
+        return 'other';
+    }
+  }
+
+  /**
    * Convert OCR result to our standard OCRData format
    */
   convertToOCRData(result: OCRResult): OCRData {
@@ -177,7 +193,7 @@ export class OCRService {
           width: region.bounding_box.bottom_right[0] - region.bounding_box.top_left[0],
           height: region.bounding_box.bottom_right[1] - region.bounding_box.top_left[1],
         },
-        type: region.type,
+        type: this.mapRegionType(region.type),
       }));
     }
     

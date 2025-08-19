@@ -1,0 +1,31 @@
+# Intel Optimization Packages for VLM
+# Phase 1 Installation - Intel i5 10th Gen with UHD Graphics
+
+# Intel Extension for PyTorch - CPU optimizations
+intel-extension-for-pytorch==2.8.0
+
+# OpenVINO for Intel integrated GPU acceleration
+openvino==2025.0.0
+openvino-dev==2025.0.0
+
+# Neural Compressor for INT8 quantization
+neural-compressor>=2.5
+
+# Core ML dependencies
+torch>=2.1.0
+torchvision>=0.16.0
+transformers>=4.36.0
+huggingface-hub>=0.19.0
+
+# SmolVLM requirements
+pillow>=10.0.0
+accelerate>=0.25.0
+
+# Optimization utilities
+onnx>=1.15.0
+onnxruntime>=1.16.0
+numpy<2.0.0
+
+# Memory optimization
+psutil>=5.9.0
+py-cpuinfo>=9.0.0

@@ -1,22 +1,30 @@
 # CardMint 🎴
 
-[![Version](https://img.shields.io/badge/version-1.0--alpha-blue)](https://github.com/yourusername/cardmint/releases)
+[![Version](https://img.shields.io/badge/version-2.0.0-blue)](https://github.com/yourusername/cardmint/releases)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%3E%3D20.0.0-brightgreen)](https://nodejs.org)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.9-blue)](https://www.typescriptlang.org/)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
-> High-performance Pokemon card scanning and inventory management system achieving 99.9% accuracy through multi-API validation
+> High-performance Pokemon card scanning and recognition system with advanced ML ensemble achieving 828ms inference and real-time API monitoring dashboard
 
 ## 🚀 Features
 
-- **⚡ High-Performance Capture**: 35ms capture time, 1,700+ cards/minute throughput
-- **🎯 99.9% Accuracy Target**: Multi-source validation (OCR + APIs + Image matching)
-- **📸 Hardware Integration**: Native camera SDK support for professional scanning
-- **💰 Real-time Pricing**: PriceCharting and TCGPlayer price tracking
-- **🔍 Advanced OCR**: Pokemon-specific text recognition patterns
-- **🛡️ Production Resilience**: Circuit breakers, retry policies, error handling
-- **📊 Observability**: Prometheus metrics, structured logging, accuracy tracking
+### New in v2.0.0
+- **🎨 Advanced Dashboard**: Beautiful UI with image preview and API console
+- **🤖 ML Ensemble**: Three-model architecture (MobileNetV3 + ORB + PaddleOCR)
+- **🔧 API Console**: Real-time backend monitoring with copy-to-clipboard
+- **📷 Image Preview**: Full-resolution card preview before processing
+- **✨ Hot-reload**: Automatic dashboard refresh during development
+
+### Core Features
+- **⚡ High-Performance**: 828ms ML inference, 400ms camera capture
+- **🎯 95%+ Accuracy**: Multi-model ensemble with API validation
+- **📸 Hardware Integration**: Native Sony camera SDK support
+- **💰 Real-time Pricing**: Pokemon TCG API with market prices
+- **🔍 Advanced OCR**: PaddleOCR with Pokemon-specific patterns
+- **🛡️ Production Ready**: Graceful degradation, error recovery
+- **📊 Observability**: Real-time metrics, API activity logging
 - **🔄 Queue Management**: BullMQ with 20 concurrent workers
 
 ## 📋 Table of Contents
@@ -52,6 +60,7 @@ cd cardmint
 
 # Install dependencies
 npm install
+cd src/ml && pip install -r requirements.txt && cd ../..
 
 # Set up environment
 cp .env.example .env
@@ -64,8 +73,14 @@ redis-server
 # Run database migrations
 npm run db:migrate
 
-# Start development server
-npm run dev
+# Start ML recognition service
+cd src/ml && python api/recognition_service.py &
+
+# Start dashboard with hot-reload
+python dashboard-server.py &
+
+# Access the dashboard
+open http://localhost:8080
 ```
 
 ### Basic Usage
@@ -143,24 +158,26 @@ For complete API documentation, see [API.md](docs/API.md).
 
 ## ⚡ Performance
 
-### Current Metrics (v1.0-alpha)
+### Current Metrics (v2.0.0)
 
 | Metric | Target | Achieved | Status |
 |--------|--------|----------|--------|
-| Capture Time | <500ms | 35.1ms | ✅ 14x faster |
-| Throughput | 60+ cards/min | 1,709 cards/min | ✅ 28x higher |
+| Camera Capture | <500ms | 400ms | ✅ Maintained |
+| ML Inference | <1000ms | 828ms | ✅ Optimized |
+| Dashboard Load | <2s | <1s | ✅ Fast |
 | OCR Accuracy | >95% | 95%+ | ✅ On target |
-| Pipeline Accuracy | 99.9% | Tracking | 🔄 In validation |
-| API Response | <2s | <1s | ✅ Exceeds |
+| Ensemble Confidence | >90% | 92%+ | ✅ Exceeds |
+| API Response | <2s | <100ms | ✅ Excellent |
+| RAM Usage | <500MB | 150-200MB | ✅ Efficient |
 
 ### Optimization Features
 
-- Zero-copy camera buffers
-- GPU acceleration support
-- Connection pooling
-- Redis caching (24hr TTL)
-- Circuit breakers for external APIs
-- Exponential backoff retry
+- **ML Ensemble**: MobileNetV3 + ORB + PaddleOCR
+- **Intel Extension**: CPU-optimized PyTorch
+- **Smart Caching**: Redis with 24hr TTL
+- **Connection Pooling**: Database and API connections
+- **Graceful Degradation**: API failures don't break pipeline
+- **Hot-reload Dashboard**: Auto-refresh during development
 
 ## ⚙️ Configuration
 
@@ -287,15 +304,17 @@ Check out issues labeled [`good first issue`](https://github.com/yourusername/ca
 
 ## 📊 Status & Roadmap
 
-### Current Status: v1.0-alpha
+### Current Status: v2.0.0
 
 - ✅ Core scanning functionality
-- ✅ Multi-API validation
+- ✅ ML ensemble recognition (3 models)
+- ✅ Advanced dashboard with API console
+- ✅ Image preview system
+- ✅ Real-time API monitoring
+- ✅ Pokemon TCG API integration
 - ✅ Production resilience patterns
-- ✅ Monitoring & observability
-- 🚧 Authentication system
-- 🚧 Dashboard UI
-- 📅 Multi-tenancy support
+- 🚧 PriceCharting integration
+- 📅 Authentication system
 - 📅 Mobile app
 
 ### Upcoming Features

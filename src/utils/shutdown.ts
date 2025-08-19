@@ -6,7 +6,7 @@ const logger = createLogger('shutdown');
 
 let isShuttingDown = false;
 
-export async function gracefulShutdown(server: any, queueManager: any): Promise<void> {
+export async function gracefulShutdown(server: any, queueManager: any, captureWatcher?: any): Promise<void> {
   if (isShuttingDown) {
     logger.warn('Shutdown already in progress');
     return;
@@ -21,6 +21,11 @@ export async function gracefulShutdown(server: any, queueManager: any): Promise<
   }, 30000);
   
   try {
+    logger.info('Stopping capture watcher...');
+    if (captureWatcher) {
+      await captureWatcher.stop();
+    }
+    
     logger.info('Stopping server...');
     if (server) {
       await server.stop();

@@ -1,0 +1,7 @@
+{
+  "enable_heavy_models": false,
+  "max_ram_mb": 4000,
+  "cache_enabled": true,
+  "progressive_enhancement": true,
+  "unified_pytorch": true
+}

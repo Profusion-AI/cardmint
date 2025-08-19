@@ -1,0 +1,17 @@
+#!/bin/bash
+# CardMint Production Capture Script
+
+# Path to the compiled binary
+CAPTURE_BIN="/home/profusionai/CardMint/CrSDK_v2.00.00_20250805a_Linux64PC/build/sony-capture"
+
+# Check if binary exists
+if [ ! -f "$CAPTURE_BIN" ]; then
+    echo "Error: Capture binary not found at $CAPTURE_BIN"
+    exit 1
+fi
+
+# Run capture - outputs: filename time
+$CAPTURE_BIN
+
+# Exit with the same status as the capture program
+exit $?

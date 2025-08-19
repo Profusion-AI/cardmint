@@ -1,0 +1,43 @@
+{
+  "mcpServers": {
+    "archon": {
+      "name": "Archon Knowledge & Task Management",
+      "description": "MCP server for RAG queries and project management (uses separate Supabase instance)",
+      "url": "http://localhost:8051",
+      "transport": "sse",
+      "enabled": true,
+      "tools": [
+        "archon:perform_rag_query",
+        "archon:search_code_examples",
+        "archon:manage_project",
+        "archon:manage_task",
+        "archon:get_project_features",
+        "archon:get_available_sources"
+      ],
+      "notes": {
+        "database_separation": "Archon uses its own Supabase instance for knowledge/RAG. CardMint production data remains in Fly.io PostgreSQL.",
+        "supabase_instance": "rstdauvmrqmtuagkffgy.supabase.co (Archon only)",
+        "cardmint_database": "gjpkdon11dy0yln4.flympg.net (CardMint production data)"
+      }
+    }
+  },
+  "projectContext": {
+    "name": "CardMint",
+    "description": "High-performance Pokemon card scanning and inventory system",
+    "databases": {
+      "production": {
+        "type": "PostgreSQL on Fly.io",
+        "purpose": "Card inventory, captures, OCR results, pricing data",
+        "connection": "via fly proxy on localhost:16380",
+        "cluster": "gjpkdon11dy0yln4"
+      },
+      "knowledge": {
+        "type": "Supabase (Archon)",
+        "purpose": "Documentation, code examples, RAG queries, task management",
+        "connection": "via Archon MCP at localhost:8051",
+        "instance": "rstdauvmrqmtuagkffgy"
+      }
+    },
+    "clearSeparation": "Archon's Supabase is ONLY for knowledge/documentation. CardMint's Fly.io PostgreSQL is ONLY for production card data."
+  }
+}

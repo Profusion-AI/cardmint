@@ -18,14 +18,13 @@ export class CardRepository {
     try {
       const query = `
         INSERT INTO cards (
-          image_url, thumbnail_url, status, metadata, ocr_data
-        ) VALUES ($1, $2, $3, $4, $5)
+          image_path, status, metadata, ocr_data
+        ) VALUES ($1, $2, $3, $4)
         RETURNING *
       `;
       
       const values = [
         card.imageUrl,
-        card.thumbnailUrl || null,
         card.status || CardStatus.CAPTURED,
         JSON.stringify(card.metadata || {}),
         card.ocrData ? JSON.stringify(card.ocrData) : null,
@@ -207,6 +206,27 @@ export class CardRepository {
     }
   }
   
+  async findByImagePath(imagePath: string): Promise<Card | null> {
+    const pool = getPool();
+    
+    try {
+      const result = await pool.query(
+        'SELECT * FROM cards WHERE image_path = $1 LIMIT 1',
+        [imagePath]
+      );
+      
+      if (result.rows.length === 0) {
+        return null;
+      }
+      
+      return this.mapRowToCard(result.rows[0]);
+      
+    } catch (error) {
+      logger.error(`Failed to find card by image path ${imagePath}:`, error);
+      throw error;
+    }
+  }
+  
   async deleteCard(id: string): Promise<boolean> {
     const pool = getPool();
     
@@ -231,8 +251,8 @@ export class CardRepository {
       id: row.id,
       capturedAt: row.captured_at,
       processedAt: row.processed_at,
-      imageUrl: row.image_url,
-      thumbnailUrl: row.thumbnail_url,
+      imageUrl: row.image_path,
+      thumbnailUrl: row.thumbnail_url || null,
       status: row.status as CardStatus,
       metadata: row.metadata || {},
       ocrData: row.ocr_data,

@@ -1,0 +1,55 @@
+# ML Dependencies for CardMint Ensemble
+# Using unified PyTorch architecture with automatic hardware optimization
+# Compatible with Python 3.13
+
+# Core ML frameworks (latest versions for Python 3.13)
+torch>=2.5.1
+torchvision>=0.21.0  # Latest available for Python 3.13
+torchaudio>=2.5.1
+
+# Intel Extension for PyTorch (for Intel GPU optimization)
+# Already installed: intel-extension-for-pytorch==2.8.0
+
+# Computer Vision
+opencv-python>=4.8.1.78
+Pillow>=10.1.0  # Latest version for Python 3.13
+
+# Lightweight models
+timm>=0.9.12  # For MobileNetV3 and other efficient models
+
+# Future heavy models (commented for now)
+# transformers==4.36.0  # For Vision Transformer
+# faiss-cpu==1.7.4  # For similarity search (upgrade to faiss-gpu when GPU available)
+
+# Vector similarity (lightweight alternative to FAISS)
+hnswlib==0.8.0  # Fast approximate nearest neighbor search
+numpy==1.24.3
+scikit-learn==1.3.2
+
+# API and service
+fastapi==0.104.1
+uvicorn==0.24.0
+python-multipart==0.0.6
+pydantic==2.5.0
+
+# Image processing and augmentation
+albumentations==1.3.1
+imageio==2.31.5
+
+# Caching and optimization
+redis==5.0.1
+diskcache==5.6.3  # Local disk caching as backup
+
+# Monitoring and profiling
+psutil>=5.9.6  # Already installed: 7.0.0
+py-cpuinfo==9.0.0
+gpustat==1.1.1  # For future GPU monitoring
+
+# Utilities
+python-dotenv==1.0.0
+tqdm==4.66.1
+coloredlogs==15.0.1
+
+# Database support for embeddings
+psycopg2-binary==2.9.9
+pgvector==0.2.4  # PostgreSQL vector similarity search
