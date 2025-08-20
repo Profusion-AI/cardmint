@@ -1,9 +1,10 @@
-import { getPool } from './database';
+import { getDatabase, insertCard, updateCard as updateCardDb, getCard as getCardDb, getAllCards } from './sqlite-database';
 import { RedisCache } from './redis';
 import { createLogger } from '../utils/logger';
 import { Card, CardStatus } from '../types';
+import { v4 as uuidv4 } from 'uuid';
 
-const logger = createLogger('card-repository');
+const logger = createLogger('card-repository-sqlite');
 
 export class CardRepository {
   private cache: RedisCache;
@@ -13,31 +14,32 @@ export class CardRepository {
   }
   
   async createCard(card: Partial<Card>): Promise<Card> {
-    const pool = getPool();
-    
     try {
-      const query = `
-        INSERT INTO cards (
-          image_url, thumbnail_url, status, metadata, ocr_data
-        ) VALUES ($1, $2, $3, $4, $5)
-        RETURNING *
-      `;
+      // Map from Card type to database schema
+      const dbCard = {
+        id: uuidv4(),
+        image_url: card.imageUrl || '',
+        thumbnail_url: card.thumbnailUrl,
+        status: card.status || CardStatus.CAPTURED,
+        metadata: card.metadata || {},
+        ocr_text: card.ocrData ? JSON.stringify(card.ocrData) : undefined,
+        confidence_score: card.confidenceScore || 0,
+        name: card.name,
+        set_name: card.setName,
+        card_number: card.cardNumber,
+        rarity: card.rarity,
+        type: card.type,
+      };
       
-      const values = [
-        card.imageUrl,
-        card.thumbnailUrl || null,
-        card.status || CardStatus.CAPTURED,
-        JSON.stringify(card.metadata || {}),
-        card.ocrData ? JSON.stringify(card.ocrData) : null,
-      ];
+      const newCard = insertCard(dbCard);
       
-      const result = await pool.query(query, values);
-      const newCard = this.mapRowToCard(result.rows[0]);
+      // Map back to Card type
+      const mappedCard = this.mapRowToCard(newCard);
       
-      await this.cache.set(newCard.id, newCard);
+      await this.cache.set(mappedCard.id, mappedCard);
       
-      logger.debug(`Created card ${newCard.id}`);
-      return newCard;
+      logger.debug(`Created card ${mappedCard.id}`);
+      return mappedCard;
       
     } catch (error) {
       logger.error('Failed to create card:', error);
@@ -52,19 +54,14 @@ export class CardRepository {
       return cached;
     }
     
-    const pool = getPool();
-    
     try {
-      const result = await pool.query(
-        'SELECT * FROM cards WHERE id = $1',
-        [id]
-      );
+      const dbCard = getCardDb(id);
       
-      if (result.rows.length === 0) {
+      if (!dbCard) {
         return null;
       }
       
-      const card = this.mapRowToCard(result.rows[0]);
+      const card = this.mapRowToCard(dbCard);
       await this.cache.set(id, card);
       
       return card;
@@ -79,58 +76,71 @@ export class CardRepository {
     id: string,
     updates: Partial<Card>
   ): Promise<Card | null> {
-    const pool = getPool();
-    
     try {
-      const updateFields: string[] = [];
-      const values: any[] = [];
-      let paramCount = 1;
+      // Map from Card type to database schema
+      const dbUpdates: any = {};
       
       if (updates.status !== undefined) {
-        updateFields.push(`status = $${paramCount++}`);
-        values.push(updates.status);
+        dbUpdates.status = updates.status;
       }
       
       if (updates.processedAt !== undefined) {
-        updateFields.push(`processed_at = $${paramCount++}`);
-        values.push(updates.processedAt);
+        dbUpdates.processed_at = updates.processedAt?.toISOString();
       }
       
       if (updates.metadata !== undefined) {
-        updateFields.push(`metadata = $${paramCount++}`);
-        values.push(JSON.stringify(updates.metadata));
+        dbUpdates.metadata = updates.metadata;
       }
       
       if (updates.ocrData !== undefined) {
-        updateFields.push(`ocr_data = $${paramCount++}`);
-        values.push(JSON.stringify(updates.ocrData));
+        dbUpdates.ocr_text = JSON.stringify(updates.ocrData);
       }
       
-      if (updates.error !== undefined) {
-        updateFields.push(`error = $${paramCount++}`);
-        values.push(updates.error);
+      if (updates.confidenceScore !== undefined) {
+        dbUpdates.confidence_score = updates.confidenceScore;
       }
       
-      if (updateFields.length === 0) {
-        return await this.getCard(id);
+      if (updates.errorMessage !== undefined) {
+        dbUpdates.error_message = updates.errorMessage;
       }
       
-      values.push(id);
+      if (updates.processingTimeMs !== undefined) {
+        dbUpdates.processing_time_ms = updates.processingTimeMs;
+      }
       
-      const query = `
-        UPDATE cards
-        SET ${updateFields.join(', ')}
-        WHERE id = $${paramCount}
-        RETURNING *
-      `;
+      if (updates.name !== undefined) {
+        dbUpdates.name = updates.name;
+      }
       
-      const result = await pool.query(query, values);
+      if (updates.setName !== undefined) {
+        dbUpdates.set_name = updates.setName;
+      }
       
-      if (result.rows.length === 0) {
+      if (updates.cardNumber !== undefined) {
+        dbUpdates.card_number = updates.cardNumber;
+      }
+      
+      if (updates.rarity !== undefined) {
+        dbUpdates.rarity = updates.rarity;
+      }
+      
+      if (updates.type !== undefined) {
+        dbUpdates.type = updates.type;
+      }
+      
+      if (updates.priceUsd !== undefined) {
+        dbUpdates.price_usd = updates.priceUsd;
+      }
+      
+      const updatedCard = updateCardDb(id, dbUpdates);
+      
+      if (!updatedCard) {
         return null;
       }
       
-      const card = this.mapRowToCard(result.rows[0]);
+      const card = this.mapRowToCard(updatedCard);
+      
+      // Invalidate cache
       await this.cache.delete(id);
       
       logger.debug(`Updated card ${id}`);
@@ -142,101 +152,141 @@ export class CardRepository {
     }
   }
   
-  async updateStatus(
-    id: string,
-    status: CardStatus,
-    error?: string
-  ): Promise<void> {
-    await this.updateCard(id, { status, error });
-  }
-  
-  async listCards(
-    filters?: {
-      status?: CardStatus;
-      startDate?: Date;
-      endDate?: Date;
-      limit?: number;
-      offset?: number;
-    }
-  ): Promise<Card[]> {
-    const pool = getPool();
-    
+  async getAllCards(limit = 100, offset = 0): Promise<Card[]> {
     try {
-      const conditions: string[] = [];
-      const values: any[] = [];
-      let paramCount = 1;
-      
-      if (filters?.status) {
-        conditions.push(`status = $${paramCount++}`);
-        values.push(filters.status);
-      }
-      
-      if (filters?.startDate) {
-        conditions.push(`captured_at >= $${paramCount++}`);
-        values.push(filters.startDate);
-      }
-      
-      if (filters?.endDate) {
-        conditions.push(`captured_at <= $${paramCount++}`);
-        values.push(filters.endDate);
-      }
-      
-      const whereClause = conditions.length > 0
-        ? `WHERE ${conditions.join(' AND ')}`
-        : '';
-      
-      const limit = filters?.limit || 100;
-      const offset = filters?.offset || 0;
-      
-      values.push(limit, offset);
-      
-      const query = `
-        SELECT * FROM cards
-        ${whereClause}
-        ORDER BY captured_at DESC
-        LIMIT $${paramCount} OFFSET $${paramCount + 1}
-      `;
-      
-      const result = await pool.query(query, values);
-      
-      return result.rows.map(this.mapRowToCard);
-      
+      const dbCards = getAllCards(limit, offset);
+      return dbCards.map(row => this.mapRowToCard(row));
     } catch (error) {
-      logger.error('Failed to list cards:', error);
+      logger.error('Failed to get all cards:', error);
       throw error;
     }
   }
   
-  async deleteCard(id: string): Promise<boolean> {
-    const pool = getPool();
+  async getCardsByStatus(
+    status: CardStatus,
+    limit = 100
+  ): Promise<Card[]> {
+    const database = getDatabase();
     
     try {
-      const result = await pool.query(
-        'DELETE FROM cards WHERE id = $1',
-        [id]
-      );
+      const stmt = database.prepare(`
+        SELECT * FROM cards 
+        WHERE status = ? 
+        ORDER BY captured_at DESC 
+        LIMIT ?
+      `);
       
-      await this.cache.delete(id);
+      const rows = stmt.all(status, limit) as any[];
       
-      return (result.rowCount ?? 0) > 0;
+      return rows.map(row => this.mapRowToCard(row));
       
     } catch (error) {
-      logger.error(`Failed to delete card ${id}:`, error);
+      logger.error(`Failed to get cards by status ${status}:`, error);
+      throw error;
+    }
+  }
+  
+  async getRecentCards(hours = 24): Promise<Card[]> {
+    const database = getDatabase();
+    
+    try {
+      const stmt = database.prepare(`
+        SELECT * FROM cards 
+        WHERE datetime(captured_at) > datetime('now', '-' || ? || ' hours')
+        ORDER BY captured_at DESC
+      `);
+      
+      const rows = stmt.all(hours) as any[];
+      
+      return rows.map(row => this.mapRowToCard(row));
+      
+    } catch (error) {
+      logger.error('Failed to get recent cards:', error);
+      throw error;
+    }
+  }
+  
+  async getQueueStatus(): Promise<any> {
+    const database = getDatabase();
+    
+    try {
+      const stmt = database.prepare(`
+        SELECT 
+          status,
+          COUNT(*) as count,
+          MIN(captured_at) as oldest,
+          MAX(captured_at) as newest
+        FROM cards
+        GROUP BY status
+      `);
+      
+      const rows = stmt.all() as any[];
+      
+      const status: any = {
+        total: 0,
+        byStatus: {}
+      };
+      
+      rows.forEach(row => {
+        status.byStatus[row.status] = {
+          count: row.count,
+          oldest: row.oldest,
+          newest: row.newest
+        };
+        status.total += row.count;
+      });
+      
+      return status;
+      
+    } catch (error) {
+      logger.error('Failed to get queue status:', error);
       throw error;
     }
   }
   
   private mapRowToCard(row: any): Card {
+    let ocrData = null;
+    if (row.ocr_text) {
+      try {
+        ocrData = JSON.parse(row.ocr_text);
+      } catch (e) {
+        ocrData = { text: row.ocr_text };
+      }
+    }
+    
+    let metadata = {};
+    if (row.metadata) {
+      try {
+        metadata = typeof row.metadata === 'string' 
+          ? JSON.parse(row.metadata) 
+          : row.metadata;
+      } catch (e) {
+        metadata = {};
+      }
+    }
+    
     return {
       id: row.id,
-      capturedAt: row.captured_at,
-      processedAt: row.processed_at,
+      capturedAt: new Date(row.captured_at),
+      processedAt: row.processed_at ? new Date(row.processed_at) : undefined,
       imageUrl: row.image_url,
       thumbnailUrl: row.thumbnail_url,
       status: row.status as CardStatus,
-      metadata: row.metadata || {},
-      ocrData: row.ocr_data,
-      error: row.error,
+      metadata: metadata,
+      ocrData: ocrData,
+      confidenceScore: row.confidence_score,
+      errorMessage: row.error_message,
+      processingTimeMs: row.processing_time_ms,
+      // Pokemon-specific fields
+      name: row.name,
+      setName: row.set_name,
+      cardNumber: row.card_number,
+      rarity: row.rarity,
+      type: row.type,
+      priceUsd: row.price_usd,
+      priceUpdatedAt: row.price_updated_at ? new Date(row.price_updated_at) : undefined,
+      tcgPlayerId: row.tcg_player_id,
+      priceChartingId: row.price_charting_id,
     };
   }
 }
