@@ -46,10 +46,9 @@
 ### Prerequisites
 
 - Node.js >= 20.0.0
-- PostgreSQL 16+
-- Redis 7+
+- Redis 7+ (or Valkey)
 - Linux OS (for camera integration)
-- API Keys from [PriceCharting](https://www.pricecharting.com/api) and [Pokemon TCG](https://pokemontcg.io)
+- API Keys from [PriceCharting](https://www.pricecharting.com/api) and [Pokemon TCG](https://pokemontcg.io) (optional)
 
 ### Installation
 
@@ -64,22 +63,23 @@ cd src/ml && pip install -r requirements.txt && cd ../..
 
 # Set up environment
 cp .env.example .env
-# Edit .env with your API keys and configuration
+# Edit .env with your API keys (optional) and configuration
 
-# Set up databases
-./setup-postgres.sh
+# Start Redis/Valkey (if not already running)
 redis-server
+# or
+sudo systemctl start valkey
 
-# Run database migrations
-npm run db:migrate
+# Start development server (SQLite database will be created automatically)
+npm run dev
 
-# Start ML recognition service
+# Optional: Start ML recognition service for advanced features
 cd src/ml && python api/recognition_service.py &
 
-# Start dashboard with hot-reload
+# Optional: Start dashboard with hot-reload
 python dashboard-server.py &
 
-# Access the dashboard
+# Access the dashboard (if running)
 open http://localhost:8080
 ```
 
@@ -110,7 +110,7 @@ CardMint uses a microservice-inspired architecture with specialized components:
                                                           │
                                                           ▼
 ┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│   PostgreSQL    │◀────│  Card Matcher   │◀────│   OCR Service   │
+│     SQLite      │◀────│  Card Matcher   │◀────│   OCR Service   │
 └─────────────────┘     └─────────────────┘     └─────────────────┘
                                 │
                         ┌───────┴────────┐
