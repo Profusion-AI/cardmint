@@ -1,0 +1,131 @@
+[
+  {
+    "width": 640,
+    "description": "Small - Fast",
+    "resolution": "640x426",
+    "file_size_mb": 0.07,
+    "processing_time": 8.82,
+    "success": true,
+    "data": {
+      "Card Name": "Totodile",
+      "Set Name": "Base Set",
+      "Card Number": "25/102",
+      "Rarity": "Common",
+      "Special Variants": [],
+      "Confidence Score": 0.98
+    }
+  },
+  {
+    "width": 800,
+    "description": "Dashboard size",
+    "resolution": "800x533",
+    "file_size_mb": 0.1,
+    "processing_time": 8.72,
+    "success": true,
+    "data": {
+      "card_name": "Totodile",
+      "set_name": "Base Set",
+      "card_number": "125/130",
+      "rarity": "Common",
+      "special_variants": [],
+      "confidence_score": 0.98
+    }
+  },
+  {
+    "width": 1024,
+    "description": "Medium",
+    "resolution": "1024x682",
+    "file_size_mb": 0.15,
+    "processing_time": 8.76,
+    "success": true,
+    "data": {
+      "card_name": "Totodile",
+      "set_name": "Base Set",
+      "card_number": "39/64",
+      "rarity": "Common",
+      "special_variants": [],
+      "confidence_score": 0.95
+    }
+  },
+  {
+    "width": 1280,
+    "description": "Current Qwen default",
+    "resolution": "1280x853",
+    "file_size_mb": 0.23,
+    "processing_time": 8.25,
+    "success": true,
+    "data": {
+      "card_name": "Totodile",
+      "set_name": "Base Set",
+      "card_number": "68",
+      "rarity": "Common",
+      "special_variants": [
+        "Shadowless"
+      ]
+    }
+  },
+  {
+    "width": 1600,
+    "description": "High detail",
+    "resolution": "1600x1066",
+    "file_size_mb": 0.38,
+    "processing_time": 8.97,
+    "success": true,
+    "data": {
+      "card_name": "Totodile",
+      "set_name": "Base Set",
+      "card_number": "57/102",
+      "rarity": "Common",
+      "special_variants": [],
+      "confidence_score": 0.98
+    }
+  },
+  {
+    "width": 1920,
+    "description": "Full HD",
+    "resolution": "1920x1280",
+    "file_size_mb": 0.57,
+    "processing_time": 8.72,
+    "success": true,
+    "data": {
+      "card_name": "Totodile",
+      "set_name": "Base Set",
+      "card_number": "23",
+      "rarity": "Common",
+      "special_variants": [],
+      "confidence_score": 0.95
+    }
+  },
+  {
+    "width": 2560,
+    "description": "Very high detail",
+    "resolution": "2560x1706",
+    "file_size_mb": 1.09,
+    "processing_time": 9.04,
+    "success": true,
+    "data": {
+      "card_name": "Totodile",
+      "set_name": "Base Set",
+      "card_number": "63/102",
+      "rarity": "Common",
+      "special_variants": [],
+      "confidence_score": 0.95
+    }
+  },
+  {
+    "width": null,
+    "description": "Original (26MP)",
+    "resolution": "6192x4128",
+    "file_size_mb": 6.0,
+    "processing_time": 9.17,
+    "success": true,
+    "data": {
+      "card_name": "Totodile",
+      "set_name": "Base Set",
+      "card_number": "32",
+      "rarity": "Common",
+      "special_variants": [],
+      "confidence_score": 0.95
+    }
+  }
+]

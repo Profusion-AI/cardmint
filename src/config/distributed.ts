@@ -7,6 +7,7 @@
 
 export interface DistributedConfig {
   enabled: boolean;
+  useQwenScanner?: boolean; // Use Qwen2.5-VL scanner instead of custom ML
   remote: {
     host: string;
     port: number;
@@ -45,6 +46,7 @@ export interface DistributedConfig {
 export function getDistributedConfig(): DistributedConfig {
   return {
     enabled: process.env.REMOTE_ML_ENABLED === 'true',
+    useQwenScanner: process.env.USE_QWEN_SCANNER === 'true',
     
     remote: {
       host: process.env.REMOTE_ML_HOST || 'localhost',

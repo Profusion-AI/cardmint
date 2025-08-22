@@ -17,6 +17,7 @@ import { createHash } from 'crypto';
 import { getDistributedConfig, DistributedConfig, ProcessingMode, getProcessingMode } from '../config/distributed';
 import { MLPrediction, MLServiceStatus, MLServiceHealth } from '../ml/MLServiceClient';
 import { EventEmitter } from 'events';
+import { qwenScanner } from './QwenScannerService';
 
 const logger = createLogger('remote-ml-client');
 
@@ -213,6 +214,11 @@ export class RemoteMLClient extends EventEmitter {
     const startTime = Date.now();
     this.metrics.requestsTotal++;
 
+    // Use Qwen scanner if configured
+    if (this.config.useQwenScanner) {
+      return this.recognizeWithQwen(request);
+    }
+
     try {
       // Check health first (unless in shadow mode where we don't want to block)
       if (!this.config.monitoring.shadowMode && !await this.checkHealth()) {
@@ -365,6 +371,73 @@ export class RemoteMLClient extends EventEmitter {
     formData.append('request_id', request.id);
 
     return formData;
+  }
+
+  /**
+   * Recognize a card using the Qwen2.5-VL scanner
+   */
+  private async recognizeWithQwen(request: RemoteMLRequest): Promise<RemoteMLResponse | null> {
+    const startTime = Date.now();
+    
+    try {
+      // Check if Qwen scanner is available
+      const isAvailable = await qwenScanner.isAvailable();
+      if (!isAvailable) {
+        logger.error('Qwen scanner is not available');
+        this.metrics.requestsFailed++;
+        return null;
+      }
+
+      // Process the card
+      const result = await qwenScanner.processCard(request.imagePath);
+      
+      if (!result) {
+        logger.error('Qwen scanner returned no result');
+        this.metrics.requestsFailed++;
+        return null;
+      }
+
+      const totalLatency = Date.now() - startTime;
+      
+      // Convert Qwen result to RemoteMLResponse format
+      const response: RemoteMLResponse = {
+        card_name: result.name,
+        set_name: result.set_name,
+        card_number: result.number,
+        rarity: result.rarity,
+        confidence: result.confidence / 100, // Convert percentage to decimal
+        inference_time_ms: result.processing_time_ms || totalLatency,
+        metadata: {
+          hp: result.hp,
+          type: result.type,
+          stage: result.stage,
+          variants: result.variant_flags,
+          language: result.language,
+          year: result.year,
+        },
+        processingNode: 'qwen-scanner@10.0.24.174:1234',
+        networkLatencyMs: 0, // Local processing
+        totalLatencyMs: totalLatency,
+        idempotencyKey: request.idempotencyKey,
+      };
+
+      this.metrics.requestsSuccessful++;
+      this.recordLatency(totalLatency);
+      
+      logger.info('Qwen scanner recognition successful', {
+        id: request.id,
+        card: response.card_name,
+        confidence: response.confidence,
+        latency: totalLatency,
+      });
+
+      return response;
+      
+    } catch (error) {
+      logger.error('Qwen scanner recognition failed:', error);
+      this.metrics.requestsFailed++;
+      return null;
+    }
   }
 
   /**

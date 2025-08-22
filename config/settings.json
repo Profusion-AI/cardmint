@@ -1,0 +1,11 @@
+{
+    "mac_server": "http://10.0.24.174:1234",
+    "cardmint_api": "http://10.0.24.174:5001",
+    "use_direct_lm_studio": true,
+    "scan_directory": "/home/profusionai/CardMint/scans",
+    "processed_directory": "/home/profusionai/CardMint/processed",
+    "log_level": "INFO",
+    "batch_delay": 0.5,
+    "max_image_size": 1280,
+    "jpeg_quality": 90
+}

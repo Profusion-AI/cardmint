@@ -1,0 +1,50 @@
+[
+  {
+    "name": "Blissey",
+    "set_name": "Base Set",
+    "number": "2/64",
+    "rarity": "Common",
+    "hp": "120",
+    "type": "Fairy",
+    "stage": "Stage 1",
+    "variant_flags": {
+      "first_edition": false,
+      "shadowless": true,
+      "reverse_holo": false,
+      "promo_stamp": false,
+      "stamped": false,
+      "misprint": false
+    },
+    "language": "English",
+    "year": null,
+    "confidence": 0.95,
+    "errors": [],
+    "source_file": "blissey_simple.jpg",
+    "processed_at": "2025-08-22T15:44:19.195759",
+    "image_size": "400x600"
+  },
+  {
+    "name": "Blissey",
+    "set_name": "Base Set",
+    "number": "2/64",
+    "rarity": "Common",
+    "hp": "120",
+    "type": "Fairy",
+    "stage": "Stage 1",
+    "variant_flags": {
+      "first_edition": false,
+      "shadowless": true,
+      "reverse_holo": false,
+      "promo_stamp": false,
+      "stamped": false,
+      "misprint": false
+    },
+    "language": "English",
+    "year": null,
+    "confidence": 1.0,
+    "errors": [],
+    "source_file": "test_card.jpg",
+    "processed_at": "2025-08-22T15:49:05.991442",
+    "image_size": "400x600"
+  }
+]
