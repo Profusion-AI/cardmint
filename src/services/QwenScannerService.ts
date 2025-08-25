@@ -2,10 +2,10 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import { exec } from 'child_process';
 import { promisify } from 'util';
-import { Logger } from '../utils/logger';
+import { logger } from '../utils/logger';
+import { startGlobalProfiler, endGlobalProfiler } from '../utils/performanceProfiler';
 
 const execAsync = promisify(exec);
-const logger = new Logger('QwenScannerService');
 
 export interface QwenScanResult {
   name: string;
@@ -67,40 +67,76 @@ export class QwenScannerService {
    */
   async processCard(imagePath: string): Promise<QwenScanResult | null> {
     const startTime = Date.now();
+    const profiler = startGlobalProfiler(`qwen_${path.basename(imagePath)}`);
     
     try {
       // Copy image to scan directory if not already there
       const fileName = path.basename(imagePath);
       const scanPath = path.join(this.scanDir, fileName);
       
+      profiler.startStage('copy_to_scan');
       if (imagePath !== scanPath) {
         await fs.copyFile(imagePath, scanPath);
       }
+      profiler.endStage('copy_to_scan', { skipped: imagePath === scanPath });
 
       // Run the scanner
       logger.info(`Processing card with Qwen scanner: ${fileName}`);
+      
+      profiler.startStage('python_exec', { 
+        scanner: this.scannerPath,
+        file: fileName 
+      });
+      
       const { stdout, stderr } = await execAsync(
         `python3 ${this.scannerPath} --file "${scanPath}" --json`
       );
+      
+      profiler.endStage('python_exec', {
+        stdout_length: stdout.length,
+        has_stderr: !!stderr
+      });
 
       if (stderr && !stderr.includes('INFO')) {
         logger.warn(`Scanner stderr: ${stderr}`);
       }
 
       // Parse the inventory file to get the latest result
+      profiler.startStage('inventory_read');
       const inventory = await this.getInventory();
       const result = inventory.find(card => card.source_file === fileName);
+      profiler.endStage('inventory_read', { 
+        found: !!result,
+        inventory_size: inventory.length 
+      });
 
       if (result) {
         result.processing_time_ms = Date.now() - startTime;
+        
+        // Get profiler stats and log
+        const report = endGlobalProfiler({ log: true });
+        
+        // Attach profiling data to result
+        if (report) {
+          (result as any).profiling = {
+            stages: report.stages.map(s => ({
+              name: s.name,
+              duration_ms: s.duration
+            })),
+            total_ms: report.totalDuration
+          };
+        }
+        
         logger.info(`Card processed successfully in ${result.processing_time_ms}ms`);
         return result;
       }
 
+      endGlobalProfiler({ log: true });
       logger.warn('No result found in inventory after processing');
       return null;
 
     } catch (error) {
+      endGlobalProfiler({ log: true });
       logger.error('Failed to process card:', error);
       return null;
     }

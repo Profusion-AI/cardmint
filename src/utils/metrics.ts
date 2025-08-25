@@ -9,6 +9,7 @@ export class MetricsCollector {
   private server?: http.Server;
   private metrics: Map<string, number> = new Map();
   private histograms: Map<string, number[]> = new Map();
+  private gaugeCallbacks: Map<string, () => number> = new Map();
   
   async start(): Promise<void> {
     if (!config.performance.enableMetrics) {
@@ -108,6 +109,22 @@ export class MetricsCollector {
     this.recordHistogramPrivate(metric, value);
   }
   
+  registerGauge(name: string, help: string, callback: () => number): void {
+    this.gaugeCallbacks.set(name, callback);
+  }
+  
+  registerCounter(name: string, help: string): void {
+    this.metrics.set(name, 0);
+  }
+  
+  registerHistogram(name: string, help: string, buckets?: number[]): void {
+    this.histograms.set(name, []);
+  }
+  
+  observeHistogram(name: string, value: number): void {
+    this.recordHistogram(name, value);
+  }
+  
   private recordHistogramPrivate(name: string, value: number): void {
     if (!this.histograms.has(name)) {
       this.histograms.set(name, []);
@@ -144,6 +161,19 @@ export class MetricsCollector {
       lines.push(`# HELP ${metricName} ${name.replace(/_/g, ' ')}`);
       lines.push(`# TYPE ${metricName} ${name.includes('total') ? 'counter' : 'gauge'}`);
       lines.push(`${metricName} ${value}`);
+    }
+    
+    // Add registered gauges
+    for (const [name, callback] of this.gaugeCallbacks) {
+      try {
+        const value = callback();
+        const metricName = `cardmint_${name}`;
+        lines.push(`# HELP ${metricName} ${name.replace(/_/g, ' ')}`);
+        lines.push(`# TYPE ${metricName} gauge`);
+        lines.push(`${metricName} ${value}`);
+      } catch (error) {
+        logger.warn(`Failed to get value for gauge ${name}:`, error);
+      }
     }
     
     // Add histograms
@@ -200,3 +230,6 @@ export class MetricsCollector {
     }
   }
 }
+
+// Singleton instance for global use
+export const metrics = new MetricsCollector();

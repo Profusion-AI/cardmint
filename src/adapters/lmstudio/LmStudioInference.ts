@@ -1,12 +1,19 @@
 import fs from "node:fs/promises";
 import type { InferencePort, InferenceResult, InferenceStatus, InferenceOptions } from "../../core/infer/InferencePort";
 import { logger } from "../../utils/logger";
+import { getGlobalProfiler } from "../../utils/performanceProfiler";
 
 type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
 /**
  * LMStudio-based inference adapter for card recognition.
  * Connects to LMStudio running Qwen2.5-VL or similar vision-language model.
+ * 
+ * Apple Silicon Optimizations:
+ * - Model Quantization: 8-bit weights for 7B VLM (full precision until KV cache support)
+ * - Note: LM Studio does not currently support KV caching for vision models
+ * - MLX Engine: Native Apple Silicon acceleration via LM Studio 0.3.4+
+ * - Memory: ~6-8GB for 8-bit Qwen2.5-VL-7B model
  */
 export class LmStudioInference implements InferencePort {
   private totalRequests = 0;
@@ -26,14 +33,24 @@ export class LmStudioInference implements InferencePort {
   ): Promise<InferenceResult> {
     const startTime = Date.now();
     this.totalRequests++;
+    const profiler = getGlobalProfiler();
     
     try {
       // Read image file for base64 encoding (VLM requirement)
+      profiler?.startStage('file_read', { path: imagePath });
       const imageBuffer = await fs.readFile(imagePath);
+      const fileSize = imageBuffer.length;
+      profiler?.endStage('file_read', { size_bytes: fileSize });
+      
+      profiler?.startStage('base64_encode');
       const imageBase64 = imageBuffer.toString('base64');
       const imageMime = this.getImageMimeType(imagePath);
+      profiler?.endStage('base64_encode', { mime: imageMime });
       
       const url = `${this.baseUrl}/v1/chat/completions`;
+      // Note: LM Studio with MLX engine optimizations:
+      // - 8-bit model weight quantization (vision models don't support KV caching yet)
+      // - Native Apple Silicon acceleration through MLX backend
       const body = {
         model: this.model,
         messages: [
@@ -73,13 +90,25 @@ export class LmStudioInference implements InferencePort {
       
       let res: Response;
       try {
+        profiler?.startStage('network_request', { 
+          url: this.baseUrl,
+          model: this.model,
+          timeout: options.timeout || 'none'
+        });
+        
         res = await this.fetchImpl(url, {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify(body),
           signal: controller.signal
         });
+        
+        profiler?.endStage('network_request', { 
+          status: res.status,
+          ok: res.ok
+        });
       } catch (e: any) {
+        profiler?.endStage('network_request', { error: e?.message || String(e) });
         if (timeoutId) clearTimeout(timeoutId);
         this.errorCount++;
         this.lastError = `Request failed: ${e?.message || e}`;
@@ -95,18 +124,39 @@ export class LmStudioInference implements InferencePort {
         throw new Error(this.lastError);
       }
       
+      // Note: The actual VLM inference happens server-side between request and response
+      profiler?.startStage('vlm_infer', { 
+        model: this.model,
+        note: 'server-side processing'
+      });
+      
       const data: any = await res.json();
       const content = data?.choices?.[0]?.message?.content?.trim?.() || "";
       
+      // End VLM inference stage when we get response
+      const usage = data?.usage;
+      profiler?.endStage('vlm_infer', {
+        prompt_tokens: usage?.prompt_tokens,
+        completion_tokens: usage?.completion_tokens,
+        total_tokens: usage?.total_tokens
+      });
+      
       // Parse JSON response
+      profiler?.startStage('json_parse');
       let parsed: any;
       try {
         // Clean up response (remove markdown code blocks if present)
         const cleanContent = content.replace(/```json\n?|\n?```/g, '').trim();
         parsed = JSON.parse(cleanContent);
-      } catch {
+        profiler?.endStage('json_parse', { success: true });
+      } catch (parseError) {
         // Fallback parsing for malformed JSON
         parsed = this.extractFallbackData(content);
+        profiler?.endStage('json_parse', { 
+          success: false, 
+          fallback: true,
+          error: String(parseError)
+        });
       }
       
       const inferenceTime = Date.now() - startTime;

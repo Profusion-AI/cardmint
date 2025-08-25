@@ -16,6 +16,16 @@ export interface InferencePort {
   ): Promise<InferenceResult>;
   
   /**
+   * Verify a primary inference result using a secondary model and database checks.
+   * Optional method - only implemented by verifier adapters.
+   */
+  verify?(
+    primaryResult: InferenceResult,
+    imagePath: string,
+    options?: VerifyOptions
+  ): Promise<VerificationResult>;
+  
+  /**
    * Check if the inference service is healthy and ready.
    */
   healthCheck(): Promise<{ healthy: boolean; latency?: number; error?: string }>;
@@ -59,6 +69,34 @@ export interface InferenceStatus {
 }
 
 /**
+ * Verification Result from secondary model
+ */
+export interface VerificationResult {
+  agrees_with_primary: boolean;
+  confidence_adjustment: number; // -0.2 to +0.1
+  database_matches: DatabaseMatch[];
+  semantic_flags: string[]; // "rarity_mismatch", "set_inconsistent"
+  verification_time_ms: number;
+  verifier_confidence: number;
+  raw_response?: any;
+}
+
+export interface DatabaseMatch {
+  card_id?: string;
+  similarity_score: number;
+  match_type: 'exact' | 'fuzzy' | 'embedding';
+  matched_fields: string[];
+  discrepancies: string[];
+}
+
+export interface VerifyOptions {
+  signal?: AbortSignal;
+  timeout?: number;
+  skip_database_check?: boolean;
+  primary_confidence?: number;
+}
+
+/**
  * Configuration options for inference
  */
 export interface InferenceOptions {
@@ -67,4 +105,6 @@ export interface InferenceOptions {
   confidence_threshold?: number;
   enable_caching?: boolean;
   prompt_template?: string;
+  // Apple Silicon optimizations
+  model_quantization?: '8bit' | 'full'; // Model weight quantization (no KV cache for vision models)
 }

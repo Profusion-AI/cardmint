@@ -2,6 +2,7 @@ import http from 'http';
 import { config } from '../config';
 import { PerformanceMetrics } from '../types';
 import { createLogger } from './logger';
+import { getGlobalProfiler, ProfileResult } from './performanceProfiler';
 
 const logger = createLogger('metrics');
 
@@ -12,12 +13,18 @@ interface MetricValue {
   type?: 'counter' | 'gauge' | 'histogram';
 }
 
+/**
+ * Enhanced Metrics Collector - Prometheus Exporter
+ * 
+ * Pulls timing data from PerformanceProfiler (single source of truth)
+ * and exports as Prometheus metrics. No internal timing logic.
+ */
 export class EnhancedMetricsCollector {
   private server?: http.Server;
   private metrics: Map<string, MetricValue> = new Map();
-  private histograms: Map<string, { values: number[], buckets?: number[] }> = new Map();
   private counters: Map<string, number> = new Map();
   private gauges: Map<string, () => number> = new Map();
+  private lastProfilerReport?: ProfileResult;
   
   async start(): Promise<void> {
     if (!config.performance.enableMetrics) {
@@ -111,18 +118,8 @@ export class EnhancedMetricsCollector {
     });
   }
 
-  // Register a histogram metric with custom buckets
-  registerHistogram(name: string, help: string, buckets?: number[]): void {
-    this.histograms.set(name, { 
-      values: [], 
-      buckets: buckets || [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10]
-    });
-    this.metrics.set(name, {
-      value: 0,
-      type: 'histogram',
-      help
-    });
-  }
+  // Histogram support removed - use Prometheus histogram_quantile on the server side
+  // For stage durations, we export them as gauges from the profiler
 
   // Increment a counter
   increment(name: string, labels?: Record<string, string>): void {
@@ -145,8 +142,8 @@ export class EnhancedMetricsCollector {
     });
   }
 
-  // Observe a value for a histogram
-  observeHistogram(name: string, value: number, labels?: Record<string, string>): void {
+  // Record a duration from external source (deprecated - use profiler)
+  recordDuration(name: string, value: number, labels?: Record<string, string>): void {
     const key = this.getMetricKey(name, labels);
     
     if (!this.histograms.has(key)) {
@@ -181,7 +178,53 @@ export class EnhancedMetricsCollector {
     return sorted[Math.max(0, index)];
   }
 
+  /**
+   * Export profiler metrics if available
+   */
+  private exportProfilerMetrics(): void {
+    const profiler = getGlobalProfiler();
+    if (!profiler) return;
+    
+    // Get current in-flight durations
+    const currentDurations = profiler.getCurrentDurations();
+    
+    // Export each stage as a gauge
+    for (const [stage, duration] of Object.entries(currentDurations)) {
+      this.metrics.set(`cardmint_stage_${stage.toLowerCase()}_ms`, {
+        value: duration,
+        type: 'gauge',
+        help: `Duration of ${stage} stage in milliseconds`
+      });
+    }
+    
+    // If we have a completed report, export summary metrics
+    if (this.lastProfilerReport) {
+      const summaryMetrics = profiler.summaryMetrics(this.lastProfilerReport);
+      
+      this.metrics.set('cardmint_total_duration_ms', {
+        value: summaryMetrics.total_duration_ms,
+        type: 'gauge',
+        help: 'Total pipeline duration in milliseconds'
+      });
+      
+      this.metrics.set('cardmint_throughput_cards_per_hour', {
+        value: summaryMetrics.throughput_cards_per_hour,
+        type: 'gauge',
+        help: 'Theoretical throughput in cards per hour'
+      });
+    }
+  }
+  
+  /**
+   * Store a completed profiler report for metrics export
+   */
+  setLastProfilerReport(report: ProfileResult): void {
+    this.lastProfilerReport = report;
+  }
+  
   private formatPrometheusMetrics(): string {
+    // Pull latest profiler metrics
+    this.exportProfilerMetrics();
     const lines: string[] = [];
     
     // Add metadata

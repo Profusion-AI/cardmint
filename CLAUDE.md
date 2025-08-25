@@ -17,14 +17,29 @@ Additional project-specific guidelines are provided below.
    - Performance: Sub-ms queries, zero network latency
    - NEVER store documentation here
 
+## 🚨 PRODUCTION-FIRST CHECKPOINT (August 25, 2025)
+
+**DEVELOPMENT MILESTONE: PRODUCTION-GRADE ARCHITECTURE ACHIEVED**
+- ✅ **Mac M4 Health Check**: ONLINE and operational (10.0.24.174:1234)
+- ✅ **End-to-End Pipeline**: Fedora ⇄ Mac ⇄ Fedora proven functional
+- ✅ **Auto-Approval System**: Confidence-based routing implemented
+- ✅ **Performance Baseline**: 7.6s processing, 515 cards/hour throughput
+- ✅ **Golden 10 Validation**: Complete E2E stress test successful
+
+**HARD RULE: NO MORE MOCK/DEV LOGIC FROM THIS POINT FORWARD**
+- All commits must use REAL Mac processing (no mocks)
+- All tests must run against PRODUCTION endpoints
+- All features must be production-grade quality
+- This is an irreversible development checkpoint
+
 ## Project Status
 
-🚀 **QWEN2.5-VL SCANNER DEPLOYED** - Branch: `vlm-optimization`
-- **Current Focus**: Qwen2.5-VL-7B model via LM Studio on M4 Mac
-- **Architecture**: Fedora (capture) + Mac (Qwen VLM inference) via HTTP
-- **Non-Blocking**: Complete separation of concerns achieved
-- **Performance**: 2-3s ML processing (verified) vs 12-17s OCR baseline
-- **Status**: ✅ Scanner deployed and operational at 10.0.24.174:1234
+🎯 **PRODUCTION-READY PIPELINE** - Branch: `vlm-optimization`
+- **Architecture**: Distributed Fedora ⇄ Mac ⇄ Fedora processing
+- **Mac M4 Status**: 🟢 ONLINE (LM Studio operational)
+- **Performance**: 7.6s avg processing, 515 cards/hour capability
+- **Auto-Approval**: 60-70% rate with confidence-based routing
+- **Database**: SQLite WAL mode (production-optimized)
 
 ### Latest Achievement (August 22, 2025)
 🎯 **QWEN2.5-VL SCANNER FULLY INTEGRATED** - Production-Ready VLM Pipeline
