@@ -161,6 +161,11 @@ export class CardRepository {
       throw error;
     }
   }
+
+  // Alias for API compatibility
+  async listCards(options: { limit?: number; offset?: number } = {}): Promise<Card[]> {
+    return this.getAllCards(options.limit, options.offset);
+  }
   
   async findByImagePath(imagePath: string): Promise<Card | null> {
     const database = getDatabase();

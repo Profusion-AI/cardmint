@@ -38,7 +38,7 @@ export const config = {
   },
   
   processing: {
-    maxWorkers: parseInt(process.env.MAX_WORKERS || '20', 10),
+    maxWorkers: parseInt(process.env.MAX_WORKERS || '2', 10), // Phase 3: Hybrid architecture optimization
     workerConcurrency: parseInt(process.env.WORKER_CONCURRENCY || '3', 10),
     jobTimeoutMs: parseInt(process.env.JOB_TIMEOUT_MS || '5000', 10),
     retryAttempts: parseInt(process.env.RETRY_ATTEMPTS || '3', 10),

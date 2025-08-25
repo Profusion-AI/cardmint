@@ -1,5 +1,5 @@
-import fs from "node:fs/promises";
-import type { InferencePort, InferenceResult, InferenceStatus, InferenceOptions } from "../../core/infer/InferencePort";
+import { promises as fs } from "fs";
+import type { InferencePort, InferenceResult, InferenceStatus } from "../../core/infer/InferencePort";
 import { logger } from "../../utils/logger";
 import { getGlobalProfiler } from "../../utils/performanceProfiler";
 
@@ -29,7 +29,7 @@ export class LmStudioInference implements InferencePort {
   
   async classify(
     imagePath: string, 
-    options: { signal?: AbortSignal; timeout?: number } = {}
+    options: { signal?: AbortSignal; timeout?: number; temperature?: number; max_tokens?: number } = {}
   ): Promise<InferenceResult> {
     const startTime = Date.now();
     this.totalRequests++;

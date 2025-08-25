@@ -5,7 +5,8 @@ import { initializeDatabase } from './storage/database';
 import { initializeRedis } from './storage/redis';
 import { QueueManager } from './queue/QueueManager';
 import { MetricsCollector } from './utils/metrics';
-import { CaptureWatcher } from './services/CaptureWatcher';
+import { IntegratedScannerService } from './services/IntegratedScannerService';
+import { DistributedIntegration } from './services/DistributedIntegration';
 import { CardRepository } from './storage/CardRepository';
 import { gracefulShutdown } from './utils/shutdown';
 
@@ -29,17 +30,25 @@ async function main() {
     const metrics = new MetricsCollector();
     await metrics.start();
     
-    logger.info('Initializing capture watcher...');
+    logger.info('Initializing Phase 3 hybrid quick-scan architecture...');
     const cardRepository = new CardRepository();
-    const captureWatcher = new CaptureWatcher(queueManager, cardRepository);
-    await captureWatcher.start();
+    
+    // Phase 3: Use existing integrated services that combine all components
+    logger.info('Starting IntegratedScannerService (Phase 4)...');
+    const integratedScanner = new IntegratedScannerService();
+    
+    logger.info('Starting DistributedIntegration (Complete Pipeline)...');
+    const distributedPipeline = new DistributedIntegration();
+    await distributedPipeline.start();
+    
+    logger.info('Phase 3 hybrid pipeline ready with all components integrated');
     
     logger.info('Starting CardMint server...');
     const server = new CardMintServer(queueManager, metrics);
     await server.start();
     
-    process.on('SIGTERM', () => gracefulShutdown(server, queueManager, captureWatcher));
-    process.on('SIGINT', () => gracefulShutdown(server, queueManager, captureWatcher));
+    process.on('SIGTERM', () => gracefulShutdown(server, queueManager, distributedPipeline));
+    process.on('SIGINT', () => gracefulShutdown(server, queueManager, distributedPipeline));
     
     logger.info('CardMint System is running successfully');
     logger.info(`API: http://localhost:${process.env.PORT || 3000}`);

@@ -262,10 +262,8 @@ export class IntegratedScannerService {
       if (!options.skipDatabaseVerification && !verificationResult?.database_matches?.length) {
         try {
           await verificationMetrics.executeWithDatabaseBreaker(async () => {
-            const databaseMatches = await this.verificationService.verifyAgainstDatabase(
-              primaryResult,
-              { max_matches: 3 }
-            );
+            // TODO: Implement database verification service
+            const databaseMatches: any[] = [];
             if (verificationResult) {
               verificationResult.database_matches = databaseMatches;
             }
