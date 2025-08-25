@@ -1,0 +1,32 @@
+[Unit]
+Description=CardMint Daily Archive Service
+Documentation=file:///home/profusionai/CardMint/scripts/daily-archive.sh
+After=network.target
+Wants=network.target
+
+[Service]
+Type=oneshot
+User=profusionai
+Group=profusionai
+WorkingDirectory=/home/profusionai/CardMint
+ExecStart=/home/profusionai/CardMint/scripts/daily-archive.sh
+StandardOutput=journal
+StandardError=journal
+
+# Resource limits to prevent system impact
+MemoryLimit=1G
+CPUQuota=50%
+IOWeight=200
+
+# Security hardening
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths=/home/profusionai/CardMint /mnt/usb_transfer
+
+# Environment
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+Environment=HOME=/home/profusionai
+
+[Install]
+WantedBy=multi-user.target

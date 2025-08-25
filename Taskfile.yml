@@ -1,0 +1,300 @@
+version: '3'
+
+# CardMint Task Runner - Wright Brothers Edition
+# Unified interface for all CardMint operations
+# Usage: task <command> or install with: npm install -g @go-task/cli
+
+vars:
+  PROJECT_NAME: CardMint
+  VERSION: 2.0.0
+  NODE_ENV: development
+
+tasks:
+  # ==============================================================================
+  # SYSTEM SETUP & HEALTH CHECKS
+  # ==============================================================================
+  
+  up:
+    desc: "🚀 Start all CardMint services and verify system health"
+    cmds:
+      - echo "🚀 Starting CardMint production system..."
+      - task: health
+      - echo "✅ All systems verified - starting services"
+      - npm run dev
+
+  health:
+    desc: "🏥 Complete system health check (config, ML, camera, database)"
+    cmds:
+      - echo "🏥 Running comprehensive system health check..."
+      - task: config:doctor
+      - task: camera:diag
+      - task: golden:validate
+      - echo "✅ System health check completed"
+
+  doctor:
+    desc: "🩺 Quick system diagnosis for production readiness"
+    cmds:
+      - echo "🩺 CardMint Production Readiness Check"
+      - echo "======================================"
+      - task: config:doctor
+      - echo ""
+      - echo "🔋 Services Status:"
+      - curl -sf http://localhost:3000/api/health > /dev/null && echo "✅ CardMint API" || echo "❌ CardMint API (not running)"
+      - curl -sf http://10.0.24.174:1234/v1/models > /dev/null && echo "✅ LMStudio ML" || echo "❌ LMStudio ML (not reachable)"
+      - redis-cli ping > /dev/null 2>&1 && echo "✅ Redis" || echo "❌ Redis (not running)"
+
+  # ==============================================================================
+  # CONFIGURATION MANAGEMENT  
+  # ==============================================================================
+  
+  config:doctor:
+    desc: "🔧 Validate configuration and connectivity"
+    cmd: npm run config:doctor
+
+  # ==============================================================================
+  # GOLDEN DATASET & TESTING
+  # ==============================================================================
+  
+  golden:validate:
+    desc: "🏆 Validate golden test dataset schema"
+    cmd: npm run golden:validate
+
+  golden:test:
+    desc: "🎯 Run golden accuracy tests (minimum viable accuracy)"
+    cmds:
+      - echo "🎯 Running Golden Accuracy Tests"
+      - echo "Target: 95%+ accuracy, ≤3000ms processing"
+      - echo ""
+      - npm run golden:test
+
+  test:e2e:
+    desc: "🔄 Full end-to-end pipeline test"
+    cmd: ./scripts/test-e2e-pipeline.sh
+
+  test:accuracy:
+    desc: "📊 Accuracy evaluation against ground truth"
+    cmd: node scripts/test-accuracy-suite.js
+
+  benchmark:
+    desc: "⚡ Performance benchmarking"
+    cmd: node scripts/benchmark-throughput.js
+
+  # ==============================================================================
+  # CAMERA MANAGEMENT
+  # ==============================================================================
+  
+  camera:diag:
+    desc: "📸 Sony camera comprehensive diagnostics"
+    cmd: npm run camera:diag
+
+  camera:reset:
+    desc: "🔄 Sony camera reset and recovery"
+    cmd: npm run camera:reset
+
+  camera:test:
+    desc: "📷 Test camera connectivity and capture"
+    cmd: npm run camera:test
+
+  camera:build:
+    desc: "🔨 Build Sony camera SDK components"
+    cmd: npm run camera:build
+
+  # ==============================================================================
+  # ML & LMSTUDIO MANAGEMENT
+  # ==============================================================================
+  
+  ml:test:
+    desc: "🧠 Test ML server connectivity and performance"
+    cmd: ./scripts/test-ml-connectivity.sh
+
+  ml:bench:
+    desc: "📈 Benchmark ML processing performance"
+    cmds:
+      - echo "📈 ML Performance Benchmark"
+      - echo "Target: 2-3s per card, 95%+ accuracy"
+      - ./scripts/test-single-card.sh
+
+  ml:health:
+    desc: "💚 Check ML server health and circuit breaker status"
+    cmd: ./scripts/test-ml-health.sh
+
+  # ==============================================================================
+  # DATABASE & STORAGE
+  # ==============================================================================
+  
+  db:check:
+    desc: "🗄️ Check database connectivity and status"
+    cmds:
+      - echo "🗄️ Database Status Check"
+      - echo "SQLite Database: ./data/cardmint.db"
+      - test -f ./data/cardmint.db && echo "✅ Database file exists" || echo "❌ Database file missing"
+      - sqlite3 ./data/cardmint.db "SELECT COUNT(*) as card_count FROM cards;" 2>/dev/null && echo "✅ Database accessible" || echo "❌ Database access failed"
+
+  archive:
+    desc: "📦 Run storage archival process"
+    cmd: ./scripts/daily-archive.sh
+
+  # ==============================================================================
+  # DEVELOPMENT COMMANDS
+  # ==============================================================================
+  
+  dev:
+    desc: "💻 Start development server with hot reload"
+    cmd: npm run dev
+
+  build:
+    desc: "🔨 Build production assets"
+    cmd: npm run build
+
+  test:
+    desc: "🧪 Run test suite"
+    cmd: npm test
+
+  lint:
+    desc: "✨ Lint and format code"
+    cmd: npm run lint
+
+  # ==============================================================================
+  # PRODUCTION OPERATIONS
+  # ==============================================================================
+  
+  deploy:
+    desc: "🚢 Deploy to production (with safety checks)"
+    cmds:
+      - echo "🚢 Production Deployment Checklist"
+      - task: golden:test
+      - task: health
+      - echo "✅ All safety checks passed - ready for deployment"
+
+  reset:
+    desc: "🔄 Complete system reset (camera, ML, services)"
+    cmds:
+      - echo "🔄 Complete CardMint System Reset"
+      - echo "================================="
+      - task: camera:reset
+      - echo ""
+      - echo "🧠 ML Service Reset:"
+      - curl -X POST http://10.0.24.174:5002/reset 2>/dev/null || echo "⚠️  ML service reset endpoint not available"
+      - echo ""
+      - echo "🔄 Restarting services..."
+      - pkill -f "cardmint" || true
+      - sleep 2
+      - echo "✅ System reset completed - run 'task up' to restart"
+
+  status:
+    desc: "📊 Show current system status and metrics"
+    cmds:
+      - echo "📊 CardMint System Status"
+      - echo "========================"
+      - echo "🔋 Service Status:"
+      - curl -sf http://localhost:3000/api/health > /dev/null && echo "  ✅ CardMint API (http://localhost:3000)" || echo "  ❌ CardMint API (not running)"
+      - curl -sf http://10.0.24.174:1234/v1/models > /dev/null && echo "  ✅ LMStudio ML (http://10.0.24.174:1234)" || echo "  ❌ LMStudio ML (check Mac connectivity)"
+      - redis-cli ping > /dev/null 2>&1 && echo "  ✅ Redis (localhost:6379)" || echo "  ❌ Redis (not running)"
+      - echo ""
+      - echo "🎯 Golden Test Status:"
+      - test -f tests/e2e/golden/manifest.json && echo "  ✅ 10 verified cards ready" || echo "  ❌ Golden dataset missing"
+      - echo ""
+      - echo "📸 Camera Status:"
+      - /home/profusionai/CardMint/CrSDK_v2.00.00_20250805a_Linux64PC/build/sony-cli list > /dev/null 2>&1 && echo "  ✅ Sony camera connected" || echo "  ❌ Sony camera not detected"
+
+  # ==============================================================================
+  # MONITORING & METRICS
+  # ==============================================================================
+  
+  dash:
+    desc: "🖥️ Open verification dashboard in browser"
+    cmds:
+      - echo "🖥️ Opening CardMint Dashboard..."
+      - xdg-open http://localhost:3000/dashboard/verification.html 2>/dev/null || echo "Dashboard available at: http://localhost:3000/dashboard/verification.html"
+
+  logs:
+    desc: "📋 View system logs"
+    cmds:
+      - echo "📋 Recent CardMint Logs"
+      - echo "====================="
+      - tail -n 20 logs/cardmint.log 2>/dev/null || echo "No logs found - start services first"
+
+  metrics:
+    desc: "📈 Show performance metrics"
+    cmds:
+      - echo "📈 CardMint Performance Metrics"
+      - echo "==============================="
+      - curl -s http://localhost:9091/metrics 2>/dev/null | grep cardmint | head -10 || echo "Metrics not available - start services first"
+
+  # ==============================================================================
+  # UTILITY COMMANDS
+  # ==============================================================================
+  
+  clean:
+    desc: "🧹 Clean temporary files and caches"
+    cmds:
+      - echo "🧹 Cleaning temporary files..."
+      - rm -rf node_modules/.cache dist/*.map logs/temp* || true
+      - echo "✅ Cleanup completed"
+
+  install:
+    desc: "📦 Install dependencies and setup system"
+    cmds:
+      - echo "📦 Installing CardMint dependencies..."
+      - npm install
+      - task: camera:build
+      - echo "✅ Installation completed"
+
+  # ==============================================================================
+  # HELP & DOCUMENTATION
+  # ==============================================================================
+  
+  help:
+    desc: "❓ Show detailed help and common workflows"
+    cmds:
+      - echo "🎯 CardMint Task Runner - Common Workflows"
+      - echo "=========================================="
+      - echo ""
+      - echo "🚀 GETTING STARTED:"
+      - echo "  task up              # Start all services with health checks"
+      - echo "  task status          # Check system status"
+      - echo "  task dash            # Open verification dashboard"
+      - echo ""
+      - echo "🧪 TESTING & VALIDATION:"
+      - echo "  task golden:test     # Run accuracy tests (95%+ target)"
+      - echo "  task test:e2e        # Full pipeline test"
+      - echo "  task benchmark       # Performance benchmarking"
+      - echo ""
+      - echo "📸 CAMERA MANAGEMENT:"
+      - echo "  task camera:diag     # Camera diagnostics"
+      - echo "  task camera:reset    # Reset camera connection"
+      - echo "  task camera:test     # Test camera capture"
+      - echo ""
+      - echo "🧠 ML & PROCESSING:"
+      - echo "  task ml:test         # Test LMStudio connectivity"
+      - echo "  task ml:bench        # ML performance benchmark"
+      - echo ""
+      - echo "🔧 SYSTEM MAINTENANCE:"
+      - echo "  task health          # Complete health check"
+      - echo "  task reset           # Full system reset"
+      - echo "  task deploy          # Production deployment"
+      - echo ""
+      - echo "📚 For detailed help: https://github.com/cardmint/docs"
+
+  version:
+    desc: "ℹ️ Show CardMint version and system info"
+    cmds:
+      - echo "CardMint {{.PROJECT_NAME}} v{{.VERSION}}"
+      - echo "Wright Brothers Edition - Production Ready"
+      - echo ""
+      - echo "System Information:"
+      - echo "  Node.js: $(node --version)"
+      - echo "  NPM: $(npm --version)"
+      - echo "  OS: $(uname -sr)"
+      - echo "  Architecture: $(uname -m)"
+      - echo ""
+      - echo "Core Components:"
+      - echo "  ✅ Typed Config Validation (Zod)"
+      - echo "  ✅ Trace ID System"
+      - echo "  ✅ Circuit Breaker (LMStudio)"
+      - echo "  ✅ Golden Test Dataset (10 cards)"
+      - echo "  ✅ Sony Camera Diagnostics"
+      - echo "  ✅ Wright Brothers Precision Engineering"
+
+# Default task when running just 'task'
+default: help

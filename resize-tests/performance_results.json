@@ -1,0 +1,63 @@
+{
+  "timestamp": "2025-08-25T14:49:58.297Z",
+  "testImage": "DSC00009.JPG",
+  "originalSize": 7934958,
+  "originalDimensions": "6192x4128",
+  "recommendedSize": 640,
+  "results": [
+    {
+      "width": 640,
+      "height": 427,
+      "originalSize": 7934958,
+      "resizedSize": 53925,
+      "compressionRatio": 99.32041228195537,
+      "processingTime": 139,
+      "path": "/home/profusionai/CardMint/resize-tests/DSC00009_640.jpg"
+    },
+    {
+      "width": 800,
+      "height": 533,
+      "originalSize": 7934958,
+      "resizedSize": 78885,
+      "compressionRatio": 99.00585485140564,
+      "processingTime": 185,
+      "path": "/home/profusionai/CardMint/resize-tests/DSC00009_800.jpg"
+    },
+    {
+      "width": 1024,
+      "height": 683,
+      "originalSize": 7934958,
+      "resizedSize": 114095,
+      "compressionRatio": 98.56212219396751,
+      "processingTime": 202,
+      "path": "/home/profusionai/CardMint/resize-tests/DSC00009_1024.jpg"
+    },
+    {
+      "width": 1280,
+      "height": 853,
+      "originalSize": 7934958,
+      "resizedSize": 162586,
+      "compressionRatio": 97.95101624986546,
+      "processingTime": 266,
+      "path": "/home/profusionai/CardMint/resize-tests/DSC00009_1280.jpg"
+    },
+    {
+      "width": 1600,
+      "height": 1067,
+      "originalSize": 7934958,
+      "resizedSize": 231718,
+      "compressionRatio": 97.07978290496307,
+      "processingTime": 319,
+      "path": "/home/profusionai/CardMint/resize-tests/DSC00009_1600.jpg"
+    },
+    {
+      "width": 1920,
+      "height": 1280,
+      "originalSize": 7934958,
+      "resizedSize": 306950,
+      "compressionRatio": 96.13167454698564,
+      "processingTime": 387,
+      "path": "/home/profusionai/CardMint/resize-tests/DSC00009_1920.jpg"
+    }
+  ]
+}

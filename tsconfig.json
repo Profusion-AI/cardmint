@@ -31,7 +31,10 @@
       "@storage/*": ["src/storage/*"],
       "@api/*": ["src/api/*"],
       "@utils/*": ["src/utils/*"],
-      "@types/*": ["src/types/*"]
+      "@types/*": ["src/types/*"],
+      "@core/*": ["src/core/*"],
+      "@adapters/*": ["src/adapters/*"],
+      "@app/*": ["src/app/*"]
     }
   },
   "include": ["src/**/*"],

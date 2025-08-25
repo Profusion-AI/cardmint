@@ -1,13 +1,25 @@
 #!/usr/bin/env python3
 """
-Optimized SmolVLM-500M Service with System-Level Optimizations
+⚠️  QUARANTINED CODE - DO NOT IMPORT FROM src/
+This file has been moved to legacy/ during architecture cleanup.
+Import from this file will cause CI to fail.
+
+ORIGINAL: Optimized SmolVLM-500M Service with System-Level Optimizations
 Implements multiple strategies to achieve <3s inference:
 1. Persistent model in memory (eliminate reload)
 2. Batch processing support
 3. Response caching for common cards
 4. ONNX Runtime option for INT8 models
 5. Progressive enhancement (quick preview + detailed)
+
+QUARANTINED: August 25, 2025
+REASON: Incomplete ONNX optimization experiments
+REPLACEMENT: LMStudio adapter only for now; ONNX as future fallback
+DROP BY: September 15, 2025
 """
+
+# Prevent accidental imports
+__DO_NOT_USE__ = True
 
 import os
 import sys

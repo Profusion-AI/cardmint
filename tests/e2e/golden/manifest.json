@@ -1,0 +1,153 @@
+{
+  "version": "2.0",
+  "description": "CardMint Golden Dataset - Verified Ground Truth for Production Accuracy",
+  "created": "2025-08-25",
+  "verified_by": "Human Expert",
+  "verification_source": "PriceCharting RAW pricing + manual verification",
+  "cards": [
+    {
+      "index": 1,
+      "filename": "blissey.jpg",
+      "card_title": "Blissey",
+      "identifier": { "number": "2", "set_size": "64" },
+      "set_name": "Neo Revelation",
+      "first_edition": true,
+      "raw_price_usd": 57.00,
+      "pricing_source": "PriceCharting",
+      "currency": "USD",
+      "difficulty": "easy",
+      "notes": "1st Edition Neo card - clear image, standard layout"
+    },
+    {
+      "index": 2,
+      "filename": "mcd19-12_large.jpg",
+      "card_title": "Eevee",
+      "identifier": { "number": "12", "set_size": "12" },
+      "set_name": "Pokémon McDonalds 2019",
+      "raw_price_usd": 9.75,
+      "pricing_source": "PriceCharting",
+      "currency": "USD",
+      "difficulty": "medium",
+      "notes": "McDonald's promo card - non-standard set format"
+    },
+    {
+      "index": 3,
+      "filename": "DSC00009.JPG",
+      "image_note": "card orientation quarter turned clockwise",
+      "card_title": "Totodile",
+      "identifier": { "number": "81", "set_size": "111" },
+      "set_name": "Neo Genesis",
+      "first_edition": true,
+      "raw_price_usd": 2.00,
+      "pricing_source": "PriceCharting",
+      "currency": "USD",
+      "difficulty": "hard",
+      "notes": "1st Edition with rotated orientation - tests image processing robustness AND 1st Edition detection"
+    },
+    {
+      "index": 4,
+      "filename": "neo4-5_large.jpg",
+      "card_title": "Dark Feraligatr",
+      "identifier": { "number": "5", "set_size": "105" },
+      "set_name": "Neo Destiny",
+      "first_edition": true,
+      "raw_price_usd": 164.01,
+      "pricing_source": "PriceCharting",
+      "currency": "USD",
+      "difficulty": "medium",
+      "notes": "High-value 1st Edition Neo card - pricing accuracy critical"
+    },
+    {
+      "index": 5,
+      "filename": "pop6-1_large.jpg",
+      "card_title": "Bastiodon",
+      "identifier": { "number": "1", "set_size": "17" },
+      "set_name": "Pokémon POP Series 6",
+      "raw_price_usd": 3.08,
+      "pricing_source": "PriceCharting",
+      "currency": "USD",
+      "difficulty": "hard",
+      "notes": "POP Series format - uncommon set numbering"
+    },
+    {
+      "index": 6,
+      "filename": "sm1-20_large.jpg",
+      "card_title": "Tsareena",
+      "identifier": { "number": "20", "set_size": "149" },
+      "set_name": "Pokémon Sun & Moon",
+      "raw_price_usd": 2.25,
+      "pricing_source": "PriceCharting",
+      "currency": "USD",
+      "difficulty": "easy",
+      "notes": "Modern Sun & Moon format - current layout"
+    },
+    {
+      "index": 7,
+      "filename": "sv2-27_large.jpg",
+      "card_title": "Wo-Chien ex",
+      "identifier": { "number": "027", "set_size": "193" },
+      "set_name": "Pokémon Paldea Evolved",
+      "raw_price_usd": 1.66,
+      "pricing_source": "PriceCharting",
+      "currency": "USD",
+      "difficulty": "easy",
+      "notes": "Latest Scarlet & Violet ex card - newest format"
+    },
+    {
+      "index": 8,
+      "filename": "swsh3-52_large.jpg",
+      "card_title": "Toxapex",
+      "identifier": { "number": "052", "set_size": "189" },
+      "set_name": "Pokémon Darkness Ablaze",
+      "raw_price_usd": 1.25,
+      "pricing_source": "PriceCharting",
+      "currency": "USD",
+      "difficulty": "medium",
+      "notes": "SWSH format with zero-padded numbers"
+    },
+    {
+      "index": 9,
+      "filename": "swshp-SWSH021_large.jpg",
+      "card_title": "Polteageist V",
+      "identifier": { "promo_code": "SWSH021" },
+      "set_name": "Pokémon SWSH Black Star Promos",
+      "raw_price_usd": 2.50,
+      "pricing_source": "PriceCharting",
+      "currency": "USD",
+      "difficulty": "hard",
+      "notes": "SWSH Promo with alphanumeric identifier - challenging format"
+    },
+    {
+      "index": 10,
+      "filename": "xyp-XY50_large.jpg",
+      "card_title": "Pangoro",
+      "identifier": { "promo_code": "XY50" },
+      "set_name": "Pokémon XY Black Star Promos",
+      "raw_price_usd": 2.53,
+      "pricing_source": "PriceCharting",
+      "currency": "USD",
+      "difficulty": "hard",
+      "notes": "XY Promo format - alphanumeric identifier recognition"
+    }
+  ],
+  "sloTargets": {
+    "accuracy": 0.95,
+    "processingTimeMs": 3000,
+    "errorRate": 0.05,
+    "pricingAccuracy": 0.90,
+    "criticalFieldAccuracy": 0.98
+  },
+  "testConfiguration": {
+    "retries": 3,
+    "timeout": 10000,
+    "concurrency": 1,
+    "strictMode": true,
+    "validateSchema": true
+  },
+  "integrityNotes": {
+    "purpose": "These 10 cards represent the minimum viable accuracy test for CardMint production deployment",
+    "consequence": "Any regression in recognition of these cards indicates a critical system failure",
+    "financialImpact": "Incorrect identification directly affects user pricing and collection value",
+    "edgeCasesCovered": ["Rotated images", "1st Edition detection", "Promo codes", "Zero-padded numbers", "High-value cards"]
+  }
+}

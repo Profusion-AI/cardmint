@@ -1,8 +1,20 @@
 #!/usr/bin/env python3
 """
-Intel-optimized Model Manager for VLM Pipeline
+⚠️  QUARANTINED CODE - DO NOT IMPORT FROM src/
+This file has been moved to legacy/ during architecture cleanup.
+Import from this file will cause CI to fail.
+
+ORIGINAL: Intel-optimized Model Manager for VLM Pipeline
 Implements IPEX optimizations and hot model loading for Intel i5 10th Gen
+
+QUARANTINED: August 25, 2025
+REASON: Experimental optimization code that needs proper ports/adapters pattern
+REPLACEMENT: Will be reimplemented through InferencePort interface
+DROP BY: September 15, 2025
 """
+
+# Prevent accidental imports
+__DO_NOT_USE__ = True
 
 import os
 import sys
