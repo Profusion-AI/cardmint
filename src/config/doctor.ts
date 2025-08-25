@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 
-import { validatedConfig, SLO_TARGETS } from './validator';
-import { createLogger } from '../utils/logger';
-import axios from 'axios';
 import { promises as fs } from 'fs';
 import { resolve } from 'path';
 import { exec } from 'child_process';
 import { promisify } from 'util';
+import axios from 'axios';
+import { createLogger } from '../utils/logger';
+import { validatedConfig, SLO_TARGETS } from './validator';
 
 const execAsync = promisify(exec);
 const logger = createLogger('config-doctor');

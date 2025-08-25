@@ -1,14 +1,15 @@
+/* TODO: Review and add specific port type imports from @core/* */
 /**
  * MLServiceClient - TypeScript client for the Python ML Ensemble Service
  * Bridges the CardMint system with the advanced card recognition ensemble
  * Provides graceful fallback to OCR-only mode if ML service is unavailable
  */
 
-import { createLogger } from '../utils/logger';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import axios, { AxiosInstance } from 'axios';
 import FormData from 'form-data';
+import { createLogger } from '../utils/logger';
 
 const logger = createLogger('ml-service-client');
 
@@ -317,7 +318,7 @@ export class MLServiceClient {
 }
 
 // Export singleton instance for convenience
-export const mlServiceClient = new MLServiceClient();
+export const mlServiceClient = ports.infer;
 
 // Also export for testing and custom configurations
 export default MLServiceClient;

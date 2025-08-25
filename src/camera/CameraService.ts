@@ -1,10 +1,10 @@
 import { EventEmitter } from 'events';
-import { CameraStateMachine, CameraState, CameraPath, CaptureResult } from './CameraStateMachine';
-import { CapturePresets, PresetType, PresetConfig } from './CapturePresets';
-import { createLogger } from '../utils/logger';
-import { MetricsCollector } from '../utils/metrics';
 import * as fs from 'fs/promises';
 import * as path from 'path';
+import { createLogger } from '../utils/logger';
+import { MetricsCollector } from '../utils/metrics';
+import { CameraStateMachine, CameraState, CameraPath, CaptureResult } from './CameraStateMachine';
+import { CapturePresets, PresetType, PresetConfig } from './CapturePresets';
 
 const logger = createLogger('camera-service');
 

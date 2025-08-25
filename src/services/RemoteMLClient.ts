@@ -1,3 +1,4 @@
+/* TODO: Review and add specific port type imports from @core/* */
 /**
  * RemoteMLClient - Enhanced client for distributed ML processing on M4 Mac
  * 
@@ -6,17 +7,17 @@
  * performance monitoring.
  */
 
-import { createLogger } from '../utils/logger';
-import axios, { AxiosInstance, AxiosError } from 'axios';
-import FormData from 'form-data';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as http from 'http';
 import * as https from 'https';
 import { createHash } from 'crypto';
-import { getDistributedConfig, DistributedConfig, ProcessingMode, getProcessingMode } from '../config/distributed';
-import { MLPrediction, MLServiceStatus, MLServiceHealth } from '../ml/MLServiceClient';
 import { EventEmitter } from 'events';
+import FormData from 'form-data';
+import axios, { AxiosInstance, AxiosError } from 'axios';
+import { getDistributedConfig, DistributedConfig, ProcessingMode, getProcessingMode } from '../config/distributed';
+import { createLogger } from '../utils/logger';
+import { ports } from '../app/wiring';
 import { qwenScanner } from './QwenScannerService';
 
 const logger = createLogger('remote-ml-client');
@@ -221,7 +222,7 @@ export class RemoteMLClient extends EventEmitter {
 
     try {
       // Check health first (unless in shadow mode where we don't want to block)
-      if (!this.config.monitoring.shadowMode && !await this.checkHealth()) {
+      if (!this.config.monitoring.shadowMode && !(await this.checkHealth())) {
         throw new Error('Remote ML service is not healthy');
       }
 

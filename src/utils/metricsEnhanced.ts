@@ -1,7 +1,7 @@
-import { createLogger } from './logger';
+import http from 'http';
 import { config } from '../config';
 import { PerformanceMetrics } from '../types';
-import http from 'http';
+import { createLogger } from './logger';
 
 const logger = createLogger('metrics');
 

@@ -1,3 +1,4 @@
+/* TODO: Review and add specific port type imports from @core/* */
 /**
  * DistributedImageProcessor - Enhanced image processor with remote ML support
  * 
@@ -6,14 +7,14 @@
  * compatibility with local OCR processing.
  */
 
-import { createLogger } from '../utils/logger';
-import { OCRData, CardMetadata } from '../types';
-import { ImageProcessor, ProcessingResult, ProcessingOptions } from './ImageProcessor';
-import { getRemoteMLClient, RemoteMLClient, RemoteMLRequest, RemoteMLResponse } from '../services/RemoteMLClient';
-import { getDistributedConfig, ProcessingMode, getProcessingMode, shouldUseRemoteML } from '../config/distributed';
-import { v4 as uuidv4 } from 'uuid';
 import fs from 'fs/promises';
 import path from 'path';
+import { v4 as uuidv4 } from 'uuid';
+import { createLogger } from '../utils/logger';
+import { OCRData, CardMetadata } from '../types';
+import { getRemoteMLClient, RemoteMLClient, RemoteMLRequest, RemoteMLResponse } from '../services/RemoteMLClient';
+import { getDistributedConfig, ProcessingMode, getProcessingMode, shouldUseRemoteML } from '../config/distributed';
+import { ports } from '../app/wiring';
 
 const logger = createLogger('distributed-image-processor');
 
@@ -431,7 +432,7 @@ let distributedProcessor: DistributedImageProcessor | null = null;
 
 export function getDistributedProcessor(): DistributedImageProcessor {
   if (!distributedProcessor) {
-    distributedProcessor = new DistributedImageProcessor();
+    distributedProcessor = ports.image;
   }
   return distributedProcessor;
 }

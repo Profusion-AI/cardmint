@@ -1,6 +1,6 @@
+import fs from "node:fs/promises";
 import type { InferencePort, InferenceResult, InferenceStatus, InferenceOptions } from "../../core/infer/InferencePort";
 import { logger } from "../../utils/logger";
-import fs from "node:fs/promises";
 
 type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 

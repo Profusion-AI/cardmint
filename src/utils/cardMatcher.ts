@@ -1,7 +1,8 @@
-import { logger } from './logger';
+/* TODO: Review and add specific port type imports from @core/* */
 import { pokemonTCGService, PokemonCard } from '../services/PokemonTCGService';
 import { priceChartingService, PriceChartingProduct } from '../services/PriceChartingService';
-import { imageValidationService } from '../services/ImageValidationService';
+import { ports } from '../app/wiring';
+import { logger } from './logger';
 
 export interface OCRResult {
   card_name?: string;
@@ -174,10 +175,7 @@ export class CardMatcher {
       if (options.validateImage && ocrResult.image && tcgMatch.card) {
         const officialImage = await pokemonTCGService.getCardImage(tcgMatch.card);
         if (officialImage) {
-          const similarity = await imageValidationService.compareImages(
-            ocrResult.image,
-            officialImage
-          );
+          const similarity = await ports.validate.compareImages(ocrResult.image, officialImage);
           imageSimilarity = similarity.overall;
           
           if (imageSimilarity < 0.7) {

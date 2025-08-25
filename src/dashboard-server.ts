@@ -1,7 +1,7 @@
 #!/usr/bin/env tsx
 
-import express from 'express';
 import path from 'path';
+import express from 'express';
 import { createLogger } from './utils/logger';
 
 const logger = createLogger('dashboard');

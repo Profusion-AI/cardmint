@@ -1,9 +1,10 @@
+/* TODO: Review and add specific port type imports from @core/* */
 import { Queue, Worker, Job, QueueEvents } from 'bullmq';
 import { config } from '../config';
 import { createLogger } from '../utils/logger';
 import { CardStatus } from '../types';
-import { ImageProcessor } from '../processing/ImageProcessor';
 import { CardRepository } from '../storage/CardRepository';
+import { ports } from '../app/wiring';
 
 const logger = createLogger('queue');
 
@@ -54,7 +55,7 @@ export class QueueManager {
       
       this.queueEvents = new QueueEvents('processing', { connection });
       
-      this.imageProcessor = new ImageProcessor();
+      this.imageProcessor = ports.image;
       this.cardRepository = new CardRepository();
       
       await this.startWorkers();

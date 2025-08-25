@@ -1,8 +1,8 @@
 import { spawn } from 'child_process';
-import { createLogger } from '../utils/logger';
-import { OCRData, CardMetadata } from '../types';
 import path from 'path';
 import fs from 'fs/promises';
+import { createLogger } from '../utils/logger';
+import { OCRData, CardMetadata } from '../types';
 
 const logger = createLogger('ocr-service');
 

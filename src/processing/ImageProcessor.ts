@@ -1,10 +1,11 @@
+/* TODO: Review and add specific port type imports from @core/* */
+import fs from 'fs/promises';
+import path from 'path';
 import { createLogger } from '../utils/logger';
 import { OCRData, CardMetadata } from '../types';
 import { OCRService } from '../ocr/OCRService';
 import { mlServiceClient, MLPrediction } from '../ml/MLServiceClient';
-import { mlValidationService, EnhancedCardData } from '../services/MLValidationService';
-import fs from 'fs/promises';
-import path from 'path';
+import { ports } from '../app/wiring';
 
 const logger = createLogger('image-processor');
 
@@ -120,10 +121,7 @@ export class ImageProcessor {
             total_regions: result.ocrData.regions.length,
           } : undefined;
           
-          const enhancedData = await mlValidationService.validateMLPrediction(
-            result.mlPrediction!,
-            ocrResult
-          );
+          const enhancedData = await ports.validate.validateMLPrediction(result.mlPrediction!, ocrResult);
           
           result.enhancedData = enhancedData;
           

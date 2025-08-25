@@ -1,9 +1,9 @@
+import fs from 'fs/promises';
+import path from 'path';
+import WebSocket from 'ws';
 import { createLogger } from '../utils/logger';
 import { SonyCamera } from '../camera/SonyCamera';
 import { WebSocketServer } from './websocket';
-import WebSocket from 'ws';
-import fs from 'fs/promises';
-import path from 'path';
 
 const logger = createLogger('camera-ws');
 

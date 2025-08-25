@@ -1,9 +1,9 @@
-import axios, { AxiosInstance } from 'axios';
-import { logger } from '../utils/logger';
-import NodeCache from 'node-cache';
 import fs from 'fs/promises';
 import path from 'path';
+import NodeCache from 'node-cache';
+import axios, { AxiosInstance } from 'axios';
 import { parse } from 'csv-parse/sync';
+import { logger } from '../utils/logger';
 
 export interface PriceChartingProduct {
   id: number;

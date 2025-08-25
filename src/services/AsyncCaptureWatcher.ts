@@ -6,13 +6,13 @@
  * consistent sub-50ms detection times regardless of processing speed.
  */
 
-import * as chokidar from 'chokidar';
 import * as path from 'path';
 import * as fs from 'fs/promises';
 import { createHash } from 'crypto';
+import { EventEmitter } from 'events';
+import * as chokidar from 'chokidar';
 import { createLogger } from '../utils/logger';
 import { QueueManager } from '../queue/QueueManager';
-import { EventEmitter } from 'events';
 
 const logger = createLogger('async-capture-watcher');
 

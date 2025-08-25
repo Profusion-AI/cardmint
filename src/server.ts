@@ -1,10 +1,10 @@
+import http from 'http';
 import { createLogger } from './utils/logger';
 import { config } from './config';
 import { QueueManager } from './queue/QueueManager';
 import { MetricsCollector } from './utils/metrics';
 import { WebSocketServer } from './api/websocket';
 import { createAPIRouter } from './api/router';
-import http from 'http';
 
 const logger = createLogger('server');
 

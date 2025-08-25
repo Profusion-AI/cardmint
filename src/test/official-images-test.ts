@@ -1,3 +1,4 @@
+/* TODO: Review and add specific port type imports from @core/* */
 /**
  * Official Images Test Suite
  * Tests OCR and card matching accuracy using known Pokemon card images
@@ -7,9 +8,9 @@ import { readdir, readFile } from 'fs/promises';
 import path from 'path';
 import { createLogger } from '../utils/logger';
 import { cardMatcher } from '../utils/cardMatcher';
-import { imageValidationService } from '../services/ImageValidationService';
 import { pokemonTCGService } from '../services/PokemonTCGService';
 import { priceChartingService } from '../services/PriceChartingService';
+import { ports } from '../app/wiring';
 
 const logger = createLogger('official-images-test');
 
@@ -275,7 +276,7 @@ export class OfficialImagesTest {
       const imagePath = path.join(this.imagesDir, filename);
       const imageBuffer = await readFile(imagePath);
 
-      const quality = await imageValidationService.validateImageQuality(imageBuffer);
+      const quality = await ports.validate.validateImageQuality(imageBuffer);
 
       logger.info(`${filename}:`);
       logger.info(`  Overall Quality: ${(quality.overall * 100).toFixed(1)}%`);

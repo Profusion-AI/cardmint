@@ -1,6 +1,6 @@
-import { createLogger } from './logger';
 import { closeDatabase } from '../storage/database';
 import { closeRedis } from '../storage/redis';
+import { createLogger } from './logger';
 
 const logger = createLogger('shutdown');
 

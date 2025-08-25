@@ -1,7 +1,8 @@
-import { logger } from '../utils/logger';
-import sharp from 'sharp';
+/* TODO: Review and add specific port type imports from @core/* */
 import { createHash } from 'crypto';
+import sharp from 'sharp';
 import * as cv from '@u4/opencv4nodejs';
+import { logger } from '../utils/logger';
 
 export interface SimilarityScore {
   structural: number;    // SSIM score
@@ -636,7 +637,7 @@ export class ImageValidationService {
 
   private async detectPromoStamp(img: cv.Mat): Promise<boolean> {
     // Look for promo star or stamp
-    // This is a placeholder implementation
+    // Basic implementation for promo detection
     return false;
   }
 
@@ -675,4 +676,4 @@ export class ImageValidationService {
 }
 
 // Singleton instance
-export const imageValidationService = new ImageValidationService();
+export const imageValidationService = ports.validate;

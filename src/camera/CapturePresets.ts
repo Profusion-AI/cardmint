@@ -1,5 +1,5 @@
-import { CameraConfig } from './CameraStateMachine';
 import { createLogger } from '../utils/logger';
+import { CameraConfig } from './CameraStateMachine';
 
 const logger = createLogger('capture-presets');
 

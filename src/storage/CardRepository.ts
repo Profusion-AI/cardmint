@@ -1,8 +1,8 @@
-import { getDatabase, insertCard, updateCard as updateCardDb, getCard as getCardDb, getAllCards } from './sqlite-database';
-import { RedisCache } from './redis';
+import { v4 as uuidv4 } from 'uuid';
 import { createLogger } from '../utils/logger';
 import { Card, CardStatus } from '../types';
-import { v4 as uuidv4 } from 'uuid';
+import { getDatabase, insertCard, updateCard as updateCardDb, getCard as getCardDb, getAllCards } from './sqlite-database';
+import { RedisCache } from './redis';
 
 const logger = createLogger('card-repository-sqlite');
 

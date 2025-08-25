@@ -2,6 +2,8 @@ import { OpenCvImageProcessor } from "../adapters/opencv/OpenCvImageProcessor";
 import type { ImageProcessorPort } from "../core/image/ImageProcessorPort";
 import { LmStudioInference } from "../adapters/lmstudio/LmStudioInference";
 import type { InferencePort } from "../core/infer/InferencePort";
+import { ImageValidationAdapter } from "../adapters/validation/ImageValidationAdapter";
+import type { ValidationPort } from "../core/validate/ValidationPort";
 import { logger } from "../utils/logger";
 
 /**
@@ -18,7 +20,7 @@ const LM_MODEL = process.env.LMSTUDIO_MODEL || "qwen2.5-vl-7b-instruct";
 export type Ports = {
   image: ImageProcessorPort;
   infer: InferencePort;
-  // validate: ValidationPort; // Future: separate validation port
+  validate: ValidationPort;
   // persist: PersistencePort; // Future: database adapter
 };
 
@@ -30,12 +32,14 @@ function createPorts(): Ports {
   
   const imageProcessor = new OpenCvImageProcessor();
   const inference = new LmStudioInference(LM_BASE, LM_MODEL);
+  const validation = new ImageValidationAdapter();
   
   logger.info(`Configured LMStudio: ${LM_BASE} (model: ${LM_MODEL})`);
   
   return {
     image: imageProcessor,
     infer: inference,
+    validate: validation,
   };
 }
 
@@ -72,6 +76,14 @@ export async function healthCheckPorts(): Promise<Record<string, boolean>> {
     results.infer = false;
   }
   
+  try {
+    // Test validation service
+    const validateHealth = await ports.validate.healthCheck();
+    results.validate = validateHealth.healthy;
+  } catch {
+    results.validate = false;
+  }
+  
   return results;
 }
 
@@ -89,7 +101,12 @@ export async function getPortsStatus(): Promise<Record<string, any>> {
   
   // Image processor status (basic info for now)
   status.image = {
-    adapter: "OpenCvImageProcessor",
+    adapter: "OpenCvImageProcessor", 
+    ready: true
+  };
+  
+  status.validate = {
+    adapter: "ImageValidationAdapter",
     ready: true
   };
   

@@ -1,12 +1,13 @@
+/* TODO: Review and add specific port type imports from @core/* */
 const logger = { 
   info: (msg: string, data?: any) => console.log(`[ML-Validation] ${msg}`, data || ''),
   error: (msg: string, data?: any) => console.error(`[ML-Validation] ERROR: ${msg}`, data || ''),
   warn: (msg: string, data?: any) => console.warn(`[ML-Validation] WARN: ${msg}`, data || ''),
   debug: (msg: string, data?: any) => console.log(`[ML-Validation] DEBUG: ${msg}`, data || '')
 };
-import { pokemonTCGService, PokemonCard } from './PokemonTCGService';
 import { MLPrediction } from '../ml/MLServiceClient';
 import { OCRResult } from '../ocr/OCRService';
+import { pokemonTCGService, PokemonCard } from './PokemonTCGService';
 
 export interface EnhancedCardData {
   // ML Prediction Data
@@ -395,4 +396,4 @@ export class MLValidationService {
 }
 
 // Singleton instance
-export const mlValidationService = new MLValidationService();
+export const mlValidationService = ports.validate;

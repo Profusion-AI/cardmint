@@ -1,8 +1,8 @@
+import WebSocket from 'ws';
 import { createLogger } from '../utils/logger';
 import { QueueManager } from '../queue/QueueManager';
 import { MetricsCollector } from '../utils/metrics';
 import { CameraWebSocketHandler } from './camera-websocket';
-import WebSocket from 'ws';
 
 const logger = createLogger('websocket');
 

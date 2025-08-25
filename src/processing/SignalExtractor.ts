@@ -1,6 +1,6 @@
-import { createLogger } from '../utils/logger';
 import * as fs from 'fs/promises';
 import * as path from 'path';
+import { createLogger } from '../utils/logger';
 
 const logger = createLogger('signal-extractor');
 

@@ -9,14 +9,19 @@
     "start": "node dist/index.js",
     "test": "jest",
     "test:camera": "tsx test-camera-production.ts",
-    "lint": "eslint src/**/*.ts",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
     "typecheck": "tsc --noEmit",
     "profile": "node --inspect dist/index.js",
     "camera:setup": "tsx src/utils/camera-setup.ts",
     "camera:build": "cd src/camera && node-gyp rebuild && cd ../.. && g++ -std=c++17 -o CrSDK_v2.00.00_20250805a_Linux64PC/build/sony-cli src/camera/sony-cli-wrapper.cpp -I CrSDK_v2.00.00_20250805a_Linux64PC/app -L CrSDK_v2.00.00_20250805a_Linux64PC/build -lCr_Core -Wl,-rpath,CrSDK_v2.00.00_20250805a_Linux64PC/build",
     "camera:test": "cd CrSDK_v2.00.00_20250805a_Linux64PC/build && ./sony-cli list",
     "camera:capture": "cd CrSDK_v2.00.00_20250805a_Linux64PC/build && echo -e 'capture\\ncapture\\nquit' | ./sony-cli session",
-    "debug-pipeline": "tsx src/utils/debug-pipeline.ts"
+    "debug-pipeline": "tsx src/utils/debug-pipeline.ts",
+    "codemod:ports": "jscodeshift -t tools/codemods/ports-injection.ts src/ --parser tsx --ignore-pattern='**/*.test.ts' --ignore-pattern='**/wiring.ts'",
+    "arch:lint": "dependency-cruiser src --validate .dependency-cruiser.cjs",
+    "arch:graph": "dependency-cruiser src --output-type dot --config .dependency-cruiser.cjs | dot -T svg > docs/architecture-graph.svg",
+    "arch:test": "tsx scripts/test-architecture.ts"
   },
   "keywords": [
     "card",
@@ -50,26 +55,35 @@
     "pg-pool": "^3.7.0",
     "pino": "^9.5.0",
     "pino-pretty": "^13.0.0",
+    "sharp": "^0.34.3",
     "sqlite3": "^5.1.7",
     "uuid": "^11.1.0",
     "ws": "^8.18.0"
   },
   "devDependencies": {
+    "@eslint/js": "^9.34.0",
     "@types/express": "^5.0.3",
     "@types/jest": "^29.5.14",
+    "@types/jscodeshift": "^17.3.0",
     "@types/node": "^22.12.0",
     "@types/pg": "^8.11.10",
     "@types/ws": "^8.5.14",
     "@typescript-eslint/eslint-plugin": "^8.21.0",
     "@typescript-eslint/parser": "^8.21.0",
+    "dependency-cruiser": "^17.0.1",
     "eslint": "^9.18.0",
+    "eslint-import-resolver-typescript": "^4.4.4",
+    "eslint-plugin-import": "^2.32.0",
     "express": "^5.1.0",
+    "globals": "^16.3.0",
     "jest": "^30.0.0-alpha.7",
+    "jscodeshift": "^17.3.0",
     "node-addon-api": "^8.5.0",
     "node-gyp": "^11.0.0",
     "ts-jest": "^29.2.5",
     "tsx": "^4.20.4",
-    "typescript": "^5.9.2"
+    "typescript": "^5.9.2",
+    "typescript-eslint": "^8.41.0"
   },
   "engines": {
     "node": ">=20.0.0"
