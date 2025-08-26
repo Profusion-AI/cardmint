@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>CardMint Vision - Advanced Card Recognition</title>
+    <title>CardMint Vision - Batch Results Dashboard</title>
     <style>
         * {
             margin: 0;
@@ -224,11 +224,6 @@
             overflow: hidden;
         }
 
-        #liveView {
-            width: 100%;
-            height: 100%;
-            object-fit: contain;
-        }
 
         /* Recognition Results Section */
         .results-section {
@@ -822,171 +817,161 @@
         <div class="header">
             <div class="logo">
                 <div class="pokeball"></div>
-                <h1>CardMint Vision</h1>
+                <h1>CardMint Results</h1>
             </div>
-            <p class="subtitle">Advanced Pokemon Card Recognition System</p>
+            <p class="subtitle">Batch Recognition Analytics & Performance Dashboard</p>
         </div>
 
         <!-- Main content grid -->
         <div class="content-grid">
-            <!-- Left side: Capture/Upload -->
+            <!-- Left side: Batch Results -->
             <div class="capture-section">
-                <h2 style="color: #1F2937; margin-bottom: 20px;">Card Input</h2>
+                <h2 style="color: #1F2937; margin-bottom: 20px;">📊 Batch Results</h2>
                 
-                <div id="imageInfo" style="display: none; margin-bottom: 15px; padding: 12px; background: linear-gradient(135deg, #F0F4FF 0%, #E5E7EB 100%); border-radius: 12px;">
-                    <div style="display: flex; justify-content: space-between; align-items: center;">
-                        <div style="display: flex; gap: 20px; font-size: 0.9em; color: #6B7280;">
-                            <span>📷 <span id="imageFileName" style="color: #374151; font-weight: 600;">card.jpg</span></span>
-                            <span>📐 <span id="imageDimensions" style="color: #374151; font-weight: 600;">0×0</span></span>
-                            <span>💾 <span id="imageSize" style="color: #374151; font-weight: 600;">0KB</span></span>
-                        </div>
+                <!-- Batch Summary Cards -->
+                <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px; margin-bottom: 25px;">
+                    <div style="background: white; border-radius: 12px; padding: 20px; text-align: center; border-top: 4px solid #667eea;">
+                        <div style="font-size: 2.2em; font-weight: 800; color: #1F2937; margin-bottom: 8px;" id="totalProcessed">0</div>
+                        <div style="color: #6B7280; font-size: 0.9em; font-weight: 600; text-transform: uppercase;">Cards Processed</div>
+                    </div>
+                    <div style="background: white; border-radius: 12px; padding: 20px; text-align: center; border-top: 4px solid #10B981;">
+                        <div style="font-size: 2.2em; font-weight: 800; color: #1F2937; margin-bottom: 8px;" id="successRate">0%</div>
+                        <div style="color: #6B7280; font-size: 0.9em; font-weight: 600; text-transform: uppercase;">Success Rate</div>
+                    </div>
+                    <div style="background: white; border-radius: 12px; padding: 20px; text-align: center; border-top: 4px solid #F59E0B;">
+                        <div style="font-size: 2.2em; font-weight: 800; color: #1F2937; margin-bottom: 8px;" id="avgAccuracy">0%</div>
+                        <div style="color: #6B7280; font-size: 0.9em; font-weight: 600; text-transform: uppercase;">Avg Accuracy</div>
+                    </div>
+                    <div style="background: white; border-radius: 12px; padding: 20px; text-align: center; border-top: 4px solid #EF4444;">
+                        <div style="font-size: 2.2em; font-weight: 800; color: #1F2937; margin-bottom: 8px;" id="avgProcessingTime">0ms</div>
+                        <div style="color: #6B7280; font-size: 0.9em; font-weight: 600; text-transform: uppercase;">Avg Time</div>
                     </div>
                 </div>
                 
-                <div class="capture-controls">
-                    <button class="btn btn-primary" onclick="captureCard()">
-                        📸 Capture Card
-                    </button>
-                    <button class="btn btn-secondary" onclick="document.getElementById('fileInput').click()">
-                        📁 Upload Image
+                <div style="display: flex; gap: 10px; margin-bottom: 20px;">
+                    <select id="batchSelect" style="padding: 8px 16px; border: 2px solid #E5E7EB; border-radius: 8px; background: white;">
+                        <option value="today">Today's Batch</option>
+                        <option value="yesterday">Yesterday</option>
+                        <option value="week">This Week</option>
+                        <option value="month">This Month</option>
+                    </select>
+                    <button class="btn btn-primary" onclick="refreshBatchData()">
+                        🔄 Refresh
                     </button>
                 </div>
 
-                <div class="camera-view" id="cameraView">
-                    <div class="upload-area" id="uploadArea" onclick="document.getElementById('fileInput').click()">
-                        <div class="upload-icon">📤</div>
-                        <div class="upload-text">Drop card image here</div>
-                        <div class="upload-hint">or click to browse</div>
-                    </div>
-                    <canvas id="liveView" style="display: none;"></canvas>
-                    <div id="imagePreview" style="display: none; width: 100%; height: 100%; position: relative;">
-                        <img id="previewImage" style="width: 100%; height: 100%; object-fit: contain; border-radius: 12px;">
-                        <button id="clearPreview" style="position: absolute; top: 10px; right: 10px; background: rgba(239, 68, 68, 0.9); color: white; border: none; border-radius: 50%; width: 32px; height: 32px; cursor: pointer; font-size: 18px; display: flex; align-items: center; justify-content: center; transition: all 0.3s ease;" onclick="clearImagePreview(event)" onmouseover="this.style.transform='scale(1.1)'; this.style.background='rgba(239, 68, 68, 1)'" onmouseout="this.style.transform='scale(1)'; this.style.background='rgba(239, 68, 68, 0.9)'">×</button>
-                        <div id="processingOverlay" style="display: none; position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0, 0, 0, 0.7); border-radius: 12px; align-items: center; justify-content: center; flex-direction: column;">
-                            <div class="spinner"></div>
-                            <div style="color: white; margin-top: 20px; font-size: 1.1em; font-weight: 600;">Processing Card...</div>
+                <!-- Batch Processing Chart -->
+                <div style="background: white; border-radius: 12px; padding: 20px; height: 300px; display: flex; align-items: center; justify-content: center; border: 1px solid #E5E7EB;">
+                    <div style="text-align: center; color: #9CA3AF;">
+                        <div style="font-size: 3em; margin-bottom: 15px;">📈</div>
+                        <div style="font-size: 1.2em; margin-bottom: 10px;">Batch Processing Trends</div>
+                        <div style="font-size: 0.9em; color: #6B7280;">
+                            Processing rate: <span id="processingRate">45 cards/hour</span><br>
+                            Peak accuracy: <span id="peakAccuracy">98.5%</span><br>
+                            Total batches: <span id="totalBatches">12</span>
                         </div>
                     </div>
                 </div>
-
-                <input type="file" id="fileInput" accept="image/*" onchange="handleFileSelect(event)">
             </div>
 
-            <!-- Right side: Recognition Results -->
+            <!-- Right side: Analytics & Console -->
             <div class="results-section">
                 <!-- Tab Navigation -->
                 <div class="tab-navigation">
                     <button class="tab-button active" onclick="switchTab('results')" id="resultsTab">
-                        📊 Recognition Results
+                        📊 Model Performance
                     </button>
                     <button class="tab-button" onclick="switchTab('console')" id="consoleTab">
-                        🔧 API Console
+                        🔧 Batch Console
                     </button>
                 </div>
                 
                 <!-- Results Tab Content -->
                 <div id="resultsTabContent" class="tab-content active">
-                    <!-- Model Status Grid -->
+                    <!-- Model Performance Grid -->
                 <div class="model-status">
-                    <div class="model-card" id="mobilenetCard">
-                        <div class="model-name">MobileNet
-                            <span class="model-status-indicator ready"></span>
+                    <div class="model-card" id="mobilenetCard" style="border: 2px solid #10B981; background: linear-gradient(to bottom, rgba(16, 185, 129, 0.05), white);">
+                        <div class="model-name">MobileNet</div>
+                        <div style="font-size: 2em; font-weight: 800; color: #10B981; margin-bottom: 5px;" id="mobilenetAccuracy">94%</div>
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 15px;">
+                            <div style="text-align: center; padding: 8px; background: #F8FAFC; border-radius: 6px;">
+                                <div style="font-weight: 700; color: #1F2937;" id="mobilenetProcessed">0</div>
+                                <div style="color: #6B7280; font-size: 0.8em;">Processed</div>
+                            </div>
+                            <div style="text-align: center; padding: 8px; background: #F8FAFC; border-radius: 6px;">
+                                <div style="font-weight: 700; color: #1F2937;" id="mobilenetAvgTime">0ms</div>
+                                <div style="color: #6B7280; font-size: 0.8em;">Avg Time</div>
+                            </div>
                         </div>
-                        <div class="model-accuracy">90% accurate</div>
                     </div>
-                    <div class="model-card" id="orbCard">
-                        <div class="model-name">ORB Match
-                            <span class="model-status-indicator ready"></span>
+                    <div class="model-card" id="orbCard" style="border: 2px solid #F59E0B; background: linear-gradient(to bottom, rgba(245, 158, 11, 0.05), white);">
+                        <div class="model-name">ORB Match</div>
+                        <div style="font-size: 2em; font-weight: 800; color: #F59E0B; margin-bottom: 5px;" id="orbAccuracy">87%</div>
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 15px;">
+                            <div style="text-align: center; padding: 8px; background: #F8FAFC; border-radius: 6px;">
+                                <div style="font-weight: 700; color: #1F2937;" id="orbMatches">0</div>
+                                <div style="color: #6B7280; font-size: 0.8em;">Matches</div>
+                            </div>
+                            <div style="text-align: center; padding: 8px; background: #F8FAFC; border-radius: 6px;">
+                                <div style="font-weight: 700; color: #1F2937;" id="orbAvgTime">0ms</div>
+                                <div style="color: #6B7280; font-size: 0.8em;">Avg Time</div>
+                            </div>
                         </div>
-                        <div class="model-accuracy">Exact match</div>
                     </div>
-                    <div class="model-card" id="ocrCard">
-                        <div class="model-name">PaddleOCR
-                            <span class="model-status-indicator ready"></span>
+                    <div class="model-card" id="ocrCard" style="border: 2px solid #10B981; background: linear-gradient(to bottom, rgba(16, 185, 129, 0.05), white);">
+                        <div class="model-name">PaddleOCR</div>
+                        <div style="font-size: 2em; font-weight: 800; color: #10B981; margin-bottom: 5px;" id="ocrAccuracy">96%</div>
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 15px;">
+                            <div style="text-align: center; padding: 8px; background: #F8FAFC; border-radius: 6px;">
+                                <div style="font-weight: 700; color: #1F2937;" id="ocrProcessed">0</div>
+                                <div style="color: #6B7280; font-size: 0.8em;">Processed</div>
+                            </div>
+                            <div style="text-align: center; padding: 8px; background: #F8FAFC; border-radius: 6px;">
+                                <div style="font-weight: 700; color: #1F2937;" id="ocrAvgTime">0ms</div>
+                                <div style="color: #6B7280; font-size: 0.8em;">Avg Time</div>
+                            </div>
                         </div>
-                        <div class="model-accuracy">Text extract</div>
                     </div>
                 </div>
 
-                <!-- Progress bars -->
-                <div class="progress-container">
-                    <div class="progress-label">
-                        <span>Overall Progress</span>
-                        <span id="progressPercent">0%</span>
-                    </div>
-                    <div class="progress-bar">
-                        <div class="progress-fill" id="progressFill" style="width: 0%"></div>
-                    </div>
-                </div>
-
-                <!-- Card Result -->
-                <div class="card-result" id="cardResult" style="display: none;">
-                    <div class="result-header">
-                        <div class="card-name" id="cardName">-</div>
-                        <div class="confidence-badge confidence-high" id="confidenceBadge">-</div>
-                    </div>
-                    <div class="card-details">
-                        <div class="detail-item">
-                            <span class="detail-label">Set:</span>
-                            <span class="detail-value" id="setName">-</span>
+                <!-- Quality Metrics -->
+                <div style="background: white; padding: 20px; border-radius: 12px; margin-top: 20px;">
+                    <h4 style="margin-bottom: 15px; color: #1F2937;">🎯 Quality Metrics</h4>
+                    <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 15px;">
+                        <div style="text-align: center; padding: 15px; background: #F8FAFC; border-radius: 8px;">
+                            <div style="font-size: 1.8em; font-weight: 700; color: #10B981;" id="highConfidenceCount">0</div>
+                            <div style="color: #6B7280; font-size: 0.9em;">High Confidence (>90%)</div>
                         </div>
-                        <div class="detail-item">
-                            <span class="detail-label">Number:</span>
-                            <span class="detail-value" id="cardNumber">-</span>
+                        <div style="text-align: center; padding: 15px; background: #F8FAFC; border-radius: 8px;">
+                            <div style="font-size: 1.8em; font-weight: 700; color: #F59E0B;" id="reviewRequiredCount">0</div>
+                            <div style="color: #6B7280; font-size: 0.9em;">Requires Review (<80%)</div>
                         </div>
-                        <div class="detail-item">
-                            <span class="detail-label">Rarity:</span>
-                            <span class="detail-value" id="rarity">-</span>
+                        <div style="text-align: center; padding: 15px; background: #F8FAFC; border-radius: 8px;">
+                            <div style="font-size: 1.8em; font-weight: 700; color: #EF4444;" id="failedCount">0</div>
+                            <div style="color: #6B7280; font-size: 0.9em;">Failed Recognition</div>
                         </div>
-                        <div class="detail-item">
-                            <span class="detail-label">Time:</span>
-                            <span class="detail-value" id="inferenceTime">-</span>
-                        </div>
-                    </div>
-                </div>
-                
-                <!-- API Validation Status -->
-                <div class="validation-status" id="validationStatus" style="display: none;">
-                    <div class="validation-header">
-                        <span class="validation-icon">🔍</span>
-                        API Validation
-                    </div>
-                    <div class="validation-items">
-                        <div class="validation-item">
-                            <span class="validation-label">Pokemon TCG API:</span>
-                            <span class="validation-value" id="tcgApiStatus">
-                                <span class="status-dot pending"></span> Pending
-                            </span>
-                        </div>
-                        <div class="validation-item">
-                            <span class="validation-label">Market Price:</span>
-                            <span class="validation-value" id="marketPrice">-</span>
-                        </div>
-                        <div class="validation-item">
-                            <span class="validation-label">Official Image:</span>
-                            <span class="validation-value" id="officialImage">
-                                <span class="status-dot pending"></span> Not loaded
-                            </span>
-                        </div>
-                        <div class="validation-item">
-                            <span class="validation-label">Validation Method:</span>
-                            <span class="validation-value" id="validationMethod">ML Only</span>
+                        <div style="text-align: center; padding: 15px; background: #F8FAFC; border-radius: 8px;">
+                            <div style="font-size: 1.8em; font-weight: 700; color: #667eea;" id="uniqueCardsFound">0</div>
+                            <div style="color: #6B7280; font-size: 0.9em;">Unique Cards Found</div>
                         </div>
                     </div>
                 </div>
                 </div>
                 
-                <!-- API Console Tab Content -->
+                <!-- Batch Console Tab Content -->
                 <div id="consoleTabContent" class="tab-content">
                     <div class="api-console">
                         <div class="console-header">
-                            <div class="console-title">🔧 API Activity Monitor</div>
-                            <button class="copy-console-btn" onclick="copyConsoleToClipboard()">
-                                📋 Copy Console
-                            </button>
+                            <div class="console-title">🔧 Batch Processing Console</div>
+                            <div style="display: flex; gap: 10px;">
+                                <button class="copy-console-btn active" onclick="filterConsole('all')">All</button>
+                                <button class="copy-console-btn" onclick="filterConsole('batch')">Batches</button>
+                                <button class="copy-console-btn" onclick="filterConsole('errors')">Errors</button>
+                                <button class="copy-console-btn" onclick="copyConsoleToClipboard()">📋 Copy</button>
+                            </div>
                         </div>
                         <div id="consoleOutput">
-                            <!-- API entries will be added here dynamically -->
+                            <!-- Batch entries will be added here dynamically -->
                         </div>
                     </div>
                 </div>
@@ -997,7 +982,7 @@
     <!-- Status indicator -->
     <div class="status-container">
         <div class="status-dot connected" id="statusDot"></div>
-        <div class="status-text" id="statusText">System Ready</div>
+        <div class="status-text" id="statusText">Batch System Ready</div>
     </div>
 
     <!-- Resource monitor -->
@@ -1018,26 +1003,40 @@
     </div>
 
     <script>
-        // API Console logging
-        const apiConsoleEntries = [];
+        // Batch Console logging
+        const batchConsoleEntries = [];
+        let currentFilter = 'all';
         
-        function logApiCall(type, method, url, data = {}) {
+        function logBatchOperation(type, batchId, message, data = {}) {
             const timestamp = new Date().toLocaleTimeString();
             const entry = {
                 timestamp,
                 type,
-                method,
-                url,
+                batchId,
+                message,
                 data,
                 id: Date.now()
             };
             
-            apiConsoleEntries.push(entry);
-            addConsoleEntry(entry);
+            batchConsoleEntries.push(entry);
+            if (shouldShowEntry(entry)) {
+                addConsoleEntry(entry);
+            }
             
             // Keep only last 100 entries
-            if (apiConsoleEntries.length > 100) {
-                apiConsoleEntries.shift();
+            if (batchConsoleEntries.length > 100) {
+                batchConsoleEntries.shift();
+            }
+        }
+        
+        function shouldShowEntry(entry) {
+            switch(currentFilter) {
+                case 'batch':
+                    return entry.type === 'batch' || entry.type === 'success';
+                case 'errors':
+                    return entry.type === 'error';
+                default:
+                    return true;
             }
         }
         
