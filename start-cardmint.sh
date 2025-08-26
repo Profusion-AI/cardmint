@@ -38,12 +38,12 @@ if ! command -v node &> /dev/null; then
 fi
 
 NODE_VERSION=$(node --version | cut -d'v' -f2)
-REQUIRED_VERSION="20.0.0"
+NODE_MAJOR=$(echo $NODE_VERSION | cut -d'.' -f1)
 
-if ! node -e "process.exit(require('semver').gte('$NODE_VERSION', '$REQUIRED_VERSION'))" 2>/dev/null; then
-    echo -e "${YELLOW}WARNING - Node.js $NODE_VERSION < $REQUIRED_VERSION${NC}"
-else
+if [ "$NODE_MAJOR" -ge 20 ]; then
     echo -e "${GREEN}OK - Node.js $NODE_VERSION${NC}"
+else
+    echo -e "${YELLOW}WARNING - Node.js $NODE_VERSION < 20.x (recommended)${NC}"
 fi
 
 # Check Python version
@@ -176,14 +176,26 @@ else
     echo -e "    ${BLUE}Note: Using development mode - TypeScript warnings don't block runtime${NC}"
 fi
 
-# Check for existing CardMint processes
+# Check for existing CardMint server processes (not this script)
 echo -n "  Checking for existing processes... "
-EXISTING_PID=$(pgrep -f "cardmint" | head -1)
+EXISTING_PID=$(pgrep -f "npm run dev" | head -1)
 if [ -n "$EXISTING_PID" ]; then
     echo -e "${YELLOW}Found existing process $EXISTING_PID, stopping...${NC}"
     kill $EXISTING_PID 2>/dev/null || true
     sleep 2
 fi
+
+# Also check for any node processes on our ports
+if netstat -tulpn 2>/dev/null | grep -q ":$CARDMINT_PORT"; then
+    echo -e "${YELLOW}Port $CARDMINT_PORT in use, finding process...${NC}"
+    PORT_PID=$(lsof -ti:$CARDMINT_PORT 2>/dev/null | head -1)
+    if [ -n "$PORT_PID" ]; then
+        echo -e "${YELLOW}Stopping process $PORT_PID on port $CARDMINT_PORT...${NC}"
+        kill $PORT_PID 2>/dev/null || true
+        sleep 2
+    fi
+fi
+
 echo -e "${GREEN}Clear${NC}"
 
 # Start CardMint services
