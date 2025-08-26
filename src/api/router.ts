@@ -1,5 +1,6 @@
 import { IncomingMessage, ServerResponse } from 'http';
 import { parse } from 'url';
+import { promises as fs } from 'fs';
 import { createLogger } from '../utils/logger';
 import { QueueManager } from '../queue/QueueManager';
 import { MetricsCollector } from '../utils/metrics';
@@ -9,6 +10,48 @@ import { integratedScanner, type IntegratedScanOptions } from '../services/Integ
 import path from 'path';
 
 const logger = createLogger('api-router');
+
+// MIME type mapping for static files
+const MIME_TYPES: { [key: string]: string } = {
+  '.html': 'text/html',
+  '.css': 'text/css',
+  '.js': 'application/javascript',
+  '.json': 'application/json',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.svg': 'image/svg+xml',
+  '.ico': 'image/x-icon'
+};
+
+function getMimeType(filePath: string): string {
+  const ext = path.extname(filePath).toLowerCase();
+  return MIME_TYPES[ext] || 'text/plain';
+}
+
+async function serveStaticFile(filePath: string, res: ServerResponse): Promise<boolean> {
+  try {
+    const stats = await fs.stat(filePath);
+    if (!stats.isFile()) {
+      return false;
+    }
+
+    const content = await fs.readFile(filePath);
+    const mimeType = getMimeType(filePath);
+    
+    res.writeHead(200, { 
+      'Content-Type': mimeType,
+      'Content-Length': content.length,
+      'Cache-Control': 'public, max-age=3600', // 1 hour cache
+      'Access-Control-Allow-Origin': '*'
+    });
+    res.end(content);
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
 
 export function createAPIRouter(
   queueManager: QueueManager,
@@ -32,7 +75,53 @@ export function createAPIRouter(
     }
     
     try {
-      // Route handling
+      // Dashboard routing
+      if (pathname === '/' && method === 'GET') {
+        // Redirect root to dashboard
+        res.writeHead(302, { 'Location': '/dashboard/' });
+        res.end();
+        return;
+        
+      } else if (pathname === '/dashboard' && method === 'GET') {
+        // Redirect /dashboard to /dashboard/
+        res.writeHead(302, { 'Location': '/dashboard/' });
+        res.end();
+        return;
+        
+      } else if (pathname === '/dashboard/' && method === 'GET') {
+        // Serve dashboard navigation hub
+        const navigationPath = path.join(process.cwd(), 'src', 'dashboard', 'navigation.html');
+        if (await serveStaticFile(navigationPath, res)) {
+          logger.debug('Served dashboard navigation hub');
+          return;
+        }
+        
+      } else if (pathname === '/dashboard/index.html' && method === 'GET') {
+        // Serve main status dashboard
+        const dashboardPath = path.join(process.cwd(), 'src', 'dashboard', 'index.html');
+        if (await serveStaticFile(dashboardPath, res)) {
+          logger.debug('Served main status dashboard');
+          return;
+        }
+        
+      } else if (pathname === '/dashboard/verification.html' && method === 'GET') {
+        // Serve verification/review dashboard
+        const verificationPath = path.join(process.cwd(), 'src', 'dashboard', 'verification.html');
+        if (await serveStaticFile(verificationPath, res)) {
+          logger.debug('Served verification dashboard');
+          return;
+        }
+        
+      } else if (pathname === '/dashboard/ensemble.html' && method === 'GET') {
+        // Serve ensemble/batch results dashboard
+        const ensemblePath = path.join(process.cwd(), 'src', 'dashboard', 'ensemble-dashboard.html');
+        if (await serveStaticFile(ensemblePath, res)) {
+          logger.debug('Served ensemble dashboard');
+          return;
+        }
+      }
+      
+      // API Route handling
       if (pathname === '/api/health' && method === 'GET') {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
