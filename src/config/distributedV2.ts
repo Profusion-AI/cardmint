@@ -166,6 +166,7 @@ export function getMigrationConfig(): MigrationConfig {
  */
 export function getEnvironmentConfig() {
   const env = process.env.NODE_ENV || 'development';
+  const v1Config = getV1Config(); // Make v1Config available for overrides
   
   const baseConfig = {
     router: getDistributedRouterConfig(),
@@ -204,11 +205,11 @@ export function getEnvironmentConfig() {
         router: {
           ...baseConfig.router,
           batch_size: 1,                              // Single item processing
-          mac_endpoint: 'http://mock-mac:1234'        // Mock endpoint
+          mac_endpoint: process.env.TEST_MAC_ENDPOINT || `${v1Config.remote.protocol}://${v1Config.remote.host}:1234` // Use real Mac endpoint even in test mode
         },
         storage: {
           ...baseConfig.storage,
-          database_path: ':memory:',                  // In-memory for tests
+          database_path: process.env.TEST_DATABASE_PATH || ':memory:',  // Allow override but default to in-memory
           enable_fts: false
         }
       };

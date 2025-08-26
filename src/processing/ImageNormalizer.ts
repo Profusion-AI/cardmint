@@ -1,5 +1,6 @@
 import * as fs from 'fs/promises';
 import * as path from 'path';
+import { spawn } from 'node:child_process';
 import { createLogger } from '../utils/logger';
 
 const logger = createLogger('image-normalizer');
@@ -103,8 +104,8 @@ export class ImageNormalizer {
       // Step 6: Generate ROI proposals
       const rois = await this.generateROIs(croppedImage, cardBounds);
       
-      // Step 7: Calculate quality metrics
-      const qualityMetrics = await this.calculateQualityMetrics(croppedImage, cardBounds);
+      // Step 7: Calculate quality metrics using original image path
+      const qualityMetrics = await this.calculateQualityMetrics(imagePath, cardBounds);
       
       // Step 8: Save normalized image
       const normalizedPath = path.join(outputDir, 'proc', 'normalized.png');
@@ -304,16 +305,16 @@ export class ImageNormalizer {
   }
   
   private async calculateQualityMetrics(
-    image: any,
+    imagePath: string,
     cardBounds: BoundingBox
   ): Promise<QualityMetrics> {
-    // In production: Calculate actual metrics from image data
+    // Production implementation: Calculate real metrics using OpenCV
     
-    // Sharpness: Laplacian variance
-    const sharpness = await this.calculateSharpness(image);
+    // Sharpness: Laplacian variance via OpenCV
+    const sharpness = await this.calculateSharpness(imagePath);
     
-    // Glare: Percentage of oversaturated pixels
-    const glarePercentage = await this.calculateGlare(image);
+    // Glare: Percentage of oversaturated pixels via OpenCV
+    const glarePercentage = await this.calculateGlare(imagePath);
     
     // Detection confidence from boundary detection
     const detectionConfidence = 0.95;
@@ -323,8 +324,8 @@ export class ImageNormalizer {
     const expectedRatio = 0.718;
     const aspectRatioDeviation = Math.abs(aspectRatio - expectedRatio) / expectedRatio;
     
-    // Edge integrity: Check for nicks/damage
-    const edgeIntegrity = await this.calculateEdgeIntegrity(image, cardBounds);
+    // Edge integrity: Check for nicks/damage via OpenCV
+    const edgeIntegrity = await this.calculateEdgeIntegrity(imagePath, cardBounds);
     
     return {
       sharpness,
@@ -335,22 +336,37 @@ export class ImageNormalizer {
     };
   }
   
-  private async calculateSharpness(image: any): Promise<number> {
-    // In production: Apply Laplacian operator and calculate variance
-    // Higher variance = sharper image
-    return 85.5; // Mock value (0-100 scale)
+  private async calculateSharpness(imagePath: string): Promise<number> {
+    try {
+      const output = await this.execPython('opencv_sharpness.py', [imagePath], true);
+      const sharpness = parseFloat(output.trim());
+      return isNaN(sharpness) ? 0 : sharpness;
+    } catch (error) {
+      logger.warn(`Failed to calculate sharpness for ${imagePath}:`, error);
+      return 0; // Return 0 instead of mock value on error
+    }
   }
   
-  private async calculateGlare(image: any): Promise<number> {
-    // In production: Count oversaturated pixels (>250 in all channels)
-    return 2.3; // Mock value (percentage)
+  private async calculateGlare(imagePath: string): Promise<number> {
+    try {
+      const output = await this.execPython('opencv_glare.py', [imagePath], true);
+      const glare = parseFloat(output.trim());
+      return isNaN(glare) ? 0 : glare;
+    } catch (error) {
+      logger.warn(`Failed to calculate glare for ${imagePath}:`, error);
+      return 0; // Return 0 instead of mock value on error
+    }
   }
   
-  private async calculateEdgeIntegrity(image: any, bounds: BoundingBox): Promise<number> {
-    // In production: Analyze card edges for damage
-    // Run edge detection on perimeter band
-    // Count discontinuities and protrusions
-    return 98.7; // Mock value (0-100 scale, 100 = perfect edges)
+  private async calculateEdgeIntegrity(imagePath: string, bounds: BoundingBox): Promise<number> {
+    try {
+      const output = await this.execPython('opencv_edge_quality.py', [imagePath], true);
+      const edgeIntegrity = parseFloat(output.trim());
+      return isNaN(edgeIntegrity) ? 0 : edgeIntegrity;
+    } catch (error) {
+      logger.warn(`Failed to calculate edge integrity for ${imagePath}:`, error);
+      return 0; // Return 0 instead of mock value on error
+    }
   }
   
   private async saveImage(image: any, outputPath: string): Promise<void> {
@@ -401,5 +417,50 @@ export class ImageNormalizer {
     return {
       reprojectionError: 0.35, // pixels
     };
+  }
+
+  /**
+   * Execute Python OpenCV helper script
+   */
+  private execPython(script: string, args: string[], captureOutput = false): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const scriptPath = path.join(process.cwd(), 'scripts', script);
+      const pythonProcess = spawn("python3", [scriptPath, ...args], {
+        stdio: captureOutput ? "pipe" : "inherit"
+      });
+      
+      if (captureOutput) {
+        let stdout = '';
+        let stderr = '';
+        
+        pythonProcess.stdout?.on('data', (data) => {
+          stdout += data.toString();
+        });
+        
+        pythonProcess.stderr?.on('data', (data) => {
+          stderr += data.toString();
+        });
+        
+        pythonProcess.on('close', (code) => {
+          if (code === 0) {
+            resolve(stdout);
+          } else {
+            reject(new Error(`Python script failed with code ${code}: ${stderr}`));
+          }
+        });
+      } else {
+        pythonProcess.on('close', (code) => {
+          if (code === 0) {
+            resolve('');
+          } else {
+            reject(new Error(`Python script failed with code ${code}`));
+          }
+        });
+      }
+      
+      pythonProcess.on('error', (error) => {
+        reject(error);
+      });
+    });
   }
 }

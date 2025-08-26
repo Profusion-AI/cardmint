@@ -1,9 +1,10 @@
-import fs from "node:fs/promises";
+import { promises as fs } from "fs";
 import type { InferencePort, InferenceResult, InferenceStatus } from "../../core/infer/InferencePort";
 import { logger } from "../../utils/logger";
 import { getGlobalProfiler } from "../../utils/performanceProfiler";
+import { searchCards } from "../../storage/sqlite-database";
 
-type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+type FetchLike = (input: string | URL, init?: RequestInit) => Promise<Response>;
 
 /**
  * Verification Result from secondary model
@@ -224,7 +225,7 @@ export class QwenVerifierInference implements InferencePort {
    */
   async verify(
     primaryResult: InferenceResult,
-    imagePath: string, // Not used - kept for interface compatibility
+    _imagePath: string, // Not used - kept for interface compatibility
     options: VerifyOptions = {}
   ): Promise<VerificationResult> {
     const startTime = Date.now();
@@ -289,7 +290,7 @@ export class QwenVerifierInference implements InferencePort {
 
     } catch (error) {
       profiler?.endStage('verification_full', { error: String(error) });
-      logger.error('Verification failed:', error);
+      logger.error('Verification failed');
       throw error;
     }
   }
@@ -305,9 +306,9 @@ export class QwenVerifierInference implements InferencePort {
       const latency = Date.now() - startTime;
       
       if (response.ok) {
-        const models = await response.json();
-        const hasVerifierModel = models.data?.some((m: any) => 
-          m.id.includes('0.5b') || m.id.includes('verifier')
+        const models: any = await response.json();
+        const hasVerifierModel = Array.isArray(models?.data) && models.data.some((m: any) => 
+          m?.id && (m.id.includes('0.5b') || m.id.includes('verifier'))
         );
         
         return { 
@@ -386,7 +387,7 @@ export class QwenVerifierInference implements InferencePort {
     };
   }
 
-  private analyzeAgreement(
+  private _analyzeAgreement(
     primary: InferenceResult,
     secondary: InferenceResult
   ): { agrees: boolean; similarity: number } {
@@ -415,7 +416,6 @@ export class QwenVerifierInference implements InferencePort {
     if (str1 === str2) return 1;
     
     const longer = str1.length > str2.length ? str1 : str2;
-    const shorter = str1.length > str2.length ? str2 : str1;
     
     if (longer.length === 0) return 1;
     
@@ -451,7 +451,7 @@ export class QwenVerifierInference implements InferencePort {
     return matrix[str2.length][str1.length];
   }
 
-  private async checkDatabase(result: InferenceResult): Promise<DatabaseMatch[]> {
+  private async _checkDatabase(_result: InferenceResult): Promise<DatabaseMatch[]> {
     // Placeholder for database integration
     // Will be implemented in CardVerificationService
     logger.debug('Database check placeholder - implement CardVerificationService integration');
@@ -459,8 +459,8 @@ export class QwenVerifierInference implements InferencePort {
   }
 
   private calculateConfidenceAdjustment(
-    primary: InferenceResult,
-    secondary: InferenceResult,
+    _primary: InferenceResult,
+    _secondary: InferenceResult,
     agreement: { agrees: boolean; similarity: number },
     databaseMatches: DatabaseMatch[]
   ): number {
@@ -608,7 +608,7 @@ export class QwenVerifierInference implements InferencePort {
 
     } catch (error) {
       profiler?.endStage('tool_call_verification', { error: String(error) });
-      logger.error('Tool call verification failed:', error);
+      logger.error('Tool call verification failed');
       throw error;
     }
   }
@@ -715,7 +715,7 @@ Please verify this card information using the database lookup tool.`
       return this.parseToolCallWithRecovery(data, primaryResult);
 
     } catch (error) {
-      logger.warn('Tool call parsing failed, using recovery:', error);
+      logger.warn('Tool call parsing failed, using recovery');
       return this.parseToolCallWithRecovery(data, primaryResult);
     }
   }
@@ -797,16 +797,118 @@ Please verify this card information using the database lookup tool.`
   private async executeDatabaseLookup(
     lookup: { card_name: string; set_code?: string; confidence: number }
   ): Promise<DatabaseMatch[]> {
-    // For now, return mock database matches
-    // This will be implemented with actual database integration
-    logger.debug(`Database lookup: ${lookup.card_name} (${lookup.set_code || 'no set'})`);
+    try {
+      logger.debug(`Database lookup: ${lookup.card_name} (${lookup.set_code || 'no set'})`);
+      
+      // Search for cards in SQLite database
+      const searchResults = searchCards(lookup.card_name, lookup.set_code);
+      
+      if (searchResults.length === 0) {
+        logger.debug(`No database matches found for: ${lookup.card_name}`);
+        return [];
+      }
+      
+      // Convert search results to DatabaseMatch format
+      const matches: DatabaseMatch[] = searchResults.slice(0, 5).map(card => {
+        const similarityScore = this.calculateSimilarity(lookup.card_name, card.name || '', lookup.set_code, card.set_name);
+        const matchedFields: string[] = [];
+        const discrepancies: string[] = [];
+        
+        // Determine matched fields and discrepancies
+        if (card.name && this.normalizeString(card.name) === this.normalizeString(lookup.card_name)) {
+          matchedFields.push('card_name');
+        } else if (card.name && this.normalizeString(card.name).includes(this.normalizeString(lookup.card_name))) {
+          matchedFields.push('card_name_partial');
+        } else {
+          discrepancies.push('card_name_mismatch');
+        }
+        
+        if (lookup.set_code && card.set_name) {
+          if (this.normalizeString(card.set_name) === this.normalizeString(lookup.set_code)) {
+            matchedFields.push('set_name');
+          } else {
+            discrepancies.push('set_name_mismatch');
+          }
+        } else if (lookup.set_code && !card.set_name) {
+          discrepancies.push('missing_set_name');
+        } else if (!lookup.set_code && card.set_name) {
+          discrepancies.push('unexpected_set_name');
+        }
+        
+        const matchType: 'exact' | 'fuzzy' | 'embedding' = 
+          similarityScore > 0.95 ? 'exact' : 
+          similarityScore > 0.7 ? 'fuzzy' : 'embedding';
+        
+        return {
+          card_id: card.id,
+          similarity_score: similarityScore,
+          match_type: matchType,
+          matched_fields,
+          discrepancies
+        };
+      });
+      
+      logger.debug(`Found ${matches.length} database matches, best similarity: ${matches[0]?.similarity_score.toFixed(2) || 0}`);
+      return matches;
+      
+    } catch (error) {
+      logger.error('Database lookup failed:', error);
+      // Return empty array instead of crashing
+      return [];
+    }
+  }
+  
+  /**
+   * Calculate similarity score between searched and stored card names
+   */
+  private calculateSimilarity(searchName: string, storedName: string, searchSet?: string, storedSet?: string): number {
+    const normalizedSearch = this.normalizeString(searchName);
+    const normalizedStored = this.normalizeString(storedName);
     
-    // Simulate database response based on lookup
-    return [{
-      similarity_score: lookup.confidence,
-      match_type: 'fuzzy' as const,
-      matched_fields: ['card_name'],
-      discrepancies: lookup.set_code ? [] : ['missing_set_code']
-    }];
+    // Exact match
+    if (normalizedSearch === normalizedStored) {
+      // Bonus for set match
+      if (searchSet && storedSet && this.normalizeString(searchSet) === this.normalizeString(storedSet)) {
+        return 1.0;
+      }
+      return 0.98;
+    }
+    
+    // Partial matches
+    const searchWords = normalizedSearch.split(' ').filter(w => w.length > 2);
+    const storedWords = normalizedStored.split(' ').filter(w => w.length > 2);
+    
+    if (searchWords.length === 0 || storedWords.length === 0) {
+      return 0.1;
+    }
+    
+    let matchedWords = 0;
+    for (const searchWord of searchWords) {
+      for (const storedWord of storedWords) {
+        if (searchWord === storedWord || 
+            searchWord.includes(storedWord) || 
+            storedWord.includes(searchWord)) {
+          matchedWords++;
+          break;
+        }
+      }
+    }
+    
+    const wordMatchRatio = matchedWords / Math.max(searchWords.length, storedWords.length);
+    
+    // Set bonus
+    let setBonus = 0;
+    if (searchSet && storedSet && this.normalizeString(searchSet) === this.normalizeString(storedSet)) {
+      setBonus = 0.1;
+    }
+    
+    return Math.min(0.95, wordMatchRatio * 0.8 + setBonus);
+  }
+  
+  /**
+   * Normalize string for comparison
+   */
+  private normalizeString(str: string): string {
+    return str.toLowerCase().trim().replace(/[^\w\s]/g, '').replace(/\s+/g, ' ');
   }
 }

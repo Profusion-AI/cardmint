@@ -284,6 +284,47 @@ export function getAllCards(limit = 100, offset = 0): Card[] {
   return results;
 }
 
+export function searchCards(cardName: string, setCode?: string): Card[] {
+  const database = getDatabase();
+  
+  let query = `
+    SELECT * FROM cards 
+    WHERE name LIKE ? COLLATE NOCASE
+  `;
+  let params: any[] = [`%${cardName}%`];
+  
+  if (setCode) {
+    query += ` AND set_name LIKE ? COLLATE NOCASE`;
+    params.push(`%${setCode}%`);
+  }
+  
+  query += ` ORDER BY 
+    CASE 
+      WHEN name = ? THEN 1
+      WHEN name LIKE ? THEN 2
+      ELSE 3 
+    END,
+    confidence_score DESC
+  `;
+  params.push(cardName, `${cardName}%`);
+  
+  const stmt = database.prepare(query);
+  const results = stmt.all(...params) as Card[];
+  
+  // Parse metadata JSON for each card
+  results.forEach(card => {
+    if (card.metadata) {
+      try {
+        card.metadata = JSON.parse(card.metadata);
+      } catch (e) {
+        // Keep as string if not valid JSON
+      }
+    }
+  });
+  
+  return results;
+}
+
 export function getCardCount(): number {
   const database = getDatabase();
   
