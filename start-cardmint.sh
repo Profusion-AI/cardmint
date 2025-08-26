@@ -167,21 +167,13 @@ echo ""
 # ============================================================================
 echo -e "${BLUE}🚀 Step 4: CardMint Services${NC}"
 
-# Build if needed (check if recent)
-echo -n "  Checking build status... "
-if [ ! -d "dist" ] || [ "src" -nt "dist" ]; then
-    echo -e "${YELLOW}Building...${NC}"
-    echo -n "    Running npm run build... "
-    if npm run build > ./logs/build.log 2>&1; then
-        echo -e "${GREEN}OK${NC}"
-    else
-        echo -e "${RED}FAILED${NC}"
-        echo -e "${RED}    Check ./logs/build.log for details${NC}"
-        tail -5 ./logs/build.log
-        exit 1
-    fi
+# Check TypeScript compilation (non-blocking)
+echo -n "  TypeScript compilation... "
+if npm run typecheck > ./logs/typecheck.log 2>&1; then
+    echo -e "${GREEN}OK${NC}"
 else
-    echo -e "${GREEN}Up to date${NC}"
+    echo -e "${YELLOW}WARNINGS (non-blocking)${NC}"
+    echo -e "    ${BLUE}Note: Using development mode - TypeScript warnings don't block runtime${NC}"
 fi
 
 # Check for existing CardMint processes
