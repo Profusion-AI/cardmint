@@ -4,14 +4,27 @@ import WebSocket from 'ws';
 import { createLogger } from '../utils/logger';
 import { SonyCamera } from '../camera/SonyCamera';
 import { WebSocketServer } from './websocket';
+import { ControllerIntegration } from '../services/ControllerIntegration';
 
 const logger = createLogger('camera-ws');
 
 export class CameraWebSocketHandler {
   private camera?: SonyCamera;
-  private liveViewInterval?: NodeJS.Timeout;
+  private controllerIntegration?: ControllerIntegration;
   
-  constructor(private wsServer: WebSocketServer) {}
+  constructor(private wsServer: WebSocketServer) {
+    this.setupControllerIntegration();
+  }
+  
+  private setupControllerIntegration(): void {
+    logger.info('Setting up controller integration for passive capture');
+    
+    this.controllerIntegration = new ControllerIntegration({
+      webSocket: this.wsServer
+    });
+    
+    logger.info('Controller integration initialized');
+  }
   
   async handleCameraMessage(action: string, ws: WebSocket): Promise<void> {
     try {
@@ -28,12 +41,8 @@ export class CameraWebSocketHandler {
           await this.captureImage(ws);
           break;
           
-        case 'startLiveView':
-          await this.startLiveView(ws);
-          break;
-          
-        case 'stopLiveView':
-          await this.stopLiveView(ws);
+        case 'getLatestCapture':
+          await this.getLatestCapture(ws);
           break;
           
         case 'getStatus':
@@ -42,6 +51,10 @@ export class CameraWebSocketHandler {
           
         case 'getProperties':
           await this.getProperties(ws);
+          break;
+          
+        case 'getControllerStatus':
+          await this.getControllerStatus(ws);
           break;
           
         default:
@@ -85,6 +98,11 @@ export class CameraWebSocketHandler {
       
       // Send initial properties
       await this.getProperties(ws);
+      
+      // Configure controller integration with camera
+      if (this.controllerIntegration) {
+        this.controllerIntegration.setCamera(this.camera);
+      }
     } else {
       throw new Error('Failed to connect to camera');
     }
@@ -92,7 +110,6 @@ export class CameraWebSocketHandler {
   
   private async disconnectCamera(ws: WebSocket): Promise<void> {
     if (this.camera) {
-      await this.stopLiveView(ws);
       await this.camera.disconnect();
       this.camera = undefined;
       
@@ -119,43 +136,41 @@ export class CameraWebSocketHandler {
     });
   }
   
-  private async startLiveView(ws: WebSocket): Promise<void> {
-    if (!this.camera || !this.camera.isConnected()) {
-      throw new Error('Camera not connected');
-    }
-    
-    // For demo purposes, we'll simulate live view with test frames
-    // In production, this would connect to actual camera live view
-    
-    this.sendMessage(ws, {
-      type: 'liveViewStarted'
-    });
-    
-    // Simulate live view frames at 30fps
-    let frameCounter = 0;
-    this.liveViewInterval = setInterval(() => {
-      // In production, this would send actual camera frames
-      // For now, we'll send a simple frame counter
-      frameCounter++;
+  private async getLatestCapture(ws: WebSocket): Promise<void> {
+    // Get the most recent capture from the captures directory
+    try {
+      const capturesDir = path.join(process.cwd(), 'captures');
+      const files = await fs.readdir(capturesDir);
       
-      // Create a simple test frame (you could generate an actual image here)
-      if (frameCounter % 30 === 0) { // Send update every second
-        logger.debug(`Live view frame: ${frameCounter}`);
+      // Find the most recent JPG file
+      const jpgFiles = files
+        .filter(file => file.toLowerCase().endsWith('.jpg'))
+        .map(file => ({
+          name: file,
+          path: path.join(capturesDir, file),
+          stats: fs.stat(path.join(capturesDir, file))
+        }));
+      
+      if (jpgFiles.length > 0) {
+        const stats = await Promise.all(jpgFiles.map(f => f.stats));
+        const latestFile = jpgFiles
+          .map((file, index) => ({ ...file, mtime: stats[index].mtime }))
+          .sort((a, b) => b.mtime.getTime() - a.mtime.getTime())[0];
+        
+        this.sendMessage(ws, {
+          type: 'imageCaptured',
+          imagePath: `/captures/${latestFile.name}`,
+          captureTime: 0 // Unknown for existing files
+        });
+      } else {
+        this.sendMessage(ws, {
+          type: 'error',
+          message: 'No captures found'
+        });
       }
-      
-      // In real implementation, you would send binary image data here:
-      // ws.send(imageBuffer, { binary: true });
-    }, 33); // ~30fps
-  }
-  
-  private async stopLiveView(ws: WebSocket): Promise<void> {
-    if (this.liveViewInterval) {
-      clearInterval(this.liveViewInterval);
-      this.liveViewInterval = undefined;
-      
-      this.sendMessage(ws, {
-        type: 'liveViewStopped'
-      });
+    } catch (error: any) {
+      logger.error('Error getting latest capture:', error);
+      throw error;
     }
   }
   
@@ -193,6 +208,28 @@ export class CameraWebSocketHandler {
     });
   }
   
+  private async getControllerStatus(ws: WebSocket): Promise<void> {
+    if (!this.controllerIntegration) {
+      this.sendMessage(ws, {
+        type: 'controller_unavailable'
+      });
+      return;
+    }
+
+    const isConnected = this.controllerIntegration.isControllerConnected();
+    const state = this.controllerIntegration.getControllerState();
+    
+    this.sendMessage(ws, {
+      type: 'controller_status',
+      connected: isConnected,
+      state: {
+        devicePath: state.devicePath,
+        byIdPath: state.byIdPath,
+        isGrabbed: !!state.grabbedProcess
+      }
+    });
+  }
+  
   private sendMessage(ws: WebSocket, data: any): void {
     if (ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify(data));
@@ -200,12 +237,12 @@ export class CameraWebSocketHandler {
   }
   
   async cleanup(): Promise<void> {
-    if (this.liveViewInterval) {
-      clearInterval(this.liveViewInterval);
-    }
-    
     if (this.camera && this.camera.isConnected()) {
       await this.camera.disconnect();
+    }
+    
+    if (this.controllerIntegration) {
+      await this.controllerIntegration.shutdown();
     }
   }
 }

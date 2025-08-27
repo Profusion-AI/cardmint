@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>CardMint - Verification Dashboard with PS4 Controller</title>
+    <title>CardMint - Verification Dashboard</title>
     <style>
         * {
             margin: 0;
@@ -27,7 +27,7 @@
             gap: 2px;
         }
         
-        /* Left pane - Live capture */
+        /* Left pane - Last capture display */
         .capture-pane {
             background: #1a1f3a;
             display: flex;
@@ -197,27 +197,7 @@
         .btn-reject { background: #e53e3e; color: white; }
         .btn-edit { background: #d69e2e; color: white; }
         
-        /* PS4 Controller Status */
-        .controller-status {
-            position: fixed;
-            top: 20px;
-            right: 20px;
-            background: rgba(0, 0, 0, 0.8);
-            padding: 10px 15px;
-            border-radius: 8px;
-            z-index: 1000;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-        
-        .controller-status.connected {
-            background: rgba(56, 161, 105, 0.9);
-        }
-        
-        .controller-status.disconnected {
-            background: rgba(229, 62, 62, 0.9);
-        }
+        /* Controller integration removed - 8BitDo-2C handled via backend */
         
         /* Controller hints overlay */
         .controller-hints {
@@ -320,18 +300,18 @@
 <body>
     <!-- Main dashboard layout -->
     <div class="dashboard-container">
-        <!-- Left pane - Live capture -->
+        <!-- Left pane - Last capture display -->
         <div class="capture-pane">
             <div class="capture-header">
-                <div class="capture-title">🎴 Live Capture</div>
+                <div class="capture-title">📸 Last Capture</div>
                 <div class="capture-status">
-                    <span id="capture-fps">0 FPS</span>
-                    <span id="capture-count">0 captures</span>
+                    <span id="capture-timestamp">No captures yet</span>
+                    <span id="capture-count">Total: 0</span>
                 </div>
             </div>
             
             <div class="capture-view">
-                <img id="capture-image" src="" alt="Live capture" style="display: none;">
+                <img id="capture-image" src="" alt="Last capture" style="display: none;">
                 <div id="capture-placeholder">
                     <div style="text-align: center; color: #718096;">
                         <div style="font-size: 3rem; margin-bottom: 10px;">📷</div>
@@ -342,11 +322,11 @@
             
             <div class="capture-controls">
                 <button id="capture-btn" class="btn btn-capture">
-                    ❌ Capture Card
+                    ❌ Capture Card (X button)
                 </button>
-                <button id="auto-capture-btn" class="btn btn-edit">
-                    ⚡ Auto Mode: OFF
-                </button>
+                <div style="color: #a0aec0; font-size: 0.9rem;">
+                    Controller: Press X to capture • A to approve • B to reject
+                </div>
             </div>
         </div>
         
@@ -367,43 +347,18 @@
         </div>
     </div>
     
-    <!-- PS4 Controller status indicator -->
-    <div id="controller-status" class="controller-status disconnected">
-        🎮 <span id="controller-text">Waiting for controller...</span>
-    </div>
+    <!-- Controller status moved to backend services -->
     
-    <!-- Controller button hints -->
-    <div class="controller-hints">
-        <div class="hint">
-            <div class="hint-button btn-x">❌</div>
-            <span>Capture</span>
-        </div>
-        <div class="hint">
-            <div class="hint-button btn-triangle">△</div>
-            <span>Approve</span>
-        </div>
-        <div class="hint">
-            <div class="hint-button btn-circle">○</div>
-            <span>Reject</span>
-        </div>
-        <div class="hint">
-            <div class="hint-button btn-square">□</div>
-            <span>Edit</span>
-        </div>
-        <div class="hint">
-            <span>R3 Navigate • L1/R1 Card • L2/R2 Batch</span>
-        </div>
-    </div>
+    <!-- Controller hints removed - 8BitDo-2C integration via backend -->
     
-    <!-- Load PS4 Controller integration -->
-    <script src="/scripts/ps4-controller-web.js"></script>
+    <!-- PS4 Controller integration removed - 8BitDo-2C handled via backend -->
     
     <script>
         // Dashboard state
         let currentQueueIndex = 0;
         let queueItems = [];
         let captureCount = 0;
-        let autoCapture = false;
+        let lastCaptureTime = null;
         
         // WebSocket connection for real-time updates
         const ws = new WebSocket('ws://localhost:3001');
@@ -411,12 +366,25 @@
         ws.onopen = () => {
             console.log('Connected to CardMint WebSocket');
             loadVerificationQueue();
+            checkControllerStatus();
         };
         
         ws.onmessage = (event) => {
             const data = JSON.parse(event.data);
             handleRealtimeUpdate(data);
         };
+        
+        // Check controller status on startup
+        async function checkControllerStatus() {
+            try {
+                // Send WebSocket message to get controller status
+                if (ws.readyState === WebSocket.OPEN) {
+                    ws.send(JSON.stringify({action: 'getControllerStatus'}));
+                }
+            } catch (error) {
+                console.error('Failed to check controller status:', error);
+            }
+        }
         
         // Load initial verification queue
         async function loadVerificationQueue() {
@@ -497,19 +465,17 @@
             currentQueueIndex = index;
             updateActiveQueueItem();
             
-            // Update capture pane with card image
+            // Update capture pane with selected card image
             const card = queueItems[index];
             if (card && card.imagePath) {
-                const captureImage = document.getElementById('capture-image');
-                const placeholder = document.getElementById('capture-placeholder');
-                
-                captureImage.src = card.imagePath;
-                captureImage.style.display = 'block';
-                placeholder.style.display = 'none';
+                updateCaptureDisplay(card.imagePath);
+                // Don't update timestamp for queue selection, only for new captures
+                const timestampSpan = document.getElementById('capture-timestamp');
+                timestampSpan.textContent = lastCaptureTime ? lastCaptureTime.toLocaleTimeString() : 'Viewing queued item';
             }
         }
         
-        // Navigation functions for PS4 controller
+        // Navigation functions for queue management
         window.navigateQueue = (direction) => {
             const oldIndex = currentQueueIndex;
             
@@ -528,10 +494,6 @@
             
             if (oldIndex !== currentQueueIndex) {
                 selectQueueItem(currentQueueIndex);
-                // Trigger PS4 haptic feedback
-                if (window.ps4Controller) {
-                    window.ps4Controller.vibrate(30);
-                }
             }
         };
         
@@ -548,8 +510,6 @@
                 showNotification('✅ Card approved!', 'success');
                 removeFromQueue(index);
                 
-                if (window.ps4Controller) {
-                    window.ps4Controller.vibrate(100);
                 }
                 
             } catch (error) {
@@ -570,8 +530,6 @@
                 showNotification('❌ Card rejected', 'warning');
                 removeFromQueue(index);
                 
-                if (window.ps4Controller) {
-                    window.ps4Controller.vibrate(200);
                 }
                 
             } catch (error) {
@@ -588,8 +546,6 @@
             document.body.classList.toggle('edit-mode');
             showNotification('📝 Edit mode toggled', 'info');
             
-            if (window.ps4Controller) {
-                window.ps4Controller.vibrate(50);
             }
         }
         
@@ -614,15 +570,10 @@
                 
                 if (result.success) {
                     captureCount++;
-                    document.getElementById('capture-count').textContent = `${captureCount} captures`;
+                    lastCaptureTime = new Date();
                     
-                    // Update capture pane
-                    const captureImage = document.getElementById('capture-image');
-                    const placeholder = document.getElementById('capture-placeholder');
-                    
-                    captureImage.src = result.imagePath;
-                    captureImage.style.display = 'block';
-                    placeholder.style.display = 'none';
+                    // Update capture display
+                    updateCaptureDisplay(result.imagePath);
                     
                     showNotification('📸 Card captured!', 'success');
                     
@@ -633,6 +584,54 @@
             } catch (error) {
                 console.error('Capture error:', error);
                 showNotification('Capture failed', 'error');
+            }
+        }
+        
+        // Update capture display with image and timestamp
+        function updateCaptureDisplay(imagePath) {
+            const captureImage = document.getElementById('capture-image');
+            const placeholder = document.getElementById('capture-placeholder');
+            const timestampSpan = document.getElementById('capture-timestamp');
+            const countSpan = document.getElementById('capture-count');
+            
+            // Show image
+            captureImage.src = imagePath;
+            captureImage.style.display = 'block';
+            placeholder.style.display = 'none';
+            
+            // Update timestamp and count
+            if (lastCaptureTime) {
+                timestampSpan.textContent = lastCaptureTime.toLocaleTimeString();
+            }
+            countSpan.textContent = `Total: ${captureCount}`;
+        }
+        
+        // Handle controller-triggered capture
+        function handleControllerCapture(data) {
+            captureCount++;
+            lastCaptureTime = new Date(data.timestamp);
+            
+            // Update the display
+            updateCaptureDisplay(data.imagePath);
+            
+            // Add processing indicator
+            showNotification(`📸 Controller capture - ${data.captureTime}ms`, 'success');
+            
+            // Reload queue to show new item when processing completes
+            setTimeout(loadVerificationQueue, 2000);
+        }
+        
+        // Update controller status indicator
+        function updateControllerStatus(connected) {
+            const controllerInfo = document.querySelector('.capture-controls div');
+            if (controllerInfo) {
+                if (connected) {
+                    controllerInfo.innerHTML = '🎮 Controller: Press X to capture • A to approve • B to reject';
+                    controllerInfo.style.color = '#38a169';
+                } else {
+                    controllerInfo.innerHTML = '🎮 Controller: Disconnected - Reconnect 8BitDo controller';
+                    controllerInfo.style.color = '#e53e3e';
+                }
             }
         }
         
@@ -667,10 +666,46 @@
                         removeFromQueue(index);
                     }
                     break;
+                    
+                // Controller events
+                case 'capture_success':
+                    handleControllerCapture(data.payload);
+                    break;
+                case 'controller_connected':
+                    showNotification('🎮 Controller connected', 'success');
+                    updateControllerStatus(true);
+                    break;
+                case 'controller_disconnected':
+                    showNotification('🎮 Controller disconnected', 'warning');
+                    updateControllerStatus(false);
+                    break;
+                case 'action_approve':
+                    if (data.payload?.triggeredBy === 'controller') {
+                        approveCard();
+                        showNotification('✅ Approved via controller', 'success');
+                    }
+                    break;
+                case 'action_reject':
+                    if (data.payload?.triggeredBy === 'controller') {
+                        rejectCard();
+                        showNotification('❌ Rejected via controller', 'warning');
+                    }
+                    break;
+                case 'navigation':
+                    if (data.payload?.triggeredBy === 'controller') {
+                        navigateQueue(data.payload.direction);
+                    }
+                    break;
+                case 'controller_status':
+                    updateControllerStatus(data.connected);
+                    if (data.connected) {
+                        console.log('Controller status:', data.state);
+                    }
+                    break;
             }
         }
         
-        // Expose functions for PS4 controller
+        // Expose functions for external controller integration
         window.getCurrentCard = () => queueItems[currentQueueIndex];
         window.captureCard = captureCard;
         window.approveCard = () => approveCard();
@@ -679,14 +714,7 @@
         // Button event listeners
         document.getElementById('capture-btn').addEventListener('click', captureCard);
         
-        document.getElementById('auto-capture-btn').addEventListener('click', () => {
-            autoCapture = !autoCapture;
-            const btn = document.getElementById('auto-capture-btn');
-            btn.textContent = autoCapture ? '⚡ Auto Mode: ON' : '⚡ Auto Mode: OFF';
-            btn.style.background = autoCapture ? '#38a169' : '#d69e2e';
-        });
-        
-        console.log('🎮 Verification Dashboard Ready - PS4 Controller Integration Loaded');
+        console.log('📸 Passive Capture Dashboard Ready - 8BitDo Controller Integration Active');
     </script>
 </body>
 </html>

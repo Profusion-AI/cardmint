@@ -4,8 +4,13 @@
   "description": "High-performance card scanning and processing system",
   "main": "dist/index.js",
   "scripts": {
-    "dev": "tsx watch src/index.ts",
-    "build": "tsc",
+    "dev": "cross-env NODE_ENV=development concurrently -k -n api,dash -c \"auto\" \"tsx watch src/index.ts\" \"vite\"",
+    "dev:api": "cross-env NODE_ENV=development tsx watch src/index.ts",
+    "dev:dash": "vite",
+    "dev:full": "cross-env NODE_ENV=development concurrently -k -n api,worker,dash -c \"auto\" \"tsx watch src/index.ts\" \"tsx watch src/worker/scanQueue.ts\" \"vite\"",
+    "build": "tsc && vite build",
+    "build:api": "tsc",
+    "build:dashboard": "vite build",
     "start": "node dist/index.js",
     "test": "jest",
     "test:camera": "tsx test-camera-production.ts",
@@ -21,7 +26,11 @@
     "codemod:ports": "jscodeshift -t tools/codemods/ports-injection.ts src/ --parser tsx --ignore-pattern='**/*.test.ts' --ignore-pattern='**/wiring.ts'",
     "arch:lint": "dependency-cruiser src --validate .dependency-cruiser.cjs",
     "arch:graph": "dependency-cruiser src --output-type dot --config .dependency-cruiser.cjs | dot -T svg > docs/architecture-graph.svg",
-    "arch:test": "tsx scripts/test-architecture.ts"
+    "arch:test": "tsx scripts/test-architecture.ts",
+    "gamepad:detect": "tsx scripts/linux/gamepad-detect.ts",
+    "gamepad:watch": "tsx scripts/linux/gamepad-detect.ts --watch",
+    "gamepad:grab": "python3 scripts/linux/gamepad-grab.py",
+    "test:controller": "tsx scripts/test-controller-integration.ts"
   },
   "keywords": [
     "card",
@@ -83,7 +92,10 @@
     "ts-jest": "^29.2.5",
     "tsx": "^4.20.4",
     "typescript": "^5.9.2",
-    "typescript-eslint": "^8.41.0"
+    "typescript-eslint": "^8.41.0",
+    "vite": "^5.4.0",
+    "concurrently": "^8.2.2",
+    "cross-env": "^7.0.3"
   },
   "engines": {
     "node": ">=20.0.0"
