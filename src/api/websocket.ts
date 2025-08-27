@@ -1,8 +1,12 @@
 import WebSocket from 'ws';
 import { createLogger } from '../utils/logger';
-import { QueueManager } from '../queue/QueueManager';
+// Avoid importing QueueManager to prevent pulling queue types into the build
+type QueueLike = {
+  getQueueStatus: () => Promise<any>;
+};
 import { MetricsCollector } from '../utils/metrics';
 import { CameraWebSocketHandler } from './camera-websocket';
+import { SonyCameraIntegration } from '../services/SonyCameraIntegration';
 
 const logger = createLogger('websocket');
 
@@ -16,18 +20,20 @@ export class WebSocketServer {
   private wss?: WebSocket.Server;
   private clients: Map<string, WebSocket> = new Map();
   private cameraHandler?: CameraWebSocketHandler;
+  private actualPort?: number;
   
   constructor(
-    private readonly queueManager: QueueManager,
-    private readonly metrics: MetricsCollector
+    private readonly queueManager: QueueLike,
+    private readonly metrics: MetricsCollector,
+    private readonly cameraIntegration?: SonyCameraIntegration
   ) {
-    this.cameraHandler = new CameraWebSocketHandler(this);
+    this.cameraHandler = new CameraWebSocketHandler(this, cameraIntegration);
   }
   
   async start(port: number): Promise<void> {
-    this.wss = new WebSocket.Server({ port });
+    await this.tryStartOnPort(port);
     
-    this.wss.on('connection', (ws: WebSocket) => {
+    this.wss!.on('connection', (ws: WebSocket) => {
       const clientId = this.generateClientId();
       this.clients.set(clientId, ws);
       
@@ -77,8 +83,55 @@ export class WebSocketServer {
         logger.error(`WebSocket error for ${clientId}:`, error);
       });
     });
-    
-    logger.info(`WebSocket server listening on port ${port}`);
+  }
+
+  private async tryStartOnPort(port: number): Promise<void> {
+    try {
+      this.wss = await this.createWebSocketServer(port);
+      this.actualPort = port;
+      logger.info(`WebSocket server listening on port ${port}`);
+    } catch (error: any) {
+      if (error.code === 'EADDRINUSE') {
+        logger.warn(`WebSocket port ${port} in use, trying fallback ports`);
+        const fallbackPorts = [3002, 3003, 3004, 0]; // 0 = any available port
+        this.actualPort = await this.tryFallbackPorts(fallbackPorts);
+      } else {
+        throw error;
+      }
+    }
+  }
+
+  private async createWebSocketServer(port: number): Promise<WebSocket.Server> {
+    return new Promise((resolve, reject) => {
+      const server = new WebSocket.Server({ port });
+      
+      server.on('listening', () => {
+        resolve(server);
+      });
+      
+      server.on('error', (error) => {
+        reject(error);
+      });
+    });
+  }
+
+  private async tryFallbackPorts(fallbackPorts: number[]): Promise<number> {
+    for (const fallbackPort of fallbackPorts) {
+      try {
+        this.wss = await this.createWebSocketServer(fallbackPort);
+        const finalPort = fallbackPort === 0 ? (this.wss.address() as any)?.port : fallbackPort;
+        logger.info(`WebSocket server started on fallback port ${finalPort}`);
+        return finalPort;
+      } catch (error: any) {
+        if (error.code === 'EADDRINUSE') {
+          logger.warn(`Fallback port ${fallbackPort} also in use, trying next...`);
+          continue;
+        } else {
+          throw error;
+        }
+      }
+    }
+    throw new Error('No available ports found for WebSocket server');
   }
   
   private async handleMessage(
@@ -163,6 +216,10 @@ export class WebSocketServer {
   
   private generateClientId(): string {
     return `client_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+  }
+
+  getActualPort(): number | undefined {
+    return this.actualPort;
   }
   
   async stop(): Promise<void> {

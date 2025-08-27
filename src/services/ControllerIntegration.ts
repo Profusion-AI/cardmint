@@ -1,19 +1,20 @@
 import { ControllerService } from './ControllerService';
-import { SonyCamera } from '../camera/SonyCamera';
+import { SonyCameraIntegration } from './SonyCameraIntegration';
 import { createLogger } from '../utils/logger';
 import { WebSocketServer } from '../api/websocket';
 
 const logger = createLogger('controller-integration');
 
 export interface IntegrationConfig {
-  camera?: SonyCamera;
+  camera?: SonyCameraIntegration;
   webSocket?: WebSocketServer;
   enableHapticFeedback?: boolean;
+  controller?: ControllerService; // allow injection for testing
 }
 
 export class ControllerIntegration {
   private controller: ControllerService;
-  private camera?: SonyCamera;
+  private camera?: SonyCameraIntegration;
   private webSocket?: WebSocketServer;
   private config: IntegrationConfig;
 
@@ -21,8 +22,8 @@ export class ControllerIntegration {
     this.config = config;
     this.camera = config.camera;
     this.webSocket = config.webSocket;
-    
-    this.controller = new ControllerService();
+    // Allow injecting a controller instance for tests
+    this.controller = config.controller ?? new ControllerService();
     this.setupEventHandlers();
   }
 
@@ -134,19 +135,27 @@ export class ControllerIntegration {
         await this.camera.connect();
       }
 
-      // Capture image
-      const imagePath = await this.camera.captureImage();
+      // Capture image using SonyCameraIntegration
+      const result = await this.camera.captureImage();
       const captureTime = Date.now() - startTime;
 
-      logger.info(`📸 Image captured in ${captureTime}ms: ${imagePath}`);
+      if (result.success) {
+        logger.info(`📸 Image captured in ${result.captureTimeMs}ms: ${result.imagePath}`);
 
-      // Broadcast success to dashboard
-      this.broadcastStatus('capture_success', {
-        imagePath,
-        captureTime,
-        timestamp: new Date().toISOString(),
-        triggeredBy: 'controller'
-      });
+        // Broadcast success to dashboard
+        this.broadcastStatus('capture_success', {
+          imagePath: result.imagePath,
+          captureTime: result.captureTimeMs || captureTime,
+          timestamp: result.timestamp.toISOString(),
+          triggeredBy: 'controller'
+        });
+      } else {
+        logger.error(`Camera capture failed: ${result.error}`);
+        this.broadcastStatus('capture_error', { 
+          message: result.error || 'Capture failed',
+          triggeredBy: 'controller' 
+        });
+      }
 
     } catch (error) {
       logger.error('Camera capture failed:', error);
@@ -217,7 +226,7 @@ export class ControllerIntegration {
     logger.debug('Broadcasting:', message);
   }
 
-  public setCamera(camera: SonyCamera): void {
+  public setCamera(camera: SonyCameraIntegration): void {
     this.camera = camera;
     logger.info('Camera configured for controller integration');
   }

@@ -2,17 +2,21 @@ import fs from 'fs/promises';
 import path from 'path';
 import WebSocket from 'ws';
 import { createLogger } from '../utils/logger';
-import { SonyCamera } from '../camera/SonyCamera';
+import { SonyCameraIntegration } from '../services/SonyCameraIntegration';
 import { WebSocketServer } from './websocket';
 import { ControllerIntegration } from '../services/ControllerIntegration';
 
 const logger = createLogger('camera-ws');
 
 export class CameraWebSocketHandler {
-  private camera?: SonyCamera;
+  private camera?: SonyCameraIntegration;
   private controllerIntegration?: ControllerIntegration;
   
-  constructor(private wsServer: WebSocketServer) {
+  constructor(
+    private wsServer: WebSocketServer, 
+    camera?: SonyCameraIntegration
+  ) {
+    this.camera = camera;
     this.setupControllerIntegration();
   }
   
@@ -20,7 +24,8 @@ export class CameraWebSocketHandler {
     logger.info('Setting up controller integration for passive capture');
     
     this.controllerIntegration = new ControllerIntegration({
-      webSocket: this.wsServer
+      webSocket: this.wsServer,
+      camera: this.camera // Pass the camera to the controller integration
     });
     
     logger.info('Controller integration initialized');
@@ -81,28 +86,23 @@ export class CameraWebSocketHandler {
       return;
     }
     
-    this.camera = new SonyCamera({
-      type: 'USB',
-      deviceId: '054c:0ee9',
-      autoReconnect: false
-    });
+    // If no camera integration was provided, we can't connect
+    if (!this.camera) {
+      throw new Error('No camera integration available');
+    }
     
     const connected = await this.camera.connect();
     
     if (connected) {
-      const info = this.camera.getDeviceInfo();
       this.sendMessage(ws, {
         type: 'connected',
-        model: info.name
+        model: 'Sony ZV-E10M2' // Use known model name
       });
       
       // Send initial properties
       await this.getProperties(ws);
       
-      // Configure controller integration with camera
-      if (this.controllerIntegration) {
-        this.controllerIntegration.setCamera(this.camera);
-      }
+      // Camera is already configured in controller integration during construction
     } else {
       throw new Error('Failed to connect to camera');
     }
@@ -111,7 +111,7 @@ export class CameraWebSocketHandler {
   private async disconnectCamera(ws: WebSocket): Promise<void> {
     if (this.camera) {
       await this.camera.disconnect();
-      this.camera = undefined;
+      // Don't set camera to undefined - it's managed by the main system
       
       this.sendMessage(ws, {
         type: 'disconnected'
@@ -124,16 +124,17 @@ export class CameraWebSocketHandler {
       throw new Error('Camera not connected');
     }
     
-    const startTime = Date.now();
-    const imagePath = await this.camera.captureImage();
-    const captureTime = Date.now() - startTime;
+    const result = await this.camera.captureImage();
     
-    // For demo, we'll create a test image or send the path
-    this.sendMessage(ws, {
-      type: 'imageCaptured',
-      imagePath: imagePath,
-      captureTime: captureTime
-    });
+    if (result.success) {
+      this.sendMessage(ws, {
+        type: 'imageCaptured',
+        imagePath: result.imagePath,
+        captureTime: result.captureTimeMs
+      });
+    } else {
+      throw new Error(result.error || 'Capture failed');
+    }
   }
   
   private async getLatestCapture(ws: WebSocket): Promise<void> {
@@ -178,10 +179,9 @@ export class CameraWebSocketHandler {
     const isConnected = this.camera && this.camera.isConnected();
     
     if (isConnected) {
-      const info = this.camera!.getDeviceInfo();
       this.sendMessage(ws, {
         type: 'connected',
-        model: info.name
+        model: 'Sony ZV-E10M2'
       });
       await this.getProperties(ws);
     } else {
@@ -196,15 +196,13 @@ export class CameraWebSocketHandler {
       return;
     }
     
-    const iso = await this.camera.getProperty('iso');
-    const aperture = await this.camera.getProperty('aperture');
-    const shutter = await this.camera.getProperty('shutter');
-    
+    // SonyCameraIntegration doesn't expose property methods yet
+    // Send default values for now
     this.sendMessage(ws, {
       type: 'properties',
-      iso: iso || '100',
-      aperture: aperture || 'f/2.8',
-      shutter: shutter || '1/125'
+      iso: 'Auto',
+      aperture: 'f/2.8',
+      shutter: '1/125'
     });
   }
   
