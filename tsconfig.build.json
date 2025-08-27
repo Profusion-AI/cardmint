@@ -1,0 +1,55 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
+    "declaration": false,
+    "declarationMap": false
+  },
+  "include": [
+    "src/index.ts",
+    "src/server.ts",
+    "src/config.ts",
+    // Narrow utils to only what server and API need
+    "src/utils/logger.ts",
+    "src/utils/metrics.ts",
+    "src/utils/shutdown.ts",
+    "src/utils/devProxy.ts",
+    "src/utils/e2e-stubs.ts",
+    "src/lib/**/*.ts",
+    "src/api/**/*.ts",
+    // Storage modules required at runtime
+    "src/storage/database.ts",
+    // Services and adapters needed for the current production run
+    // Integrated scanner excluded from fast-build; loaded lazily when needed
+    "src/services/SonyCameraIntegration.ts",
+    "src/services/ProductionCaptureWatcher.ts",
+    "src/services/CameraInputIntegration.ts",
+    "src/services/ControllerService.ts",
+    "src/services/input-bus.ts",
+    "src/adapters/lmstudio/LmStudioInference.ts",
+    "src/adapters/lmstudio/QwenVerifierInference.ts",
+    "src/core/verification/ConfidenceRouter.ts",
+    "src/core/infer/**/*.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist",
+    "**/*.test.ts",
+    "**/*.spec.ts",
+    "src/ml/**",
+    "src/camera/**",
+    "src/api/camera-router.ts",
+    "src/processing/**",
+    "src/adapters/opencv/**",
+    "src/queue/**",
+    "src/services/AsyncCaptureWatcher.ts",
+    "src/services/CaptureWatcher.ts",
+    "src/services/AutoApprovalService.ts",
+    "src/services/QwenScannerService.ts",
+    "src/services/RemoteMLClient.ts",
+    "src/services/VerificationPipeline.ts",
+    "src/services/DistributedIntegration.ts",
+    "scripts/**"
+  ]
+}

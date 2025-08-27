@@ -243,7 +243,7 @@ export class IntegratedScannerService {
       });
 
       // Optional verification with circuit breaker protection
-      let verificationResult;
+      let verificationResult: import('../adapters/lmstudio/QwenVerifierInference').VerificationResult | undefined;
       if (routingResult.decision !== 'skip_verify' && this.verifierAdapter) {
         try {
           verificationResult = await verificationMetrics.executeWithVerifierBreaker(async () => {

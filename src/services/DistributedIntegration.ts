@@ -343,7 +343,7 @@ export class DistributedIntegration {
 
   private getLastMacLatency(): number {
     // This would be updated by actual Mac calls
-    return 0; // Placeholder
+    return 0; // Default until latency metrics are integrated
   }
 
   private async getImageFiles(directory: string, pattern: string): Promise<string[]> {

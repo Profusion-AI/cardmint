@@ -334,7 +334,7 @@ export class CardVerificationService {
     }
 
     try {
-      // Generate embedding for query (placeholder - would use actual sentence transformer)
+      // Generate embedding for query using a simple heuristic embedding
       const queryEmbedding = this.generateSimpleEmbedding(
         `${result.card_title} ${result.set_name || ''}`
       );
@@ -401,8 +401,7 @@ export class CardVerificationService {
   }
 
   private generateSimpleEmbedding(text: string): number[] {
-    // Simple text-based embedding (placeholder for real sentence transformer)
-    // In production, would use a proper embedding model like sentence-transformers
+    // Simple text-based embedding baseline; use a proper model in production (e.g., sentence-transformers)
     const words = text.toLowerCase().split(/\s+/);
     const embedding = new Array(384).fill(0);
     

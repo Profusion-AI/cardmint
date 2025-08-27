@@ -3,6 +3,7 @@ import { EventEmitter } from 'events';
 import { createLogger } from '../utils/logger';
 import { exec, spawn, ChildProcess } from 'child_process';
 import { promisify } from 'util';
+import { SonyCameraIntegration, CaptureResult } from './SonyCameraIntegration';
 
 const execAsync = promisify(exec);
 const logger = createLogger('controller');
@@ -27,9 +28,14 @@ export class ControllerService extends EventEmitter {
     isConnected: false,
     buttonStates: new Map()
   };
+  
+  // Sony camera integration
+  private cameraIntegration?: SonyCameraIntegration;
+  private lastCaptureTime: number = 0;
+  private readonly CAPTURE_DEBOUNCE_MS = 500; // Prevent rapid-fire captures
 
   // Button mapping for 8BitDo Ultimate 2C in DInput mode
-  private readonly BUTTON_MAP = {
+  private readonly BUTTON_MAP: Record<number, { name: string; symbol: string; action: string }> = {
     304: { name: 'A', symbol: 'A', action: 'approve' },        // BTN_SOUTH
     305: { name: 'B', symbol: 'B', action: 'reject' },         // BTN_EAST  
     307: { name: 'X', symbol: 'X', action: 'capture' },        // BTN_NORTH
@@ -42,9 +48,47 @@ export class ControllerService extends EventEmitter {
     106: { name: 'RIGHT', symbol: '→', action: 'navigate_right' }, // KEY_RIGHT
   };
 
-  constructor() {
+  constructor(cameraIntegration?: SonyCameraIntegration) {
     super();
+    this.cameraIntegration = cameraIntegration;
     this.setupControllerDetection();
+    
+    if (this.cameraIntegration) {
+      this.setupCameraEventHandlers();
+      logger.info('Controller service initialized with Sony camera integration');
+    }
+  }
+
+  /**
+   * Setup camera event handlers for controller integration
+   */
+  private setupCameraEventHandlers(): void {
+    if (!this.cameraIntegration) return;
+    
+    this.cameraIntegration.on('captureResult', (result: CaptureResult) => {
+      this.emit('cameraCapture', result);
+      
+      if (result.success) {
+        logger.info(`Controller triggered capture successful: ${result.imagePath} (${result.captureTimeMs}ms)`);
+      } else {
+        logger.error(`Controller triggered capture failed: ${result.error}`);
+      }
+    });
+    
+    this.cameraIntegration.on('connected', () => {
+      logger.info('Sony camera connected - controller capture enabled');
+      this.emit('cameraConnected');
+    });
+    
+    this.cameraIntegration.on('disconnected', () => {
+      logger.warn('Sony camera disconnected - controller capture disabled');
+      this.emit('cameraDisconnected');
+    });
+    
+    this.cameraIntegration.on('error', (error) => {
+      logger.error('Camera integration error:', error);
+      this.emit('cameraError', error);
+    });
   }
 
   private async setupControllerDetection(): Promise<void> {
@@ -230,6 +274,11 @@ export class ControllerService extends EventEmitter {
     // Determine if this is a modified action
     const modifiedAction = isLBPressed ? `lb_${action}` : isRBPressed ? `rb_${action}` : action;
     
+    // Handle camera capture action (X button - code 307)
+    if (action === 'capture' && this.cameraIntegration) {
+      this.handleCameraCapture(event);
+    }
+    
     // Emit high-level action events
     this.emit('action', {
       action: modifiedAction,
@@ -242,6 +291,82 @@ export class ControllerService extends EventEmitter {
     });
 
     logger.info(`Controller action: ${modifiedAction} (button: ${event.button})`);
+  }
+  
+  /**
+   * Handle camera capture trigger from controller
+   */
+  private async handleCameraCapture(event: ControllerEvent): Promise<void> {
+    const now = Date.now();
+    
+    // Debounce rapid button presses
+    if (now - this.lastCaptureTime < this.CAPTURE_DEBOUNCE_MS) {
+      logger.debug(`Camera capture debounced (${now - this.lastCaptureTime}ms since last capture)`);
+      return;
+    }
+    
+    this.lastCaptureTime = now;
+    
+    if (!this.cameraIntegration) {
+      logger.error('Camera integration not available for capture');
+      return;
+    }
+    
+    if (!this.cameraIntegration.isConnected()) {
+      logger.warn('Camera not connected, attempting to connect before capture...');
+      const connected = await this.cameraIntegration.connect();
+      if (!connected) {
+        logger.error('Failed to connect camera for controller capture');
+        this.emit('captureError', { 
+          error: 'Camera not connected',
+          triggeredBy: 'controller',
+          buttonCode: event.code 
+        });
+        return;
+      }
+    }
+    
+    if (this.cameraIntegration.isCapturing()) {
+      logger.debug('Camera is already capturing, queuing capture request');
+      
+      // Use queue capture to handle backpressure
+      try {
+        const result = await this.cameraIntegration.queueCapture();
+        this.emit('captureQueued', {
+          result,
+          triggeredBy: 'controller',
+          buttonCode: event.code,
+          queueLength: this.cameraIntegration.getQueueLength()
+        });
+      } catch (error) {
+        logger.error('Failed to queue camera capture:', error);
+        this.emit('captureError', {
+          error: error.message,
+          triggeredBy: 'controller',
+          buttonCode: event.code
+        });
+      }
+    } else {
+      // Direct capture
+      logger.info(`Controller X button triggered camera capture (button code: ${event.code})`);
+      
+      try {
+        const result = await this.cameraIntegration.captureImage();
+        this.emit('captureTriggered', {
+          result,
+          triggeredBy: 'controller',
+          buttonCode: event.code,
+          triggerTime: event.timestamp
+        });
+      } catch (error) {
+        logger.error('Controller camera capture failed:', error);
+        this.emit('captureError', {
+          error: error.message,
+          triggeredBy: 'controller',
+          buttonCode: event.code
+        });
+      }
+    }
   }
 
   private async disconnectController(): Promise<void> {
@@ -274,9 +399,56 @@ export class ControllerService extends EventEmitter {
     return new Map(this.state.buttonStates);
   }
 
+  /**
+   * Get camera status if camera integration is available
+   */
+  public getCameraStatus() {
+    if (!this.cameraIntegration) {
+      return { available: false };
+    }
+    
+    return {
+      available: true,
+      connected: this.cameraIntegration.isConnected(),
+      capturing: this.cameraIntegration.isCapturing(),
+      queueLength: this.cameraIntegration.getQueueLength(),
+      stats: this.cameraIntegration.getStatus(),
+    };
+  }
+  
+  /**
+   * Trigger camera capture programmatically (for testing)
+   */
+  public async triggerCameraCapture(): Promise<CaptureResult | null> {
+    if (!this.cameraIntegration) {
+      logger.error('Camera integration not available');
+      return null;
+    }
+    
+    const mockEvent: ControllerEvent = {
+      button: 'X',
+      code: 307,
+      value: 1,
+      timestamp: new Date(),
+    };
+    
+    await this.handleCameraCapture(mockEvent);
+    return null; // Actual result will come through events
+  }
+
   public async shutdown(): Promise<void> {
     logger.info('Shutting down controller service');
+    
+    // Disconnect controller
     await this.disconnectController();
+    
+    // Cleanup camera integration if present
+    if (this.cameraIntegration) {
+      logger.info('Cleaning up camera integration...');
+      await this.cameraIntegration.cleanup();
+    }
+    
     this.removeAllListeners();
+    logger.info('Controller service shutdown complete');
   }
 }
