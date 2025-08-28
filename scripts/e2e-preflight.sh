@@ -97,6 +97,45 @@ if [ "$ENV_VALID" = false ]; then
 fi
 
 echo ""
+echo "1️⃣ .5  Controller Readiness Check"
+echo "-----------------------------------"
+
+# Ensure no stray exclusive grabs from previous runs
+if command -v pkill >/dev/null 2>&1; then
+    pkill -f "evtest" >/dev/null 2>&1 || true
+fi
+
+# Show input device links
+if [ -d /dev/input/by-id ]; then
+    echo "Controller by-id entries (if connected):"
+    ls -l /dev/input/by-id | grep -i "8BitDo\|8bitdo" || echo "  (none found)"
+else
+    echo "No /dev/input/by-id directory available"
+fi
+
+# Run detection and generate .env.controller
+if command -v npm >/dev/null 2>&1; then
+    if npm run -s gamepad:detect -- --match 8bitdo | grep -q "READY"; then
+        echo -e "${GREEN}✅ 8BitDo detected via gamepad:detect${NC}"
+        # Generate env and verify
+        if [ -f scripts/controller-env-setup.sh ]; then
+            # shellcheck disable=SC1091
+            source scripts/controller-env-setup.sh --generate-file || true
+            if [ -f .env.controller ]; then
+                echo -e "${GREEN}✅ .env.controller generated${NC}"
+                grep -E 'CONTROLLER_KBD_EVENT|CONTROLLER_KBD_BYID' .env.controller | sed 's/^/  /'
+            else
+                echo -e "${YELLOW}⚠️  .env.controller not generated${NC}"
+            fi
+        fi
+    else
+        echo -e "${YELLOW}⚠️  8BitDo not detected by gamepad:detect${NC}"
+    fi
+else
+    echo -e "${YELLOW}⚠️  npm not available; skipping controller detection${NC}"
+fi
+
+echo ""
 echo "2️⃣  Port Availability Check"
 echo "---------------------------"
 

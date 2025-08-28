@@ -7,9 +7,15 @@
     "dev": "cross-env NODE_ENV=development concurrently -k -n api,dash -c \"auto\" \"tsx watch src/index.ts\" \"vite\"",
     "dev:api": "cross-env NODE_ENV=development tsx watch src/index.ts",
     "dev:dash": "vite",
-    "dev:full": "cross-env NODE_ENV=development concurrently -k -n api,worker,dash -c \"auto\" \"tsx watch src/index.ts\" \"tsx watch src/worker/scanQueue.ts\" \"vite\"",
-    "build": "tsc && vite build",
-    "build:api": "tsc",
+    "dev:full": "cross-env NODE_ENV=development concurrently -k -n api,dash -c \"auto\" \"tsx watch src/index.ts\" \"vite\"",
+    "prod:build": "npm run build:api && npm run build:dashboard",
+    "prod:dev": "npm run prod:build && tsx src/utils/process-manager.ts",
+    "prod:start": "cross-env NODE_ENV=production node dist/index.js",
+    "prod:clean": "rm -rf dist/ && rm -rf dashboard/dist/",
+    "prod:managed": "npm run prod:build && node -r tsx/cjs src/utils/process-manager.ts",
+    "preview": "vite preview --port 5173",
+    "build": "tsc -p tsconfig.build.json && vite build",
+    "build:api": "tsc -p tsconfig.build.json",
     "build:dashboard": "vite build",
     "start": "node dist/index.js",
     "test": "jest",
@@ -30,7 +36,17 @@
     "gamepad:detect": "tsx scripts/linux/gamepad-detect.ts",
     "gamepad:watch": "tsx scripts/linux/gamepad-detect.ts --watch",
     "gamepad:grab": "python3 scripts/linux/gamepad-grab.py",
-    "test:controller": "tsx scripts/test-controller-integration.ts"
+    "test:controller": "tsx scripts/test-controller-integration.ts",
+    "test:port-resilience": "./scripts/test-port-resilience.sh",
+    "test:websocket-discovery": "node scripts/test-websocket-discovery.js",
+    "test:performance": "./scripts/monitor-performance.sh 300",
+    "test:performance:quick": "./scripts/monitor-performance.sh 60",
+    "test:infrastructure": "npm run test:port-resilience && npm run test:websocket-discovery",
+    "test:controller:smoke": "npm run test:controller && npm run test:infrastructure",
+    "test:controller:full": "echo 'Full controller test suite - Phase 4 implementation pending'",
+    "e2e:preflight": "./scripts/e2e-preflight.sh",
+    "e2e:run": "./scripts/e2e-run.sh",
+    "prepare": "husky"
   },
   "keywords": [
     "card",
@@ -53,6 +69,7 @@
     "@types/uuid": "^10.0.0",
     "axios": "^1.11.0",
     "better-sqlite3": "^12.2.0",
+    "blerg": "^0.0.3",
     "bullmq": "^5.57.0",
     "chokidar": "^4.0.3",
     "commander": "^12.1.0",
@@ -67,7 +84,8 @@
     "sharp": "^0.34.3",
     "sqlite3": "^5.1.7",
     "uuid": "^11.1.0",
-    "ws": "^8.18.0"
+    "ws": "^8.18.0",
+    "zod": "^4.1.3"
   },
   "devDependencies": {
     "@eslint/js": "^9.34.0",
@@ -79,6 +97,8 @@
     "@types/ws": "^8.5.14",
     "@typescript-eslint/eslint-plugin": "^8.21.0",
     "@typescript-eslint/parser": "^8.21.0",
+    "concurrently": "^8.2.2",
+    "cross-env": "^7.0.3",
     "dependency-cruiser": "^17.0.1",
     "eslint": "^9.18.0",
     "eslint-import-resolver-typescript": "^4.4.4",
@@ -87,15 +107,20 @@
     "globals": "^16.3.0",
     "jest": "^30.0.0-alpha.7",
     "jscodeshift": "^17.3.0",
+    "husky": "^9.1.6",
+    "lint-staged": "^15.2.10",
     "node-addon-api": "^8.5.0",
     "node-gyp": "^11.0.0",
     "ts-jest": "^29.2.5",
     "tsx": "^4.20.4",
     "typescript": "^5.9.2",
     "typescript-eslint": "^8.41.0",
-    "vite": "^5.4.0",
-    "concurrently": "^8.2.2",
-    "cross-env": "^7.0.3"
+    "vite": "^5.4.0"
+  },
+  "lint-staged": {
+    "*.{js,jsx,ts,tsx,cjs,mjs,json}": [
+      "eslint --fix --max-warnings=0"
+    ]
   },
   "engines": {
     "node": ">=20.0.0"
