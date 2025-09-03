@@ -1,0 +1,93 @@
+Here’s a focused assessment and a Local‑First plan for the Golden 10, keeping separation of concerns and aiming for ≥90%
+local identification.
+
+Findings
+
+- Location: tests/e2e/golden/manifest.json with schema tests/e2e/golden/schema.json; 10 images live in that folder.
+- Manifest fields: name, identifier (number/set_size OR promo_code), set_name, optional first_edition, notes,
+difficulty.
+- Assets: ./data/assets/{set_icons,roi_templates,reference_images} are currently empty. pokemon_dataset/images is
+populated and suitable as reference corpus.
+- Current golden scripts target Mac ML; we need a local‑only harness to score Local‑First.
+
+Gaps For Local‑First
+
+- No direct hooks for set icon mapping, ROI template selection, or canonical key normalization.
+- Orientation and number formatting nuances (zero‑padding, promos) aren’t expressed as hints.
+- No local scoring harness against the Golden 10 manifest.
+
+Schema Enhancements (additive, optional)
+
+- hints: optional metadata to guide Local‑First without changing ground truth.
+    - expected_set_icon: canonical set icon key (e.g., “neo-revelation”, “swsh-darkness-ablaze”).
+    - roi_template: template id for bottom band (number/set), promo region, 1st edition stamp (e.g., “neo_first_ed_v1”,
+“promo_black_star_v1”).
+    - orientation_deg: 0|90|180|270 for known rotations (e.g., DSC00009.JPG).
+    - number_format: “zero_padded” | “plain” | “alphanumeric” (promos).
+    - canonical_key: pre‑normalized key to score matches (e.g., “neo-revelation|2|64|blissey” or “swsH|021|
+polteageist-v”).
+    - layout_hint: “neo”, “sm”, “sv_ex”, “promo_xy”, “promo_swsh”, “mcd_2019”.
+- Example (manifest row snippet):
+    - "hints": { "expected_set_icon": "neo-revelation", "roi_template": "neo_first_ed_v1", "orientation_deg": 0,
+"number_format": "plain", "canonical_key": "neo-revelation|2|64|blissey", "layout_hint": "neo" }
+
+Local Identification Strategy (Golden 10 specific)
+
+- Perceptual shortlist: pHash against pokemon_dataset/images/* to get top K candidates (K≈25).
+- Set icon match: crop icon ROI; template match against assets/set_icons/<set>.png to confirm set family.
+- Number/promo ROI:
+    - number/set_size: detect “dd[/]ddd” in bottom‑right ROI; adjust for zero‑padding per hint; simple OCR or digit
+template match.
+    - promo_code: detect black star and alpha‑numeric promo (XY##, SWSH###) in promo ROI; template + lightweight OCR
+if needed.
+- 1st edition: detect stamp via small template match near upper‑left of artwork border (Neo layouts).
+- Fusion scoring: combine normalized scores (hash, set icon, number/promo, 1st edition) → single confidence; threshold
+via LOCAL_MATCH_MIN_CONF (default 0.85).
+
+Per‑Card Notes
+
+- 1 Blissey (Neo Revelation, 1st ed): set_icon=neo-revelation, roi_template=neo_first_ed_v1, number_format=plain,
+first_edition=true.
+- 2 Eevee (McD 2019): set_icon=mcd-2019, roi_template=promo_mcd_v1, number_format=plain.
+- 3 Totodile (Neo Genesis, 1st ed, rotated): set_icon=neo-genesis, roi_template=neo_first_ed_v1, orientation_deg=90.
+- 4 Dark Feraligatr (Neo Destiny, 1st ed): set_icon=neo-destiny, roi_template=neo_first_ed_v1.
+- 5 Bastiodon (POP6): set_icon=pop6, roi_template=pop_bottom_band_v1.
+- 6 Tsareena (SM1): set_icon=sm1, roi_template=sm_bottom_band_v1.
+- 7 Wo‑Chien ex (SV2): set_icon=sv2, roi_template=sv_ex_bottom_band_v1, number_format=zero_padded.
+- 8 Toxapex (SWSH3): set_icon=swsh3, roi_template=swsh_bottom_band_v1, number_format=zero_padded.
+- 9 Polteageist V (SWSH promo): set_icon=black-star, roi_template=promo_black_star_v1, number_format=alphanumeric,
+promo_type=swsh.
+- 10 Pangoro (XY promo): set_icon=black-star, roi_template=promo_black_star_v1, number_format=alphanumeric,
+promo_type=xy.
+
+Evaluation Harness (Local‑Only)
+
+- Input: tests/e2e/golden/manifest.json.
+- Flow per card: apply hints → LocalFirst pipeline → produce predicted canonical_key → compare to
+manifest.hints.canonical_key or derive from fields.
+- Metrics: accuracy (≥0.9), confidence distribution, per‑strategy timings; log false positives with top‑3 candidates for
+quick fixes.
+
+Minimal Asset Tasks For Claude
+
+- Populate ./data/assets/set_icons with canonical icons for the sets above (can be extracted from dataset or curated).
+- Create ./data/assets/roi_templates masks for:
+    - neo_first_ed_v1, promo_black_star_v1, pop_bottom_band_v1, sm_bottom_band_v1, sv_ex_bottom_band_v1,
+swsh_bottom_band_v1.
+- Build phash.db over pokemon_dataset/images with {image_id,path,phash64} and a simple KNN.
+
+Success Criteria
+
+- ≥9/10 Golden cards correctly identified locally with confidence ≥0.85.
+- Local pipeline latency for shortlist+refine: ≤100ms on test machine.
+- Capture loop unchanged; Local‑First runs in workers.
+
+Next Steps (Non‑disruptive for Claude)
+
+- Add optional “hints” block to Golden 10 manifest (backward‑compatible).
+- Implement Local‑Only golden harness that uses src/worker/verification/local-first-pipeline.ts.
+- Prioritize assets for the 10 sets/templates listed; then generalize.
+
+If you want, I can draft a short example “hints” block for each of the 10 in a separate note for Claude to paste into
+the manifest while keeping schema compatibility.
+

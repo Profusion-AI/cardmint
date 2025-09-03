@@ -1,0 +1,113 @@
+profusionai@fedora:~/CardMint$ npm run -s test:controller
+{"level":30,"time":"2025-08-28T20:01:12.737Z","service":"cardmint","module":"controller-test","msg":"🎮 Testing passive controller integration..."}
+
+=== Test 1: Controller Detection ===
+
+=== Test 2: Resource Usage ===
+{"level":30,"time":"2025-08-28T20:01:12.738Z","service":"cardmint","module":"controller","msg":"Setting up 8BitDo controller detection..."}
+{"level":30,"time":"2025-08-28T20:01:13.077Z","service":"cardmint","module":"controller","msg":"Using CONTROLLER_KBD_EVENT override: /dev/input/event17"}
+{"level":30,"time":"2025-08-28T20:01:13.077Z","service":"cardmint","module":"controller","msg":"Connecting to 8BitDo controller at /dev/input/event17 (keyboard events for face buttons)"}
+{"level":20,"time":"2025-08-28T20:01:13.077Z","service":"cardmint","module":"controller","msg":"Detection info:"}
+{"level":20,"time":"2025-08-28T20:01:13.108Z","service":"cardmint","module":"controller","msg":"Controller output:"}
+{"level":30,"time":"2025-08-28T20:01:13.108Z","service":"cardmint","module":"controller","msg":"Controller grabbed successfully with evtest"}
+{"level":30,"time":"2025-08-28T20:01:13.110Z","service":"cardmint","module":"controller-integration","msg":"Controller connected:"}
+{"level":20,"time":"2025-08-28T20:01:13.110Z","service":"cardmint","module":"controller-integration","msg":"Broadcasting:"}
+{"level":30,"time":"2025-08-28T20:01:13.111Z","service":"cardmint","module":"controller-test","msg":"✅ Controller connected:"}
+{"level":30,"time":"2025-08-28T20:01:13.111Z","service":"cardmint","module":"controller","msg":"8BitDo controller connected and grabbed for exclusive access"}
+{"level":20,"time":"2025-08-28T20:01:13.111Z","service":"cardmint","module":"controller","msg":"Controller output:"}
+{"level":20,"time":"2025-08-28T20:01:13.111Z","service":"cardmint","module":"controller","msg":"Controller output:"}
+{"level":20,"time":"2025-08-28T20:01:13.115Z","service":"cardmint","module":"controller","msg":"evtest (joystick) event chunk: Input driver version is 1.0.1\nInput device ID: bus 0x3 vendor 0x2dc8 product 0x310a version 0x114\nInput device name: \"8BitDo Ultimate 2C Wireless Controller\"\nSupported events:\n  Event type 0 (EV_SYN)\n  Event type 1 (EV_KEY)\n    Event code 304 (BTN_SOUTH)\n    Event code 305 (BTN_EAST)\n    Event code 307 (BTN_NORTH)\n    Event code 308 (BTN_WEST)\n    Event code 310 (BTN_TL)\n    Event code 311 (BTN_TR)\n    Event code 314 (BTN_SELECT)\n    Event code 315 (BTN_START)\n    Event code 316 (BTN_MODE)\n    Event code 317 (BTN_THUMBL)\n    Event code 318 (BTN_THUMBR)\n  Event type 3 (EV_ABS)\n    Event code 0 (ABS_X)\n      Value      0\n      Min   -32768\n      Max    32767\n      Fuzz      16\n      Flat     128\n    Event code 1 (ABS_Y)\n      Value     -1\n      Min   -32768\n      Max    32767\n      Fuzz      16\n      Flat     128\n    Event code 2 (ABS_Z)\n      Value      0\n      Min        0\n      Max      255\n    Event code 3 (ABS_RX)\n      Value      0\n      Min   -32768\n      Max    32767\n      Fuzz      16\n      Flat     128\n    Event code 4 (ABS_RY)\n      Value     -1\n      Min   -32768\n      Max    32767\n      Fuzz      16\n      Flat     128\n    Event code 5 (ABS_RZ)\n      Value      0\n      Min        0\n      Max      255\n    Event code 16 (ABS_HAT0X)\n      Value      0\n      Min       -1\n      Max        1\n    Event code 17 (ABS_HAT0Y)\n      Value      0\n      Min       -1\n      Max        1\n  Event type 21 (EV_FF)\n    Event code 80 (FF_RUMBLE)\n    Event code 81 (FF_PERIODIC)\n    Event code 88 (FF_SQUARE)\n    Event code 89 (FF_TRIANGLE)\n    Event code 90 (FF_SINE)\n    Event code 96 (FF_GAIN)\nProperties:\nTesting ... (interrupt to exit)"}
+{"level":20,"time":"2025-08-28T20:01:13.132Z","service":"cardmint","module":"controller","msg":"evtest (joystick) event chunk: Event: time 1756411273.112882, type 3 (EV_ABS), code 0 (ABS_X), value 0\nEvent: time 1756411273.112882, type 3 (EV_ABS), code 1 (ABS_Y), value -1\nEvent: time 1756411273.112882, type 3 (EV_ABS), code 3 (ABS_RX), value 0\nEvent: time 1756411273.112882, type 3 (EV_ABS), code 4 (ABS_RY), value -1\nEvent: time 1756411273.112882, -------------- SYN_REPORT ------------"}
+{"level":20,"time":"2025-08-28T20:01:13.132Z","service":"cardmint","module":"controller","msg":"evtest event chunk: Event: time 1756411273.112882, type 3 (EV_ABS), code 0 (ABS_X), value 0\nEvent: time 1756411273.112882, type 3 (EV_ABS), code 1 (ABS_Y), value -1\nEvent: time 1756411273.112882, type 3 (EV_ABS), code 3 (ABS_RX), value 0\nEvent: time 1756411273.112882, type 3 (EV_ABS), code 4 (ABS_RY), value -1\nEvent: time 1756411273.112882, -------------- SYN_REPORT ------------"}
+{"level":20,"time":"2025-08-28T20:01:14.823Z","service":"cardmint","module":"controller","msg":"evtest (joystick) event chunk: Event: time 1756411274.823594, type 1 (EV_KEY), code 307 (BTN_NORTH), value 1\nEvent: time 1756411274.823594, -------------- SYN_REPORT ------------"}
+{"level":20,"time":"2025-08-28T20:01:14.823Z","service":"cardmint","module":"controller","msg":"evtest event chunk: Event: time 1756411274.823594, type 1 (EV_KEY), code 307 (BTN_NORTH), value 1\nEvent: time 1756411274.823594, -------------- SYN_REPORT ------------"}
+{"level":20,"time":"2025-08-28T20:01:14.823Z","service":"cardmint","module":"controller-integration","msg":"Button event:"}
+{"level":30,"time":"2025-08-28T20:01:14.824Z","service":"cardmint","module":"controller-integration","msg":"🎯 Controller capture triggered"}
+{"level":40,"time":"2025-08-28T20:01:14.824Z","service":"cardmint","module":"controller-integration","msg":"No camera configured for capture"}
+{"level":20,"time":"2025-08-28T20:01:14.824Z","service":"cardmint","module":"controller-integration","msg":"Broadcasting:"}
+{"level":30,"time":"2025-08-28T20:01:14.824Z","service":"cardmint","module":"controller-test","msg":"🎯 Controller action detected:"}
+{"level":30,"time":"2025-08-28T20:01:14.824Z","service":"cardmint","module":"controller","msg":"Controller action: capture (button: X)"}
+{"level":20,"time":"2025-08-28T20:01:14.824Z","service":"cardmint","module":"controller","msg":"Button X (X): PRESSED"}
+{"level":20,"time":"2025-08-28T20:01:14.997Z","service":"cardmint","module":"controller","msg":"evtest (joystick) event chunk: Event: time 1756411274.997290, type 1 (EV_KEY), code 307 (BTN_NORTH), value 0\nEvent: time 1756411274.997290, -------------- SYN_REPORT ------------"}
+{"level":20,"time":"2025-08-28T20:01:14.997Z","service":"cardmint","module":"controller","msg":"evtest event chunk: Event: time 1756411274.997290, type 1 (EV_KEY), code 307 (BTN_NORTH), value 0\nEvent: time 1756411274.997290, -------------- SYN_REPORT ------------"}
+{"level":20,"time":"2025-08-28T20:01:14.997Z","service":"cardmint","module":"controller-integration","msg":"Button event:"}
+{"level":20,"time":"2025-08-28T20:01:14.997Z","service":"cardmint","module":"controller","msg":"Button X (X): RELEASED"}
+{"level":20,"time":"2025-08-28T20:01:15.199Z","service":"cardmint","module":"controller","msg":"evtest (joystick) event chunk: Event: time 1756411275.199288, type 1 (EV_KEY), code 307 (BTN_NORTH), value 1\nEvent: time 1756411275.199288, -------------- SYN_REPORT ------------"}
+{"level":20,"time":"2025-08-28T20:01:15.199Z","service":"cardmint","module":"controller","msg":"evtest event chunk: Event: time 1756411275.199288, type 1 (EV_KEY), code 307 (BTN_NORTH), value 1\nEvent: time 1756411275.199288, -------------- SYN_REPORT ------------"}
+{"level":20,"time":"2025-08-28T20:01:15.199Z","service":"cardmint","module":"controller-integration","msg":"Button event:"}
+{"level":30,"time":"2025-08-28T20:01:15.199Z","service":"cardmint","module":"controller-integration","msg":"🎯 Controller capture triggered"}
+{"level":40,"time":"2025-08-28T20:01:15.199Z","service":"cardmint","module":"controller-integration","msg":"No camera configured for capture"}
+{"level":20,"time":"2025-08-28T20:01:15.199Z","service":"cardmint","module":"controller-integration","msg":"Broadcasting:"}
+{"level":30,"time":"2025-08-28T20:01:15.199Z","service":"cardmint","module":"controller-test","msg":"🎯 Controller action detected:"}
+{"level":30,"time":"2025-08-28T20:01:15.199Z","service":"cardmint","module":"controller","msg":"Controller action: capture (button: X)"}
+{"level":20,"time":"2025-08-28T20:01:15.199Z","service":"cardmint","module":"controller","msg":"Button X (X): PRESSED"}
+{"level":20,"time":"2025-08-28T20:01:15.325Z","service":"cardmint","module":"controller","msg":"evtest (joystick) event chunk: Event: time 1756411275.324847, type 1 (EV_KEY), code 307 (BTN_NORTH), value 0\nEvent: time 1756411275.324847, -------------- SYN_REPORT ------------"}
+{"level":20,"time":"2025-08-28T20:01:15.325Z","service":"cardmint","module":"controller","msg":"evtest event chunk: Event: time 1756411275.324847, type 1 (EV_KEY), code 307 (BTN_NORTH), value 0\nEvent: time 1756411275.324847, -------------- SYN_REPORT ------------"}
+{"level":20,"time":"2025-08-28T20:01:15.325Z","service":"cardmint","module":"controller-integration","msg":"Button event:"}
+{"level":20,"time":"2025-08-28T20:01:15.325Z","service":"cardmint","module":"controller","msg":"Button X (X): RELEASED"}
+{"level":20,"time":"2025-08-28T20:01:15.523Z","service":"cardmint","module":"controller","msg":"evtest (joystick) event chunk: Event: time 1756411275.523003, type 1 (EV_KEY), code 307 (BTN_NORTH), value 1\nEvent: time 1756411275.523003, -------------- SYN_REPORT ------------"}
+{"level":20,"time":"2025-08-28T20:01:15.523Z","service":"cardmint","module":"controller","msg":"evtest event chunk: Event: time 1756411275.523003, type 1 (EV_KEY), code 307 (BTN_NORTH), value 1\nEvent: time 1756411275.523003, -------------- SYN_REPORT ------------"}
+{"level":20,"time":"2025-08-28T20:01:15.523Z","service":"cardmint","module":"controller-integration","msg":"Button event:"}
+{"level":30,"time":"2025-08-28T20:01:15.523Z","service":"cardmint","module":"controller-integration","msg":"🎯 Controller capture triggered"}
+{"level":40,"time":"2025-08-28T20:01:15.523Z","service":"cardmint","module":"controller-integration","msg":"No camera configured for capture"}
+{"level":20,"time":"2025-08-28T20:01:15.523Z","service":"cardmint","module":"controller-integration","msg":"Broadcasting:"}
+{"level":30,"time":"2025-08-28T20:01:15.523Z","service":"cardmint","module":"controller-test","msg":"🎯 Controller action detected:"}
+{"level":30,"time":"2025-08-28T20:01:15.523Z","service":"cardmint","module":"controller","msg":"Controller action: capture (button: X)"}
+{"level":20,"time":"2025-08-28T20:01:15.523Z","service":"cardmint","module":"controller","msg":"Button X (X): PRESSED"}
+{"level":20,"time":"2025-08-28T20:01:15.632Z","service":"cardmint","module":"controller","msg":"evtest (joystick) event chunk: Event: time 1756411275.632639, type 1 (EV_KEY), code 307 (BTN_NORTH), value 0\nEvent: time 1756411275.632639, -------------- SYN_REPORT ------------"}
+{"level":20,"time":"2025-08-28T20:01:15.632Z","service":"cardmint","module":"controller","msg":"evtest event chunk: Event: time 1756411275.632639, type 1 (EV_KEY), code 307 (BTN_NORTH), value 0\nEvent: time 1756411275.632639, -------------- SYN_REPORT ------------"}
+{"level":20,"time":"2025-08-28T20:01:15.632Z","service":"cardmint","module":"controller-integration","msg":"Button event:"}
+{"level":20,"time":"2025-08-28T20:01:15.632Z","service":"cardmint","module":"controller","msg":"Button X (X): RELEASED"}
+{"level":20,"time":"2025-08-28T20:01:16.268Z","service":"cardmint","module":"controller","msg":"evtest (joystick) event chunk: Event: time 1756411276.268136, type 1 (EV_KEY), code 307 (BTN_NORTH), value 1\nEvent: time 1756411276.268136, -------------- SYN_REPORT ------------"}
+{"level":20,"time":"2025-08-28T20:01:16.268Z","service":"cardmint","module":"controller","msg":"evtest event chunk: Event: time 1756411276.268136, type 1 (EV_KEY), code 307 (BTN_NORTH), value 1\nEvent: time 1756411276.268136, -------------- SYN_REPORT ------------"}
+{"level":20,"time":"2025-08-28T20:01:16.268Z","service":"cardmint","module":"controller-integration","msg":"Button event:"}
+{"level":30,"time":"2025-08-28T20:01:16.268Z","service":"cardmint","module":"controller-integration","msg":"🎯 Controller capture triggered"}
+{"level":40,"time":"2025-08-28T20:01:16.268Z","service":"cardmint","module":"controller-integration","msg":"No camera configured for capture"}
+{"level":20,"time":"2025-08-28T20:01:16.268Z","service":"cardmint","module":"controller-integration","msg":"Broadcasting:"}
+{"level":30,"time":"2025-08-28T20:01:16.268Z","service":"cardmint","module":"controller-test","msg":"🎯 Controller action detected:"}
+{"level":30,"time":"2025-08-28T20:01:16.268Z","service":"cardmint","module":"controller","msg":"Controller action: capture (button: X)"}
+{"level":20,"time":"2025-08-28T20:01:16.268Z","service":"cardmint","module":"controller","msg":"Button X (X): PRESSED"}
+{"level":20,"time":"2025-08-28T20:01:16.415Z","service":"cardmint","module":"controller","msg":"evtest (joystick) event chunk: Event: time 1756411276.415253, type 1 (EV_KEY), code 307 (BTN_NORTH), value 0\nEvent: time 1756411276.415253, -------------- SYN_REPORT ------------"}
+{"level":20,"time":"2025-08-28T20:01:16.415Z","service":"cardmint","module":"controller","msg":"evtest event chunk: Event: time 1756411276.415253, type 1 (EV_KEY), code 307 (BTN_NORTH), value 0\nEvent: time 1756411276.415253, -------------- SYN_REPORT ------------"}
+{"level":20,"time":"2025-08-28T20:01:16.415Z","service":"cardmint","module":"controller-integration","msg":"Button event:"}
+{"level":20,"time":"2025-08-28T20:01:16.415Z","service":"cardmint","module":"controller","msg":"Button X (X): RELEASED"}
+{"level":20,"time":"2025-08-28T20:01:16.567Z","service":"cardmint","module":"controller","msg":"evtest (joystick) event chunk: Event: time 1756411276.567175, type 1 (EV_KEY), code 308 (BTN_WEST), value 1\nEvent: time 1756411276.567175, -------------- SYN_REPORT ------------"}
+{"level":20,"time":"2025-08-28T20:01:16.567Z","service":"cardmint","module":"controller","msg":"evtest event chunk: Event: time 1756411276.567175, type 1 (EV_KEY), code 308 (BTN_WEST), value 1\nEvent: time 1756411276.567175, -------------- SYN_REPORT ------------"}
+{"level":20,"time":"2025-08-28T20:01:16.567Z","service":"cardmint","module":"controller-integration","msg":"Button event:"}
+{"level":30,"time":"2025-08-28T20:01:16.567Z","service":"cardmint","module":"controller-integration","msg":"✏️ Controller edit action"}
+{"level":20,"time":"2025-08-28T20:01:16.567Z","service":"cardmint","module":"controller-integration","msg":"Broadcasting:"}
+{"level":30,"time":"2025-08-28T20:01:16.567Z","service":"cardmint","module":"controller-test","msg":"🎯 Controller action detected:"}
+{"level":30,"time":"2025-08-28T20:01:16.567Z","service":"cardmint","module":"controller","msg":"Controller action: edit (button: Y)"}
+{"level":20,"time":"2025-08-28T20:01:16.567Z","service":"cardmint","module":"controller","msg":"Button Y (Y): PRESSED"}
+{"level":20,"time":"2025-08-28T20:01:16.727Z","service":"cardmint","module":"controller","msg":"evtest (joystick) event chunk: Event: time 1756411276.727644, type 1 (EV_KEY), code 308 (BTN_WEST), value 0\nEvent: time 1756411276.727644, -------------- SYN_REPORT ------------"}
+{"level":20,"time":"2025-08-28T20:01:16.727Z","service":"cardmint","module":"controller","msg":"evtest event chunk: Event: time 1756411276.727644, type 1 (EV_KEY), code 308 (BTN_WEST), value 0\nEvent: time 1756411276.727644, -------------- SYN_REPORT ------------"}
+{"level":20,"time":"2025-08-28T20:01:16.727Z","service":"cardmint","module":"controller-integration","msg":"Button event:"}
+{"level":20,"time":"2025-08-28T20:01:16.727Z","service":"cardmint","module":"controller","msg":"Button Y (Y): RELEASED"}
+{"level":20,"time":"2025-08-28T20:01:16.880Z","service":"cardmint","module":"controller","msg":"evtest (joystick) event chunk: Event: time 1756411276.880257, type 1 (EV_KEY), code 308 (BTN_WEST), value 1\nEvent: time 1756411276.880257, -------------- SYN_REPORT ------------"}
+{"level":20,"time":"2025-08-28T20:01:16.880Z","service":"cardmint","module":"controller","msg":"evtest event chunk: Event: time 1756411276.880257, type 1 (EV_KEY), code 308 (BTN_WEST), value 1\nEvent: time 1756411276.880257, -------------- SYN_REPORT ------------"}
+{"level":20,"time":"2025-08-28T20:01:16.880Z","service":"cardmint","module":"controller-integration","msg":"Button event:"}
+{"level":30,"time":"2025-08-28T20:01:16.880Z","service":"cardmint","module":"controller-integration","msg":"✏️ Controller edit action"}
+{"level":20,"time":"2025-08-28T20:01:16.880Z","service":"cardmint","module":"controller-integration","msg":"Broadcasting:"}
+{"level":30,"time":"2025-08-28T20:01:16.880Z","service":"cardmint","module":"controller-test","msg":"🎯 Controller action detected:"}
+{"level":30,"time":"2025-08-28T20:01:16.880Z","service":"cardmint","module":"controller","msg":"Controller action: edit (button: Y)"}
+{"level":20,"time":"2025-08-28T20:01:16.880Z","service":"cardmint","module":"controller","msg":"Button Y (Y): PRESSED"}
+{"level":20,"time":"2025-08-28T20:01:17.011Z","service":"cardmint","module":"controller","msg":"evtest (joystick) event chunk: Event: time 1756411277.011307, type 1 (EV_KEY), code 308 (BTN_WEST), value 0\nEvent: time 1756411277.011307, -------------- SYN_REPORT ------------"}
+{"level":20,"time":"2025-08-28T20:01:17.011Z","service":"cardmint","module":"controller","msg":"evtest event chunk: Event: time 1756411277.011307, type 1 (EV_KEY), code 308 (BTN_WEST), value 0\nEvent: time 1756411277.011307, -------------- SYN_REPORT ------------"}
+{"level":20,"time":"2025-08-28T20:01:17.011Z","service":"cardmint","module":"controller-integration","msg":"Button event:"}
+{"level":20,"time":"2025-08-28T20:01:17.011Z","service":"cardmint","module":"controller","msg":"Button Y (Y): RELEASED"}
+{"level":20,"time":"2025-08-28T20:01:17.137Z","service":"cardmint","module":"controller","msg":"evtest (joystick) event chunk: Event: time 1756411277.137257, type 1 (EV_KEY), code 305 (BTN_EAST), value 1\nEvent: time 1756411277.137257, -------------- SYN_REPORT ------------"}
+{"level":20,"time":"2025-08-28T20:01:17.137Z","service":"cardmint","module":"controller","msg":"evtest event chunk: Event: time 1756411277.137257, type 1 (EV_KEY), code 305 (BTN_EAST), value 1\nEvent: time 1756411277.137257, -------------- SYN_REPORT ------------"}
+{"level":20,"time":"2025-08-28T20:01:17.137Z","service":"cardmint","module":"controller-integration","msg":"Button event:"}
+{"level":30,"time":"2025-08-28T20:01:17.137Z","service":"cardmint","module":"controller-integration","msg":"❌ Controller reject action"}
+{"level":20,"time":"2025-08-28T20:01:17.137Z","service":"cardmint","module":"controller-integration","msg":"Broadcasting:"}
+{"level":30,"time":"2025-08-28T20:01:17.137Z","service":"cardmint","module":"controller-test","msg":"🎯 Controller action detected:"}
+{"level":30,"time":"2025-08-28T20:01:17.137Z","service":"cardmint","module":"controller","msg":"Controller action: reject (button: B)"}
+{"level":20,"time":"2025-08-28T20:01:17.137Z","service":"cardmint","module":"controller","msg":"Button B (B): PRESSED"}
+{"level":20,"time":"2025-08-28T20:01:17.269Z","service":"cardmint","module":"controller","msg":"evtest (joystick) event chunk: Event: time 1756411277.269285, type 1 (EV_KEY), code 305 (BTN_EAST), value 0\nEvent: time 1756411277.269285, -------------- SYN_REPORT ------------"}
+{"level":20,"time":"2025-08-28T20:01:17.269Z","service":"cardmint","module":"controller","msg":"evtest event chunk: Event: time 1756411277.269285, type 1 (EV_KEY), code 305 (BTN_EAST), value 0\nEvent: time 1756411277.269285, -------------- SYN_REPORT ------------"}
+{"level":20,"time":"2025-08-28T20:01:17.269Z","service":"cardmint","module":"controller-integration","msg":"Button event:"}
+{"level":20,"time":"2025-08-28T20:01:17.269Z","service":"cardmint","module":"controller","msg":"Button B (B): RELEASED"}
+{"level":20,"time":"2025-08-28T20:01:17.347Z","service":"cardmint","module":"controller","msg":"evtest (joystick) event chunk: Event: time 1756411277.346979, type 1 (EV_KEY), code 305 (BTN_EAST), value 1\nEvent: time 1756411277.346979, -------------- SYN_REPORT ------------"}
+{"level":20,"time":"2025-08-28T20:01:17.347Z","service":"cardmint","module":"controller","msg":"evtest event chunk: Event: time 1756411277.346979, type 1 (EV_KEY), code 305 (BTN_EAST), value 1\nEvent: time 1756411277.346979, -------------- SYN_REPORT ------------"}
+{"level":20,"time":"2025-08-28T20:01:17.347Z","service":"cardmint","module":"controller-integration","msg":"Button event:"}
+

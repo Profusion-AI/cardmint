@@ -1,0 +1,184 @@
+Here’s the corrected integration
+approach so we leverage the right tools in the right places and keep GPT‑OSS-20B focused and
+fast.
+
+What Changes
+
+- Archon MCP: Use only for Claude Code via CLI. It’s a developer knowledge/RAG apparatus, not
+part of the end‑user GPT‑OSS runtime.
+- In Memoria: Use as GPT‑OSS‑20B’s persistent “memory” MCP. It learns and serves patterns/context
+to the agent.
+- CardMint tools: Expose CardMint’s read‑only, low‑latency capabilities in‑process (not via a new
+CardMint MCP server) to keep the hot path sub‑ms.
+
+Corrected Architecture
+
+- GPT‑OSS‑20B agent:
+    - In‑process tools:
+    - catalog.resolveExact: DeterministicResolver prepared statements.
+    - catalog.ftsSearch: FTS5 top‑K.
+    - inventory.checkOwnership: inventory_items.
+    - prices.getLatest: latest_market_prices view.
+    - ocr.retry: existing OCR service wrapper.
+    - tcg.lookup: PokemonTCGService.
+- Memory provider (MCP): In Memoria server (local).
+    - Reads: get_pattern_recommendations, predict_coding_approach, get_semantic_insights.
+    - Writes: contribute_insights for learned validation patterns, set aliases, common OCR
+errors, condition mapping anomalies.
+- Archon MCP (CLI only): For dev workflows (RAG on docs, code examples, task tracking), not in
+end‑user paths.
+
+Why This Works
+
+- Performance: Database/FTS/Resolver stay in‑process — no MCP overhead in the hot path.
+- Separation: Developer knowledge (Archon) remains out of user runtime; GPT‑OSS uses In Memoria
+for persistent memory.
+- Flexibility: In Memoria’s MCP toolkit stores/retrieves patterns we care about (we can encode
+domain insights through its “contribute_insights” path), while CardMint’s DB work happens
+locally, deterministically.
+
+In Memoria Alignment
+
+- Install and run locally for dev validation:
+    - npx in-memoria server
+    - npx in-memoria learn ./  (project root; incremental by default)
+- Tools to use for GPT‑OSS:
+    - get_learning_status / auto_learn_if_needed: ensure memory exists.
+    - contribute_insights: persist domain patterns (OCR error classes, set alias heuristics,
+mapping corrections).
+    - get_pattern_recommendations / get_semantic_insights: pull context for ambiguous decisions.
+- Notes from docs:
+    - MCP server; local SQLite + optional SurrealDB for vectors.
+    - Hyphenated tool names; 17 tools; supports code intelligence; runs offline.
+    - Resource‑light enough for dev; add timeouts and fallbacks if server not running.
+
+Implementation Plan
+
+- Phase A: Wire Memory Adapter (0.5–1 day)
+    - Add mcp/InMemoriaClient.ts: thin MCP client to call required tools with retries/timeouts.
+    - Add gpt/MemoryAdapter.ts: abstraction with methods: ensureReady(), contributeInsights(),
+fetchPatterns().
+    - Implement InMemoriaMemoryAdapter over the client; config via env (enable/disable, server
+endpoint).
+- Phase B: Agent Integration (0.5–1 day)
+    - In QAAgent’s pipeline (or GPT-OSS-20B wrapper):
+    - Before ambiguous resolution, call `fetchPatterns()` to bias decisions.
+    - After successful resolution/validation, call `contributeInsights()` with compact evidence
+(e.g., resolved alias, OCR mistake category, chosen price basis).
+- Guardrail: If In Memoria is down, continue without memory (no impact on main path).
+- Phase C: Developer Tooling (0.5 day)
+    - CLI scripts: mcp:memoria:status, mcp:memoria:bootstrap, mcp:memoria:learn.
+    - Health endpoint/ping (optional) and minimal telemetry.
+- Phase D: Test & Tune (0.5 day)
+    - Validate connection resilience, tool latency, contribution/readback loop.
+    - Measure ambiguous-case accuracy lift; ensure no regressions in hot path.
+
+Scope Changes From Claude’s Plan
+
+- Drop “dual MCP servers” in user runtime. Keep only In Memoria for GPT‑OSS, and Archon for CLI
+dev workflows.
+- Do not build a new CardMint MCP server; use in‑process tools for DB/FTS/Resolver/OCR/TCG to
+preserve sub‑ms performance.
+- “In Memoria” becomes the persistence layer for learned patterns; Archon is not used for
+end‑user memory.
+
+Risks & Mitigations
+
+- Server availability: Add non‑blocking timeouts and a circuit breaker; agent continues without
+memory.
+- Data relevance: Constrain contributed insights to compact, domain‑useful records (aliases, OCR
+fix patterns, mapping quirks).
+- Resource usage: In Memoria learns incrementally; schedule learning outside the capture loop;
+keep memory ops async/low‑priority.
+
+Config & Ops
+
+- Env flags:
+    - MEMORIA_ENABLED=true|false
+    - MEMORIA_ENDPOINT=localhost:… (default local)
+- Startup:
+    - Attempt ensureReady() once at boot; skip if unavailable.
+- Observability:
+    - Log memory hits/misses; count contributed insights; track ambiguous->resolved lift.
+
+#CTO-Codex
+
+- Archon MCP must remain a Claude Code CLI tool only; do not route GPT‑OSS user workflows through
+it.
+
+Short answer: Yes — in early development and controlled staging, letting Claude (via CLI) perform
+CRUD on a dev SQLite helps you converge on a sound schema quickly. In production operations,
+direct CLI CRUD should be off-limits; use migrations and app paths only.
+
+Context for CardMint
+
+- Development (bootstrap/Phase 3.x)
+    - Goal: Find the right schema, constraints, and indexes quickly.
+    - OK to do:
+    - Ad‑hoc CRUD and exploratory queries on a dev copy.
+    - Seed/repair data to test invariants (e.g., condition_scale, vendor mappings).
+    - Bulk loads with FTS triggers disabled, then rebuild.
+- Guardrails:
+    - Work on ephemeral DBs or snapshots (copy ./data/cardmint.db first).
+    - Capture successful steps as idempotent SQL in src/storage/migrations so others can
+reproduce.
+    - Add validation queries (unique triples, FK checks) and commit them to scripts/migrate.ts
+validate.
+
+- Staging (pre‑prod verification)
+    - Goal: Rehearse exactly what will run in prod.
+    - OK to do:
+    - Apply migrations via scripts/migrate.ts (no ad‑hoc DDL in staging).
+    - Seed via coded steps or explicit “seed” scripts; avoid hand edits.
+- Guardrails:
+    - WAL on, foreign_keys=ON, backups before changes.
+    - Run validate after every migration; smoke queries on views (prints, latest_market_prices).
+    - mcp-sqlite allowed only against a staging snapshot and ideally read‑only (mode=ro/immutable
+or file perms 0444).
+
+- Production (day‑to‑day operations)
+    - Goal: Stability, auditability, and performance (sub‑ms resolver).
+    - Do NOT do:
+    - Direct CLI CRUD on the live DB (AI or human).
+    - Arbitrary custom queries from an MCP DB server pointed at prod.
+- Required:
+    - All schema/data changes land as reviewed, idempotent migrations (006_inventory_layer.sql
+style) applied by scripts/migrate.ts with backup and validation.
+    - All routine writes flow through the application’s in‑process tools (Resolver/FTS/Inventory/
+Prices), not MCP.
+    - For emergencies: “break‑glass” procedure with backup, explicit maintenance window, and a
+revert plan.
+
+Why this split works
+
+- SQLite realities: DDL is limited and locks the DB; you want deterministic, transaction‑wrapped
+migrations with backups (WAL + checkpoint). Ad‑hoc edits are fine in dev, risky in prod.
+- Reproducibility: If Claude fixes consistency by hand in dev, capture it as a migration
+immediately. That avoids the “we fixed it once but can’t reproduce” trap.
+- Performance: In prod, resolver and DB access must stay in‑process; MCP adds latency and expands
+the blast radius of mistakes.
+- Governance: Treat schema as code. PR review, versioned migrations, validations, and clear
+rollback via backup.
+
+Practical policy
+
+- Dev: Claude can CRUD freely on dev copies; every useful change becomes an idempotent migration
++ validation.
+- Staging: Only run migrations and seed scripts; mcp-sqlite read‑only is acceptable for
+inspection.
+- Prod: No direct CLI CRUD; apply migrations via scripts/migrate.ts with backup + validate;
+normal traffic uses app code paths only.
+
+For your time/resource concern: Writing migrations “once, correctly” is cheaper than repeated
+manual fixes later. Use CLI CRUD in dev to discover the right shape, but institutionalize the
+result as migrations before it touches staging/prod.
+
+#CTO-Codex
+
+- Allow Claude’s CLI CRUD on dev snapshots to accelerate discovery; forbid it in production.
+- All production changes are via reviewed, idempotent migrations with backups and post‑checks.
+- If you adopt mcp-sqlite, restrict it to read‑only snapshots for dev/ops; never point it at live
+prod with writes enabled.
+- Keep CardMint’s runtime tools in‑process; reserve MCP for developer workflows and (optionally)
+In Memoria memory, not DB writes.
+

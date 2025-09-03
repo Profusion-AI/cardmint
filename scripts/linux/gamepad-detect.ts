@@ -19,6 +19,9 @@ type Detected = {
   byId?: string;
   eventPath?: string;
   realEventPath?: string;
+  keyboardById?: string;
+  keyboardEventPath?: string;
+  realKeyboardEventPath?: string;
   mode?: 'xinput' | 'dinput' | 'switch' | 'unknown';
 };
 
@@ -36,6 +39,49 @@ function guessMode(name: string): Detected['mode'] {
   return 'unknown';
 }
 
+function parseInputDevices(): { joystick?: string; keyboard?: string } | null {
+  try {
+    const content = fs.readFileSync('/proc/bus/input/devices', 'utf8');
+    const blocks = content.split('\n\n');
+    
+    let joystickEventNum: string | undefined;
+    let keyboardEventNum: string | undefined;
+    
+    for (const block of blocks) {
+      const lower = block.toLowerCase();
+      
+      // Look for 8BitDo devices
+      if (lower.includes('8bitdo') || lower.includes('8BitDo')) {
+        // Extract the handlers line
+        const handlerMatch = block.match(/Handlers=([^\n]+)/i);
+        if (!handlerMatch) continue;
+        
+        const handlers = handlerMatch[1];
+        
+        // Extract event number from handlers like "kbd event16" or "js0 event17"
+        const eventMatch = handlers.match(/event(\d+)/);
+        if (!eventMatch) continue;
+        
+        const eventNum = eventMatch[1];
+        
+        // Determine if this is joystick or keyboard interface
+        if (handlers.includes('js') && handlers.includes('event')) {
+          joystickEventNum = eventNum;
+        } else if (handlers.includes('kbd') && handlers.includes('event')) {
+          keyboardEventNum = eventNum;
+        }
+      }
+    }
+    
+    return {
+      joystick: joystickEventNum ? `/dev/input/event${joystickEventNum}` : undefined,
+      keyboard: keyboardEventNum ? `/dev/input/event${keyboardEventNum}` : undefined,
+    };
+  } catch (error) {
+    return null;
+  }
+}
+
 function listById(): string[] {
   try {
     return fs.readdirSync(BY_ID_DIR).map(f => path.join(BY_ID_DIR, f));
@@ -44,7 +90,37 @@ function listById(): string[] {
   }
 }
 
+// Returns the /dev/input/by-id symlink for the keyboard interface if found.
+// Do NOT resolve it here; callers can resolve separately when needed.
+function findKeyboardById(joystickByIdPath: string): string | undefined {
+  try {
+    const base = path.basename(joystickByIdPath);
+    const stem = base.replace(/-event-joystick$/, '');
+    
+    const entries = fs.readdirSync(BY_ID_DIR);
+    
+    // Look for keyboard interface with same stem
+    const patterns = [
+      `${stem}-if01-event-kbd`,
+      `${stem}-if02-event-kbd`,
+      `${stem}-event-kbd`,
+    ];
+    
+    for (const pattern of patterns) {
+      if (entries.includes(pattern)) {
+        const full = path.join(BY_ID_DIR, pattern);
+        // Return symlink path; resolution happens later for real path
+        return full;
+      }
+    }
+  } catch {
+    // Ignore errors, fallback to other methods
+  }
+  return undefined;
+}
+
 function resolveCandidate(matchSubstr?: string): Detected {
+  // First try by-id method
   const entries = listById().filter(p => p.endsWith('event-joystick'));
   let filtered = entries;
   if (matchSubstr) {
@@ -53,31 +129,75 @@ function resolveCandidate(matchSubstr?: string): Detected {
   }
 
   const best = filtered[0] || entries[0];
-  if (!best) return { status: 'WAITING', when: now() };
+  
+  if (best) {
+    // Resolve joystick path
+    let realPath = '';
+    try {
+      const link = fs.readlinkSync(best);
+      realPath = path.resolve(path.dirname(best), link);
+    } catch {}
 
-  let realPath = '';
-  try {
-    const link = fs.readlinkSync(best);
-    realPath = path.resolve(path.dirname(best), link);
-  } catch {}
+    // Try to find keyboard interface
+    const keyboardByIdPath = findKeyboardById(best);
+    let keyboardRealPath = '';
+    if (keyboardByIdPath) {
+      try {
+        if (fs.lstatSync(keyboardByIdPath).isSymbolicLink()) {
+          const link = fs.readlinkSync(keyboardByIdPath);
+          keyboardRealPath = path.resolve(path.dirname(keyboardByIdPath), link);
+        } else {
+          // If by-id returns a non-symlink path (unlikely), treat it as real path
+          keyboardRealPath = keyboardByIdPath;
+        }
+      } catch {}
+    }
 
-  return {
-    status: 'READY',
-    when: now(),
-    byId: best,
-    eventPath: best,
-    realEventPath: realPath || undefined,
-    mode: guessMode(path.basename(best)),
-  };
+    return {
+      status: 'READY',
+      when: now(),
+      byId: best,
+      eventPath: best,
+      realEventPath: realPath || undefined,
+      keyboardById: keyboardByIdPath,
+      keyboardEventPath: keyboardByIdPath, // keep for backward compat; may be by-id symlink
+      realKeyboardEventPath: keyboardRealPath || undefined,
+      mode: guessMode(path.basename(best)),
+    };
+  }
+
+  // Fallback to /proc/bus/input/devices parsing
+  const procDevices = parseInputDevices();
+  if (procDevices && (procDevices.joystick || procDevices.keyboard)) {
+    return {
+      status: 'READY',
+      when: now(),
+      eventPath: procDevices.joystick,
+      realEventPath: procDevices.joystick,
+      keyboardEventPath: procDevices.keyboard,
+      realKeyboardEventPath: procDevices.keyboard,
+      mode: 'dinput', // Assume 8BitDo is DInput mode
+    };
+  }
+
+  return { status: 'WAITING', when: now() };
 }
 
 function printStatus(det: Detected) {
   if (det.status === 'WAITING') {
     console.log(`WAITING ${JSON.stringify({ when: det.when })}`);
   } else {
-    console.log(
-      `READY ${JSON.stringify({ when: det.when, byId: det.byId, eventPath: det.eventPath, realEventPath: det.realEventPath, mode: det.mode })}`,
-    );
+    const result = {
+      when: det.when,
+      byId: det.byId,
+      eventPath: det.eventPath,
+      realEventPath: det.realEventPath,
+      keyboardById: det.keyboardById,
+      keyboardEventPath: det.keyboardEventPath,
+      realKeyboardEventPath: det.realKeyboardEventPath,
+      mode: det.mode,
+    };
+    console.log(`READY ${JSON.stringify(result)}`);
   }
 }
 
@@ -112,4 +232,3 @@ function main() {
 }
 
 main();
-

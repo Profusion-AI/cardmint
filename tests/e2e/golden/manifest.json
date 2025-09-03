@@ -16,7 +16,15 @@
       "pricing_source": "PriceCharting",
       "currency": "USD",
       "difficulty": "easy",
-      "notes": "1st Edition Neo card - clear image, standard layout"
+      "notes": "1st Edition Neo card - clear image, standard layout",
+      "hints": {
+        "expected_set_icon": "neo-revelation",
+        "roi_template": "neo_first_ed_v1",
+        "orientation_deg": 0,
+        "number_format": "plain",
+        "layout_hint": "neo",
+        "canonical_key": "neo-revelation|2|64|blissey"
+      }
     },
     {
       "index": 2,
@@ -28,7 +36,15 @@
       "pricing_source": "PriceCharting",
       "currency": "USD",
       "difficulty": "medium",
-      "notes": "McDonald's promo card - non-standard set format"
+      "notes": "McDonald's promo card - non-standard set format",
+      "hints": {
+        "expected_set_icon": "mcd-2019",
+        "roi_template": "promo_mcd_v1",
+        "orientation_deg": 0,
+        "number_format": "plain",
+        "layout_hint": "mcd_2019",
+        "canonical_key": "mcd-2019|12|12|eevee"
+      }
     },
     {
       "index": 3,
@@ -42,7 +58,15 @@
       "pricing_source": "PriceCharting",
       "currency": "USD",
       "difficulty": "hard",
-      "notes": "1st Edition with rotated orientation - tests image processing robustness AND 1st Edition detection"
+      "notes": "1st Edition with rotated orientation - tests image processing robustness AND 1st Edition detection",
+      "hints": {
+        "expected_set_icon": "neo-genesis",
+        "roi_template": "neo_first_ed_v1",
+        "orientation_deg": 90,
+        "number_format": "plain",
+        "layout_hint": "neo",
+        "canonical_key": "neo-genesis|81|111|totodile"
+      }
     },
     {
       "index": 4,
@@ -55,7 +79,15 @@
       "pricing_source": "PriceCharting",
       "currency": "USD",
       "difficulty": "medium",
-      "notes": "High-value 1st Edition Neo card - pricing accuracy critical"
+      "notes": "High-value 1st Edition Neo card - pricing accuracy critical",
+      "hints": {
+        "expected_set_icon": "neo-destiny",
+        "roi_template": "neo_first_ed_v1",
+        "orientation_deg": 0,
+        "number_format": "plain",
+        "layout_hint": "neo",
+        "canonical_key": "neo-destiny|5|105|dark-feraligatr"
+      }
     },
     {
       "index": 5,
@@ -67,7 +99,15 @@
       "pricing_source": "PriceCharting",
       "currency": "USD",
       "difficulty": "hard",
-      "notes": "POP Series format - uncommon set numbering"
+      "notes": "POP Series format - uncommon set numbering",
+      "hints": {
+        "expected_set_icon": "pop6",
+        "roi_template": "pop_bottom_band_v1",
+        "orientation_deg": 0,
+        "number_format": "plain",
+        "layout_hint": "pop",
+        "canonical_key": "pop6|1|17|bastiodon"
+      }
     },
     {
       "index": 6,
@@ -79,7 +119,15 @@
       "pricing_source": "PriceCharting",
       "currency": "USD",
       "difficulty": "easy",
-      "notes": "Modern Sun & Moon format - current layout"
+      "notes": "Modern Sun & Moon format - current layout",
+      "hints": {
+        "expected_set_icon": "sm1",
+        "roi_template": "sm_bottom_band_v1",
+        "orientation_deg": 0,
+        "number_format": "plain",
+        "layout_hint": "sm",
+        "canonical_key": "sm1|20|149|tsareena"
+      }
     },
     {
       "index": 7,
@@ -91,7 +139,15 @@
       "pricing_source": "PriceCharting",
       "currency": "USD",
       "difficulty": "easy",
-      "notes": "Latest Scarlet & Violet ex card - newest format"
+      "notes": "Latest Scarlet & Violet ex card - newest format",
+      "hints": {
+        "expected_set_icon": "sv2",
+        "roi_template": "sv_ex_bottom_band_v1",
+        "orientation_deg": 0,
+        "number_format": "zero_padded",
+        "layout_hint": "sv_ex",
+        "canonical_key": "sv2|27|193|wo-chien-ex"
+      }
     },
     {
       "index": 8,
@@ -103,7 +159,15 @@
       "pricing_source": "PriceCharting",
       "currency": "USD",
       "difficulty": "medium",
-      "notes": "SWSH format with zero-padded numbers"
+      "notes": "SWSH format with zero-padded numbers",
+      "hints": {
+        "expected_set_icon": "swsh3",
+        "roi_template": "swsh_bottom_band_v1",
+        "orientation_deg": 0,
+        "number_format": "zero_padded",
+        "layout_hint": "swsh",
+        "canonical_key": "swsh3|52|189|toxapex"
+      }
     },
     {
       "index": 9,
@@ -115,7 +179,16 @@
       "pricing_source": "PriceCharting",
       "currency": "USD",
       "difficulty": "hard",
-      "notes": "SWSH Promo with alphanumeric identifier - challenging format"
+      "notes": "SWSH Promo with alphanumeric identifier - challenging format",
+      "hints": {
+        "expected_set_icon": "black-star",
+        "roi_template": "promo_black_star_v1",
+        "orientation_deg": 0,
+        "number_format": "alphanumeric",
+        "promo_type": "swsh",
+        "layout_hint": "promo_swsh",
+        "canonical_key": "promo|swsh021|polteageist-v"
+      }
     },
     {
       "index": 10,
@@ -127,7 +200,16 @@
       "pricing_source": "PriceCharting",
       "currency": "USD",
       "difficulty": "hard",
-      "notes": "XY Promo format - alphanumeric identifier recognition"
+      "notes": "XY Promo format - alphanumeric identifier recognition",
+      "hints": {
+        "expected_set_icon": "black-star",
+        "roi_template": "promo_black_star_v1",
+        "orientation_deg": 0,
+        "number_format": "alphanumeric",
+        "promo_type": "xy",
+        "layout_hint": "promo_xy",
+        "canonical_key": "promo|xy50|pangoro"
+      }
     }
   ],
   "sloTargets": {
