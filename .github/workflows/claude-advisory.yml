@@ -1,0 +1,36 @@
+# CodexGuidance: Advisory reviewer. Produces exec-friendly summary + KPI mapping.
+name: Claude Advisory Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  advisory:
+    name: Claude Advisory Review
+    runs-on: ubuntu-latest
+    steps:
+      # CodexGuidance: Harden Claude runs (egress audit).
+      - name: Harden runner
+        uses: step-security/harden-runner@v2
+        with:
+          egress-policy: audit
+      - name: Load advisory prompt
+        id: advisory_prompt
+        shell: bash
+        run: |
+          echo 'prompt<<EOF' >> $GITHUB_OUTPUT
+          cat .github/claude/ADVISORY_PROMPT.md >> $GITHUB_OUTPUT
+          echo 'EOF' >> $GITHUB_OUTPUT
+
+      - uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          prompt: ${{ steps.advisory_prompt.outputs.prompt }}
+          claude_args: |
+            --max-turns 4
+            --model claude-sonnet-4-20250514
