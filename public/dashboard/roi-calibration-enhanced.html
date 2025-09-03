@@ -1,0 +1,477 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Enhanced ROI Calibration Tool</title>
+    <link rel="stylesheet" href="./enhanced-roi-tool.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <!-- Ambient Background -->
+    <div class="ambient-bg">
+        <div class="particle particle-1"></div>
+        <div class="particle particle-2"></div>
+        <div class="particle particle-3"></div>
+        <div class="particle particle-4"></div>
+        <div class="particle particle-5"></div>
+    </div>
+
+    <!-- Header Status Bar -->
+    <header class="header-bar glass-effect">
+        <div class="header-left">
+            <h1 class="brand-title">
+                <span class="brand-icon">🎯</span>
+                ROI Calibration Studio
+            </h1>
+            <div class="connection-status">
+                <div class="status-indicator online"></div>
+                <span class="status-text">Connected</span>
+            </div>
+        </div>
+        <div class="header-center">
+            <div class="header-tabs">
+                <button class="tab-button active" data-tab="canvas">
+                    <span class="tab-icon">🖼️</span>
+                    Canvas
+                </button>
+                <button class="tab-button" data-tab="templates">
+                    <span class="tab-icon">📋</span>
+                    Templates
+                </button>
+                <button class="tab-button" data-tab="testing">
+                    <span class="tab-icon">🧪</span>
+                    Testing
+                </button>
+            </div>
+        </div>
+        <div class="header-right">
+            <div class="zoom-control expand-on-hover">
+                <button id="zoomOut" class="zoom-btn glass-effect">
+                    <span class="zoom-icon">🔍</span>-
+                </button>
+                <span id="zoomIndicator" class="zoom-display">100%</span>
+                <button id="zoomIn" class="zoom-btn glass-effect">
+                    <span class="zoom-icon">🔍</span>+
+                </button>
+            </div>
+            <div class="notification-area">
+                <button class="notification-btn glass-effect" id="notificationTrigger">
+                    <span class="notification-icon">🔔</span>
+                    <span class="notification-badge" id="notificationBadge"></span>
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Application Layout -->
+    <div class="app-layout">
+        <!-- Left Sidebar - Templates & ROI Management -->
+        <aside class="left-sidebar glass-effect">
+            <div class="sidebar-header">
+                <h3 class="sidebar-title">
+                    <span class="section-icon">📋</span>
+                    ROI Templates
+                </h3>
+                <button class="sidebar-toggle floating-btn" id="sidebarToggle">
+                    <span class="toggle-icon">←</span>
+                </button>
+            </div>
+
+            <!-- Template Management -->
+            <div class="template-manager">
+                <div class="input-group">
+                    <label class="input-label">Template Select</label>
+                    <select id="templateSelect" class="template-selector glass-effect">
+                        <option value="">Loading templates...</option>
+                    </select>
+                </div>
+
+                <div class="input-group">
+                    <label class="input-label">Load Manifest</label>
+                    <div class="file-input-container">
+                        <input type="file" id="manifestInput" accept=".json" hidden>
+                        <button class="file-select-btn glass-effect">
+                            <span class="file-icon">📄</span>
+                            Choose File
+                        </button>
+                        <button class="load-server-btn glass-effect" id="loadServerManifest">
+                            <span class="server-icon">🌐</span>
+                            From Server
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ROI List with Enhanced Styling -->
+            <div class="roi-manager">
+                <div class="roi-header">
+                    <h4 class="roi-title">
+                        <span class="roi-count-icon">🎯</span>
+                        Active ROIs
+                        <span class="roi-count" id="roiCount">(0)</span>
+                    </h4>
+                    <div class="roi-controls">
+                        <button class="roi-btn floating-btn" id="addRoi">
+                            <span class="btn-icon">+</span>
+                        </button>
+                        <button class="roi-btn floating-btn" id="delRoi">
+                            <span class="btn-icon">×</span>
+                        </button>
+                        <button class="roi-btn floating-btn" id="copyRoi">
+                            <span class="btn-icon">📋</span>
+                        </button>
+                        <button class="roi-btn floating-btn" id="pasteRoi">
+                            <span class="btn-icon">📎</span>
+                        </button>
+                    </div>
+                </div>
+
+                <div id="roiList" class="roi-list">
+                    <!-- ROI items will be dynamically inserted -->
+                </div>
+            </div>
+
+            <!-- ROI Properties Panel -->
+            <div class="roi-properties scrollable-content">
+                <h4 class="properties-title">
+                    <span class="properties-icon">⚙️</span>
+                    ROI Properties
+                </h4>
+
+                <div class="property-panel" id="selectedROIProperties">
+                    <div class="property-group">
+                        <label class="property-label">Name</label>
+                        <input type="text" id="roiNameInput" class="property-input glass-effect" placeholder="ROI Name">
+                    </div>
+
+                    <div class="property-group">
+                        <label class="property-label">Color</label>
+                        <div class="color-picker">
+                            <input type="color" id="roiColorInput" class="color-input" value="#9e9e9e">
+                            <span id="colorPreview" class="color-preview"></span>
+                        </div>
+                    </div>
+
+                    <div class="property-group">
+                        <label class="property-label">Position</label>
+                        <div class="coordinates">
+                            <div class="coord-input">
+                                <span class="coord-label">X</span>
+                                <input type="number" id="roiXInput" class="coord-field glass-effect">
+                            </div>
+                            <div class="coord-input">
+                                <span class="coord-label">Y</span>
+                                <input type="number" id="roiYInput" class="coord-field glass-effect">
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="property-group">
+                        <label class="property-label">Size</label>
+                        <div class="coordinates">
+                            <div class="coord-input">
+                                <span class="coord-label">W</span>
+                                <input type="number" id="roiWidthInput" class="coord-field glass-effect">
+                            </div>
+                            <div class="coord-input">
+                                <span class="coord-label">H</span>
+                                <input type="number" id="roiHeightInput" class="coord-field glass-effect">
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="property-group">
+                        <label class="property-label">Conditions</label>
+                        <div class="conditions-panel">
+                            <label class="condition-label">
+                                <input type="checkbox" id="condPromo" class="condition-checkbox">
+                                <span class="condition-text">Promo Only</span>
+                            </label>
+                            <label class="condition-label">
+                                <input type="checkbox" id="condFirstEd" class="condition-checkbox">
+                                <span class="condition-text">First Edition Only</span>
+                            </label>
+                            <select id="condEra" class="condition-select glass-effect">
+                                <option value="">All Eras</option>
+                                <option value="classic">Classic</option>
+                                <option value="neo">Neo</option>
+                                <option value="modern">Modern</option>
+                                <option value="promo">Promo</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="property-actions">
+                    <button class="property-btn glass-effect" id="lockROI">
+                        <span class="btn-icon">🔒</span>
+                        Lock ROI
+                    </button>
+                    <button class="property-btn danger glass-effect" id="deleteROI">
+                        <span class="btn-icon">🗑️</span>
+                        Delete
+                    </button>
+                </div>
+                
+                <!-- State Management -->
+                <div class="state-management-section">
+                    <h4 class="sidebar-subtitle">
+                        <span class="section-icon">💾</span>
+                        Session Management
+                    </h4>
+                    <div class="state-actions">
+                        <button class="property-btn glass-effect" id="saveStateBtn">
+                            <span class="btn-icon">💾</span>
+                            Save Session
+                        </button>
+                        <button class="property-btn glass-effect" id="clearStateBtn">
+                            <span class="btn-icon">🔄</span>
+                            Clear Cache
+                        </button>
+                    </div>
+                    <div class="auto-save-status">
+                        <label class="control-label">
+                            <input type="checkbox" id="autoSaveToggle" class="control-checkbox" checked>
+                            <span class="control-text">Auto-save (5s)</span>
+                        </label>
+                        <span id="lastSaveTime" class="save-time-text">Never saved</span>
+                    </div>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Center Canvas Area -->
+        <main class="canvas-area">
+            <div class="canvas-container glass-effect">
+                <!-- Image Input Area -->
+                <div class="image-input-panel">
+                    <input type="file" id="imgInput" accept="image/*" hidden>
+                    <button class="load-image-btn floating-btn pulse">
+                        <span class="btn-icon">📸</span>
+                        Load Image
+                    </button>
+                    <div class="image-info" id="imageInfo">
+                        <span class="image-dimensions">-- x --</span>
+                        <span class="image-zoom">100%</span>
+                    </div>
+                </div>
+
+                <!-- Canvas Wrapper -->
+                <div id="canvasWrap" class="canvas-wrapper">
+                    <canvas id="imageCanvas" class="main-canvas"></canvas>
+
+                    <!-- Selection Handles Overlay -->
+                    <div class="selection-handles" id="selectionHandles">
+                        <div class="handle nw"></div>
+                        <div class="handle ne"></div>
+                        <div class="handle sw"></div>
+                        <div class="handle se"></div>
+                    </div>
+                </div>
+
+                <!-- Fixed Canvas Controls Toolbar -->
+                <div class="canvas-toolbar glass-effect">
+                    <div class="toolbar-section left">
+                        <button class="toolbar-btn reset-btn glass-effect" id="resetCanvas">
+                            <span class="btn-icon">🔄</span>
+                            Reset
+                        </button>
+                        <label class="toolbar-toggle">
+                            <input type="checkbox" id="snapGrid" class="toggle-checkbox">
+                            <span class="toggle-text">Snap to Grid</span>
+                        </label>
+                        <label class="toolbar-toggle">
+                            <input type="checkbox" id="percentMode" class="toggle-checkbox">
+                            <span class="toggle-text">Percent Mode</span>
+                        </label>
+                    </div>
+
+                    <div class="toolbar-section center">
+                        <div class="status-indicator">
+                            <span class="status-text" id="status">Ready</span>
+                            <div class="processing-indicator" id="processingIndicator"></div>
+                        </div>
+                    </div>
+
+                    <div class="toolbar-section right">
+                        <button class="toolbar-btn glass-effect" id="exportROI">
+                            <span class="btn-icon">📤</span>
+                            Export
+                        </button>
+                        <button class="toolbar-btn glass-effect" id="importROI">
+                            <span class="btn-icon">📥</span>
+                            Import
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Thumbnail Preview Strip -->
+                <div id="thumbs" class="thumbnail-strip">
+                    <!-- Thumbnails will be generated here -->
+                </div>
+            </div>
+        </main>
+
+        <!-- Right Sidebar - Testing & Preview -->
+        <aside class="right-sidebar glass-effect">
+            <div class="sidebar-header">
+                <h3 class="sidebar-title">
+                    <span class="section-icon">🧪</span>
+                    Testing Tools
+                </h3>
+                <button class="sidebar-toggle-right floating-btn" id="rightSidebarToggle">
+                    <span class="toggle-icon">→</span>
+                </button>
+            </div>
+
+            <!-- Testing Panel -->
+            <div class="testing-panel">
+                <div class="test-section">
+                    <h4 class="test-title">
+                        <span class="test-icon">📝</span>
+                        OCR Test
+                    </h4>
+                    <div class="test-controls">
+                        <select id="ocrTypeSel" class="test-select glass-effect">
+                            <option value="card_name">Card Name</option>
+                            <option value="set_code">Set Code</option>
+                            <option value="promo">Promo Text</option>
+                            <option value="artist">Artist</option>
+                        </select>
+                        <button class="test-btn glass-effect" id="testOCR">
+                            <span class="btn-icon">🔤</span>
+                            Test OCR
+                        </button>
+                    </div>
+                </div>
+
+                <div class="test-section">
+                    <h4 class="test-title">
+                        <span class="test-icon">🎯</span>
+                        Template Matching
+                    </h4>
+                    <div class="test-controls">
+                        <button class="test-btn glass-effect" id="testZNCC">
+                            <span class="btn-icon">⚡</span>
+                            Test ZNCC
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Test Results Output -->
+                <div class="test-results">
+                    <h4 class="test-title">
+                        <span class="test-icon">📊</span>
+                        Test Results
+                    </h4>
+                    <div id="testOut" class="results-display glass-effect">
+                        <div class="result-placeholder">
+                            <span class="placeholder-icon">🔮</span>
+                            <span class="placeholder-text">Run tests to see results here</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Preview Panel -->
+            <div class="preview-panel scrollable-content">
+                <h4 class="preview-title">
+                    <span class="preview-icon">👁️</span>
+                    Live Preview
+                </h4>
+                <div id="livePreview" class="preview-display glass-effect">
+                    <div class="preview-placeholder">
+                        <span class="placeholder-icon">📷</span>
+                        <span class="placeholder-text">Select an ROI to preview</span>
+                    </div>
+                </div>
+
+                <!-- Mini Canvas for ROI Preview -->
+                <canvas id="previewCanvas" class="preview-canvas"></canvas>
+
+                <!-- ROI Statistics -->
+                <div class="roi-stats">
+                    <div class="stat-item">
+                        <span class="stat-label">Coverage:</span>
+                        <span class="stat-value" id="coverageStat">--%</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-label">Aspect Ratio:</span>
+                        <span class="stat-value" id="aspectStat">--:--</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-label">Position:</span>
+                        <span class="stat-value" id="positionStat">(x,y)</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Export Panel -->
+            <div class="export-panel">
+                <h4 class="export-title">
+                    <span class="export-icon">📦</span>
+                    Export Options
+                </h4>
+                <div class="export-controls">
+                    <button class="export-btn glass-effect" id="exportManifest">
+                        <span class="btn-icon">📋</span>
+                        Full Manifest
+                    </button>
+                    <button class="export-btn glass-effect" id="exportPatch">
+                        <span class="btn-icon">🔧</span>
+                        Template Patch
+                    </button>
+                    <button class="export-btn glass-effect" id="exportROIConfig">
+                        <span class="btn-icon">⚙️</span>
+                        ROI Config
+                    </button>
+                </div>
+            </div>
+        </aside>
+    </div>
+
+    <!-- Floating Notifications -->
+    <div class="notification-container" id="notificationContainer">
+        <!-- Notifications will be dynamically inserted -->
+    </div>
+
+    <!-- Loading Overlay -->
+    <div class="loading-overlay" id="loadingOverlay">
+        <div class="loading-spinner glass-effect">
+            <div class="spinner"></div>
+            <span class="loading-text">Loading...</span>
+        </div>
+    </div>
+
+    <!-- Reset Confirmation Modal -->
+    <div class="modal-overlay" id="resetConfirmModal">
+        <div class="modal-dialog glass-effect">
+            <div class="modal-header">
+                <h3 class="modal-title">
+                    <span class="modal-icon">⚠️</span>
+                    Confirm Reset
+                </h3>
+            </div>
+            <div class="modal-body">
+                <p class="modal-message">This will undo any ROI changes made. Are you sure you want to reset?</p>
+            </div>
+            <div class="modal-footer">
+                <button class="modal-btn cancel-btn glass-effect" id="resetCancelBtn">
+                    <span class="btn-icon">❌</span>
+                    No
+                </button>
+                <button class="modal-btn confirm-btn glass-effect" id="resetConfirmBtn">
+                    <span class="btn-icon">✅</span>
+                    Yes
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Scripts -->
+    <script type="module" src="./enhanced-roi-tool.js"></script>
+</body>
+</html>

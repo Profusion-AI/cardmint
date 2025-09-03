@@ -1,0 +1,574 @@
+{
+  "version": "2025-09-02",
+  "namespace": "cardmint.pkm",
+  "conventions": {
+    "jsonKeyCase": "lowerCamelCase",
+    "enumCase": "SCREAMING_SNAKE_CASE",
+    "idFormat": "kebab-case",
+    "roiIdFormat": "familyId:roiName",
+    "languageCodes": ["EN", "JP"],
+    "layoutVariants": ["standard", "full_art", "landscape"],
+    "roiTiers": ["CRITICAL", "STANDARD", "DETAILED", "OPTIONAL"],
+    "roiRoles": ["text", "symbol", "pattern", "rulebox", "edge_logo", "art_border", "set_symbol", "number_box", "name_band", "evolution_box"]
+  },
+
+  "acronymCanon": {
+    "EX_2012": {
+      "display": "EX",
+      "canonical": "EX_2012",
+      "description": "Black & White / XY-era EX (uppercase) with rule box",
+      "ruleBox": true,
+      "synonyms": ["EX", "ex (uppercase era)", "BW-EX", "XY-EX"]
+    },
+    "ex_2003": {
+      "display": "ex",
+      "canonical": "ex_2003",
+      "description": "Ruby/Sapphire-era ex (lowercase) without rule box",
+      "ruleBox": false,
+      "synonyms": ["ex (no rule box)", "RS-ex", "2003-ex"]
+    },
+    "ex_2023": {
+      "display": "ex",
+      "canonical": "ex_2023",
+      "description": "Scarlet/Violet-era ex (lowercase) with rule box",
+      "ruleBox": true,
+      "synonyms": ["SV-ex", "2023-ex"]
+    },
+    "VMAX": {
+      "display": "VMAX",
+      "canonical": "VMAX",
+      "description": "Gigantamax-style evolution in SWSH",
+      "ruleBox": true,
+      "synonyms": ["Vmax"]
+    },
+    "VSTAR": {
+      "display": "VSTAR",
+      "canonical": "VSTAR",
+      "description": "VSTAR evolution with rule box",
+      "ruleBox": true,
+      "synonyms": ["VStar"]
+    },
+    "GX": {
+      "display": "GX",
+      "canonical": "GX",
+      "description": "Sun/Moon GX rule-box cards",
+      "ruleBox": true,
+      "synonyms": ["Gx"]
+    },
+    "TAG_TEAM": {
+      "display": "TAG TEAM",
+      "canonical": "TAG_TEAM",
+      "description": "Sun/Moon dual-Pokémon layout variant",
+      "ruleBox": true,
+      "synonyms": ["Tag Team", "TAGTEAM"]
+    },
+    "BREAK": {
+      "display": "BREAK",
+      "canonical": "BREAK",
+      "description": "XY-era landscape evolution overlay",
+      "ruleBox": false,
+      "synonyms": ["Break"]
+    },
+    "LEVEL_X": {
+      "display": "LV.X",
+      "canonical": "LEVEL_X",
+      "description": "DP-era Level Up (LV.X) with top-right token",
+      "ruleBox": false,
+      "synonyms": ["LV.X", "Level X", "Lv.X"]
+    },
+    "PRIME": {
+      "display": "Prime",
+      "canonical": "PRIME",
+      "description": "HGSS-era Prime jagged art window",
+      "ruleBox": false,
+      "synonyms": ["Prime"]
+    },
+    "LEGEND": {
+      "display": "LEGEND",
+      "canonical": "LEGEND",
+      "description": "Two-card split artwork (top/bottom halves)",
+      "ruleBox": false,
+      "synonyms": ["Legend (split)"]
+    },
+    "ACE_SPEC": {
+      "display": "ACE SPEC",
+      "canonical": "ACE_SPEC",
+      "description": "BW-era Trainer with side-edge logos",
+      "ruleBox": false,
+      "synonyms": ["Ace Spec", "ACESPEC"]
+    },
+    "RADIANT": {
+      "display": "Radiant",
+      "canonical": "RADIANT",
+      "description": "SV-era Radiant prefix + disco foil pattern",
+      "ruleBox": true,
+      "synonyms": ["Radiant"]
+    },
+    "DELTA_SPECIES": {
+      "display": "δ Delta Species",
+      "canonical": "DELTA_SPECIES",
+      "description": "EX-era δ symbol near name + double-helix border",
+      "ruleBox": false,
+      "synonyms": ["Delta Species", "δ"]
+    },
+    "TRAINER_OWNERSHIP": {
+      "display": "Trainer's Pokémon",
+      "canonical": "TRAINER_OWNERSHIP",
+      "description": "Gym/VS style: Owner's Name's Pokémon",
+      "ruleBox": false,
+      "synonyms": ["Gym", "VS", "Trainer's"]
+    }
+  },
+
+  "eras": [
+    {
+      "id": "classic_wotc",
+      "code": "WOTC",
+      "displayName": "Classic (WotC)",
+      "years": "1999–2002",
+      "familyDefault": "classic_wotc",
+      "synonyms": ["Base", "Jungle", "Fossil", "Team Rocket", "Gym", "Neo"],
+      "commonMarkers": ["no_rule_box", "wotc_set_symbol_zone"]
+    },
+    {
+      "id": "e_card",
+      "code": "E",
+      "displayName": "e-Card Series",
+      "years": "2002–2004",
+      "familyDefault": "e_card",
+      "synonyms": ["Expedition", "Aquapolis", "Skyridge"],
+      "commonMarkers": ["dotcode_borders", "e_series_typography"]
+    },
+    {
+      "id": "ex",
+      "code": "EX_2003",
+      "displayName": "EX Era (2003–2007)",
+      "years": "2003–2007",
+      "familyDefault": "ex_dp",
+      "synonyms": ["Ruby & Sapphire", "Delta Species", "Power Keepers"],
+      "commonMarkers": ["ex_2003_no_rule_box", "delta_species_possible"]
+    },
+    {
+      "id": "diamond_pearl",
+      "code": "DP",
+      "displayName": "Diamond & Pearl",
+      "years": "2007–2009",
+      "familyDefault": "ex_dp",
+      "synonyms": ["DP", "Platinum"],
+      "commonMarkers": ["level_x_possible"]
+    },
+    {
+      "id": "hgss",
+      "code": "HGSS",
+      "displayName": "HeartGold/SoulSilver",
+      "years": "2010–2011",
+      "familyDefault": "hgss",
+      "synonyms": ["HG&SS", "HS"],
+      "commonMarkers": ["prime_possible"]
+    },
+    {
+      "id": "bw",
+      "code": "BW",
+      "displayName": "Black & White",
+      "years": "2011–2013",
+      "familyDefault": "bw_xy",
+      "synonyms": ["BW"],
+      "commonMarkers": ["EX_2012_rule_box", "ace_spec_possible"]
+    },
+    {
+      "id": "xy",
+      "code": "XY",
+      "displayName": "XY",
+      "years": "2013–2016",
+      "familyDefault": "bw_xy",
+      "synonyms": ["XY"],
+      "commonMarkers": ["EX_2012_rule_box", "break_possible"]
+    },
+    {
+      "id": "sun_moon",
+      "code": "SM",
+      "displayName": "Sun & Moon",
+      "years": "2016–2020",
+      "familyDefault": "sun_moon",
+      "synonyms": ["SM"],
+      "commonMarkers": ["GX_rule_box", "tag_team_possible"]
+    },
+    {
+      "id": "sword_shield",
+      "code": "SWSH",
+      "displayName": "Sword & Shield",
+      "years": "2020–2023",
+      "familyDefault": "sword_shield",
+      "synonyms": ["SWSH"],
+      "commonMarkers": ["V_rule_family", "VMAX_possible", "VSTAR_possible"]
+    },
+    {
+      "id": "scarlet_violet",
+      "code": "SV",
+      "displayName": "Scarlet & Violet",
+      "years": "2023–present",
+      "familyDefault": "scarlet_violet",
+      "synonyms": ["SV"],
+      "commonMarkers": ["ex_2023_rule_box", "radiant_possible"]
+    }
+  ],
+
+  "layoutFamilies": [
+    {
+      "id": "classic_wotc",
+      "displayName": "Classic (WotC)",
+      "eraHints": ["classic_wotc"],
+      "defaultCoreRois": ["classic_wotc:name_band", "classic_wotc:set_symbol", "classic_wotc:number_box"],
+      "conditionalRois": ["classic_wotc:trainer_portrait", "classic_wotc:ownership_pattern"],
+      "typicalVariants": ["standard"]
+    },
+    {
+      "id": "e_card",
+      "displayName": "e-Card",
+      "eraHints": ["e_card"],
+      "defaultCoreRois": ["e_card:name_band", "e_card:number_box", "e_card:set_symbol"],
+      "conditionalRois": ["e_card:dotcode_border"],
+      "typicalVariants": ["standard"]
+    },
+    {
+      "id": "ex_dp",
+      "displayName": "EX/DP Transitional",
+      "eraHints": ["ex", "diamond_pearl"],
+      "defaultCoreRois": ["ex_dp:name_band", "ex_dp:number_box", "ex_dp:set_symbol"],
+      "conditionalRois": ["ex_dp:delta_species_band", "ex_dp:level_x_box"],
+      "typicalVariants": ["standard"]
+    },
+    {
+      "id": "hgss",
+      "displayName": "HGSS",
+      "eraHints": ["hgss"],
+      "defaultCoreRois": ["hgss:name_band", "hgss:number_box", "hgss:set_symbol"],
+      "conditionalRois": ["hgss:prime_art_border"],
+      "typicalVariants": ["standard"]
+    },
+    {
+      "id": "bw_xy",
+      "displayName": "BW/XY",
+      "eraHints": ["bw", "xy"],
+      "defaultCoreRois": ["bw_xy:name_band", "bw_xy:number_box", "bw_xy:set_symbol", "bw_xy:rule_box"],
+      "conditionalRois": ["bw_xy:ace_spec_edges", "bw_xy:break_landscape"],
+      "typicalVariants": ["standard", "landscape"]
+    },
+    {
+      "id": "sun_moon",
+      "displayName": "Sun/Moon",
+      "eraHints": ["sun_moon"],
+      "defaultCoreRois": ["sun_moon:name_band", "sun_moon:number_box", "sun_moon:set_symbol", "sun_moon:rule_box"],
+      "conditionalRois": ["sun_moon:tag_team_name_band"],
+      "typicalVariants": ["standard", "full_art"]
+    },
+    {
+      "id": "sword_shield",
+      "displayName": "Sword/Shield",
+      "eraHints": ["sword_shield"],
+      "defaultCoreRois": ["sword_shield:name_band", "sword_shield:number_box", "sword_shield:set_symbol", "sword_shield:rule_box"],
+      "conditionalRois": ["sword_shield:vmax_frame", "sword_shield:vstar_token"],
+      "typicalVariants": ["standard", "full_art", "landscape"]
+    },
+    {
+      "id": "scarlet_violet",
+      "displayName": "Scarlet/Violet",
+      "eraHints": ["scarlet_violet"],
+      "defaultCoreRois": ["scarlet_violet:name_band", "scarlet_violet:number_box", "scarlet_violet:set_symbol", "scarlet_violet:rule_box"],
+      "conditionalRois": ["scarlet_violet:radiant_prefix", "scarlet_violet:ex_badge"],
+      "typicalVariants": ["standard", "full_art"]
+    },
+    {
+      "id": "legend_split",
+      "displayName": "LEGEND Split",
+      "eraHints": ["diamond_pearl"],
+      "defaultCoreRois": ["legend_split:split_detector", "legend_split:name_band", "legend_split:number_box"],
+      "conditionalRois": [],
+      "typicalVariants": ["landscape"]
+    },
+    {
+      "id": "vmax_vstar_landscape",
+      "displayName": "VMAX/VSTAR Landscape",
+      "eraHints": ["sword_shield"],
+      "defaultCoreRois": ["vmax_vstar_landscape:name_band", "vmax_vstar_landscape:number_box", "vmax_vstar_landscape:rule_box"],
+      "conditionalRois": ["vmax_vstar_landscape:vmax_frame", "vmax_vstar_landscape:vstar_token"],
+      "typicalVariants": ["landscape"]
+    },
+    {
+      "id": "trainer_ownership",
+      "displayName": "Trainer Ownership",
+      "eraHints": ["classic_wotc"],
+      "defaultCoreRois": ["trainer_ownership:name_band", "trainer_ownership:ownership_pattern", "trainer_ownership:set_symbol"],
+      "conditionalRois": ["trainer_ownership:portrait_blob"],
+      "typicalVariants": ["standard"]
+    }
+  ],
+
+  "rarityMarkers": [
+    {
+      "id": "DELTA_SPECIES",
+      "displayName": "δ Delta Species",
+      "synonyms": ["Delta Species", "δ"],
+      "detectionCues": ["delta_symbol_in_name_band", "double_helix_art_border"],
+      "impacts": { "layoutVariants": ["standard"], "families": ["ex_dp"] }
+    },
+    {
+      "id": "LEVEL_X",
+      "displayName": "LV.X",
+      "synonyms": ["Level X", "LV.X", "Lv.X"],
+      "detectionCues": ["level_up_box_top_right", "LV.X_token_near_name"],
+      "impacts": { "layoutVariants": ["standard"], "families": ["ex_dp"] }
+    },
+    {
+      "id": "PRIME",
+      "displayName": "Prime",
+      "synonyms": ["Prime"],
+      "detectionCues": ["prime_jagged_art_window"],
+      "impacts": { "layoutVariants": ["standard"], "families": ["hgss"] }
+    },
+    {
+      "id": "LEGEND",
+      "displayName": "LEGEND",
+      "synonyms": ["Legend (split)"],
+      "detectionCues": ["two_card_seam", "full_surface_holo"],
+      "impacts": { "layoutVariants": ["landscape"], "families": ["legend_split"] }
+    },
+    {
+      "id": "ACE_SPEC",
+      "displayName": "ACE SPEC",
+      "synonyms": ["Ace Spec", "ACESPEC"],
+      "detectionCues": ["edge_logos_both_sides"],
+      "impacts": { "layoutVariants": ["standard"], "families": ["bw_xy"] }
+    },
+    {
+      "id": "RADIANT",
+      "displayName": "Radiant",
+      "synonyms": ["Radiant"],
+      "detectionCues": ["radiant_prefix_in_name", "disco_pattern_foil"],
+      "impacts": { "layoutVariants": ["standard", "full_art"], "families": ["scarlet_violet"] }
+    }
+  ],
+
+  "ruleBoxCanon": [
+    { "id": "ex_2003", "display": "ex", "ruleBox": false, "appliesToEras": ["ex"] },
+    { "id": "EX_2012", "display": "EX", "ruleBox": true,  "appliesToEras": ["bw", "xy"] },
+    { "id": "ex_2023", "display": "ex", "ruleBox": true,  "appliesToEras": ["scarlet_violet"] },
+    { "id": "GX",      "display": "GX", "ruleBox": true,  "appliesToEras": ["sun_moon"] },
+    { "id": "V/VSTAR/VMAX", "display": "V*", "ruleBox": true, "appliesToEras": ["sword_shield"] }
+  ],
+
+  "numberFormats": [
+    {
+      "id": "simple_fraction",
+      "pattern": "^(?<num>\\d{1,3})\\/(?<den>\\d{1,3})$",
+      "normalize": "{num}/{den}",
+      "examples": ["12/102", "4/110"]
+    },
+    {
+      "id": "secret_fraction",
+      "pattern": "^(?<num>\\d{1,3})\\/(?<den>\\d{1,3})$",
+      "isSecretRule": "parseInt(num) > parseInt(den)",
+      "normalize": "{num}/{den}",
+      "examples": ["102/100", "150/149"]
+    },
+    {
+      "id": "trainer_gallery",
+      "pattern": "^(?<prefix>TG|GG)(?<num>\\d{1,3})\\/(?<prefix2>TG|GG)(?<den>\\d{1,3})$",
+      "normalize": "{prefix}{num}/{prefix2}{den}",
+      "examples": ["TG12/TG30", "GG10/GG70"]
+    },
+    {
+      "id": "japanese_sr",
+      "pattern": "^(?<rarity>SR|UR|HR|CSR|CHR|AR|SAR)?(?<num>\\d{1,3})\\/(?<den>\\d{1,3})$",
+      "normalize": "{rarity}{num}/{den}",
+      "examples": ["SR88/78", "UR12/62", "SAR18/78"]
+    }
+  ],
+
+  "namePatterns": [
+    {
+      "id": "trainer_ownership",
+      "pattern": "^(?<owner>.+?)\\s*('|'|'s|`s)\\s*(?<pokemon>.+)$",
+      "normalize": "{owner}'s {pokemon}",
+      "notes": "Gym/VS style"
+    },
+    {
+      "id": "radiant_prefix",
+      "pattern": "^(Radiant)\\s+(?<pokemon>.+)$",
+      "normalize": "Radiant {pokemon}",
+      "notes": "SV Radiant"
+    },
+    {
+      "id": "delta_marker",
+      "pattern": "^(?<name>.+?)\\s*(δ)?$",
+      "normalize": "{name} δ",
+      "notes": "Delta symbol can appear near name band"
+    }
+  ],
+
+  "priceChartingMap": {
+    "ungradedPriceField": "loose_price",
+    "psa9PriceField": "condition_17_price",
+    "psa10PriceField": "condition_18_price",
+    "bgs10PriceField": "bgs_10_price",
+    "volumeField": "sales_per_week",
+    "idFields": ["card_name", "set_name", "card_number", "language"],
+    "normalizationRules": {
+      "card_name": ["applyNamePatterns", "stripMultipleSpaces"],
+      "set_name": ["canonSetName"],
+      "card_number": ["matchNumberFormats"],
+      "language": ["EN_or_JP"]
+    }
+  },
+
+  "ocrExtractSchema": {
+    "required": ["set_name", "card_number", "card_name", "language"],
+    "optional": ["rarity_hint", "rulebox_present", "layout_variant"],
+    "fieldRegex": {
+      "language": "^(EN|JP)$",
+      "card_number": "(^\\d{1,3}\\/\\d{1,3}$)|(^TG\\d+\\/TG\\d+$)|(^GG\\d+\\/GG\\d+$)|(^((SR|UR|HR|CSR|CHR|AR|SAR)?\\d{1,3}\\/\\d{1,3})$)"
+    }
+  },
+
+  "synonyms": {
+    "set": {
+      "Base": "Base Set",
+      "Base Set 2": "Base Set 2",
+      "SWSH": "Sword & Shield",
+      "SV": "Scarlet & Violet",
+      "Gym": "Gym Heroes/Gym Challenge",
+      "Neo": "Neo (Genesis/Discovery/Revelation/Destiny)"
+    },
+    "rarity": {
+      "Secret Rare": "SECRET_RARE",
+      "Hyper Rare": "HYPER_RARE",
+      "Rainbow Rare": "RAINBOW_RARE",
+      "Gold": "GOLD",
+      "Shiny": "SHINY",
+      "Alt Art": "ALTERNATE_ART"
+    },
+    "language": {
+      "English": "EN",
+      "ENG": "EN",
+      "Japanese": "JP",
+      "JPN": "JP"
+    }
+  },
+
+  "roiIdNaming": {
+    "examples": [
+      "scarlet_violet:name_band",
+      "bw_xy:rule_box",
+      "bw_xy:ace_spec_edges",
+      "ex_dp:delta_species_band",
+      "legend_split:split_detector"
+    ],
+    "rules": [
+      "Use layout family id as prefix",
+      "Use concise roiName (kebab-case)",
+      "Avoid coordinates in the id; store coords in ROI data"
+    ]
+  },
+
+  "familyDefaults": {
+    "classic_wotc": {
+      "critical": ["classic_wotc:name_band", "classic_wotc:set_symbol", "classic_wotc:number_box"],
+      "standard": [],
+      "detailed": ["classic_wotc:trainer_portrait", "classic_wotc:ownership_pattern"],
+      "optional": []
+    },
+    "e_card": {
+      "critical": ["e_card:name_band", "e_card:number_box", "e_card:set_symbol"],
+      "standard": [],
+      "detailed": ["e_card:dotcode_border"],
+      "optional": []
+    },
+    "ex_dp": {
+      "critical": ["ex_dp:name_band", "ex_dp:number_box", "ex_dp:set_symbol"],
+      "standard": [],
+      "detailed": ["ex_dp:delta_species_band", "ex_dp:level_x_box"],
+      "optional": []
+    },
+    "hgss": {
+      "critical": ["hgss:name_band", "hgss:number_box", "hgss:set_symbol"],
+      "standard": [],
+      "detailed": ["hgss:prime_art_border"],
+      "optional": []
+    },
+    "bw_xy": {
+      "critical": ["bw_xy:name_band", "bw_xy:number_box", "bw_xy:rule_box"],
+      "standard": ["bw_xy:set_symbol"],
+      "detailed": ["bw_xy:ace_spec_edges", "bw_xy:break_landscape"],
+      "optional": []
+    },
+    "sun_moon": {
+      "critical": ["sun_moon:name_band", "sun_moon:number_box", "sun_moon:set_symbol", "sun_moon:rule_box"],
+      "standard": [],
+      "detailed": ["sun_moon:tag_team_name_band"],
+      "optional": []
+    },
+    "sword_shield": {
+      "critical": ["sword_shield:name_band", "sword_shield:number_box", "sword_shield:set_symbol", "sword_shield:rule_box"],
+      "standard": [],
+      "detailed": ["sword_shield:vmax_frame", "sword_shield:vstar_token"],
+      "optional": []
+    },
+    "scarlet_violet": {
+      "critical": ["scarlet_violet:name_band", "scarlet_violet:number_box", "scarlet_violet:rule_box"],
+      "standard": ["scarlet_violet:set_symbol"],
+      "detailed": ["scarlet_violet:radiant_prefix", "scarlet_violet:ex_badge"],
+      "optional": []
+    },
+    "legend_split": {
+      "critical": ["legend_split:split_detector", "legend_split:name_band", "legend_split:number_box"],
+      "standard": [],
+      "detailed": [],
+      "optional": []
+    },
+    "vmax_vstar_landscape": {
+      "critical": ["vmax_vstar_landscape:name_band", "vmax_vstar_landscape:number_box", "vmax_vstar_landscape:rule_box"],
+      "standard": [],
+      "detailed": ["vmax_vstar_landscape:vmax_frame", "vmax_vstar_landscape:vstar_token"],
+      "optional": []
+    },
+    "trainer_ownership": {
+      "critical": ["trainer_ownership:name_band", "trainer_ownership:ownership_pattern", "trainer_ownership:set_symbol"],
+      "standard": [],
+      "detailed": ["trainer_ownership:portrait_blob"],
+      "optional": []
+    }
+  },
+
+  "acceptancePolicies": {
+    "newTemplate": {
+      "requires": ["≥2pp_accuracy_uplift_or_−1pp_ECE", "testCoverage", "docs"],
+      "maxRois": 40
+    },
+    "newROI": {
+      "requires": ["ablationProof", "uplift≥2pp_on_holdout"],
+      "autoDowngrade": "if_uplift<0.5pp_for_two_releases"
+    }
+  },
+
+  "examples": {
+    "ocrExtract": {
+      "set_name": "Crown Zenith",
+      "card_number": "GG10/GG70",
+      "card_name": "Radiant Charizard",
+      "rarity_hint": "RADIANT",
+      "rulebox_present": true,
+      "language": "EN",
+      "layout_variant": "full_art"
+    },
+    "normalized": {
+      "era": "sword_shield",
+      "family": "sword_shield",
+      "acronyms": ["RADIANT"],
+      "card_name": "Radiant Charizard",
+      "card_number": "GG10/GG70",
+      "set_name": "Crown Zenith",
+      "language": "EN",
+      "ruleBoxCanonical": "V/VSTAR/VMAX"
+    }
+  }
+}

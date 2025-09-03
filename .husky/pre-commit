@@ -1,0 +1,8 @@
+#!/usr/bin/env sh
+
+# Pre-commit hook to run lint-staged
+# Note: Ensure this file is executable: chmod +x .husky/pre-commit
+# If Husky hasn't initialized hooks yet, run: npx husky init
+
+npx lint-staged
+

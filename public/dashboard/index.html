@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="api-url" content="http://localhost:3000">
+    <meta name="ws-url" content="ws://localhost:3001">
+    <title>CardMint - Dashboard Router</title>
+    <script>
+        // Router logic to determine which dashboard to show
+        function route() {
+            const path = window.location.pathname;
+            const hash = window.location.hash;
+            
+            // Route to appropriate dashboard
+            if (path === '/dashboard' || path === '/dashboard/' || path === '/' || path === '') {
+                // Default to navigation hub (splash page)
+                window.location.replace('/navigation.html');
+            } else if (path.includes('/processing') || hash === '#processing') {
+                // Processing status dashboard
+                window.location.replace('/processing-status.html');
+            } else if (path.includes('/verification') || hash === '#verification') {
+                // Verification dashboard
+                window.location.replace('/verification.html');
+            } else {
+                // Default fallback to navigation hub
+                window.location.replace('/navigation.html');
+            }
+        }
+        
+        // Execute routing immediately
+        route();
+    </script>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            margin: 0;
+        }
+        .loading {
+            text-align: center;
+        }
+        .spinner {
+            border: 3px solid rgba(255,255,255,0.3);
+            border-top: 3px solid white;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 20px;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+  <script type="module" crossorigin src="/assets/banner-BpERPkmb.js"></script>
+</head>
+  <body>
+    <div class="loading">
+        <div class="spinner"></div>
+        <h2>Loading Dashboard...</h2>
+        <p>Routing to appropriate dashboard page...</p>
+    </div>
+</body>
+</html>

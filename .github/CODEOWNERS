@@ -1,0 +1,16 @@
+# CODEOWNERS
+# This file tells GitHub who must review changes to specific parts of the repo.
+# Replace the example handles with your GitHub username(s) to enforce reviews.
+# Learn more: https://docs.github.com/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+# Global default owner(s) — uncomment and set your handle to require a review on any change
+# * @your-github-handle
+
+# Path-specific owners (examples). Set these to folks who own areas.
+# src/ml/            @your-github-handle
+# src/api/           @your-github-handle
+# scripts/           @your-github-handle
+# public/dashboard/  @your-github-handle
+
+# Note: After setting owners, enable “Require review from Code Owners” in Branch Protection.
+

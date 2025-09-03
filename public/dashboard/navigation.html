@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="api-url" content="http://localhost:3000">
+    <meta name="ws-url" content="ws://localhost:3001">
+    <title>CardMint - Dashboard Hub</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 40px 20px;
+            color: white;
+        }
+        
+        .container {
+            max-width: 1000px;
+            width: 100%;
+            text-align: center;
+        }
+        
+        .header {
+            margin-bottom: 50px;
+        }
+        
+        .header h1 {
+            font-size: 3rem;
+            margin-bottom: 15px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.2);
+            background: linear-gradient(45deg, #fff, #e3f2fd);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        
+        .subtitle {
+            font-size: 1.2rem;
+            opacity: 0.9;
+            margin-bottom: 10px;
+        }
+        
+        .system-status {
+            display: inline-block;
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-size: 0.9rem;
+            font-weight: 600;
+            background: rgba(76, 175, 80, 0.2);
+            border: 2px solid #4caf50;
+            color: #4caf50;
+        }
+        
+        .dashboard-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 30px;
+            margin-top: 40px;
+        }
+        
+        .dashboard-card {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border-radius: 20px;
+            padding: 30px;
+            text-decoration: none;
+            color: white;
+            transition: all 0.3s ease;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+        
+        .dashboard-card:hover {
+            transform: translateY(-5px);
+            background: rgba(255, 255, 255, 0.2);
+            box-shadow: 0 20px 40px rgba(0,0,0,0.2);
+        }
+        
+        .card-icon {
+            font-size: 2.5rem;
+            margin-bottom: 15px;
+            display: block;
+        }
+        
+        .card-title {
+            font-size: 1.4rem;
+            font-weight: 600;
+            margin-bottom: 10px;
+        }
+        
+        .card-description {
+            font-size: 1rem;
+            opacity: 0.8;
+            line-height: 1.4;
+        }
+        
+        .quick-actions {
+            margin-top: 40px;
+            display: flex;
+            justify-content: center;
+            gap: 20px;
+            flex-wrap: wrap;
+        }
+        
+        .action-button {
+            background: rgba(255, 255, 255, 0.1);
+            border: 2px solid rgba(255, 255, 255, 0.3);
+            color: white;
+            padding: 12px 24px;
+            border-radius: 25px;
+            text-decoration: none;
+            font-weight: 600;
+            transition: all 0.3s ease;
+        }
+        
+        .action-button:hover {
+            background: rgba(255, 255, 255, 0.2);
+            border-color: rgba(255, 255, 255, 0.5);
+            transform: translateY(-2px);
+        }
+        
+        .footer {
+            margin-top: 50px;
+            opacity: 0.7;
+            font-size: 0.9rem;
+        }
+        
+        @media (max-width: 768px) {
+            .dashboard-grid {
+                grid-template-columns: 1fr;
+                gap: 20px;
+            }
+            
+            .header h1 {
+                font-size: 2.2rem;
+            }
+            
+            .quick-actions {
+                flex-direction: column;
+                align-items: center;
+            }
+        }
+    </style>
+  <script type="module" crossorigin src="/assets/banner-BpERPkmb.js"></script>
+  <script type="module" crossorigin src="/assets/main-DYFpucq2.js"></script>
+</head>
+  <body>
+    <div class="container">
+        <div class="header">
+            <h1>CardMint Dashboard</h1>
+            <div class="subtitle">Production Card Processing System</div>
+            <div class="system-status" id="systemStatus">● System Online</div>
+        </div>
+
+        <div class="dashboard-grid">
+            <a href="/processing-status.html" class="dashboard-card">
+                <div class="card-icon">📊</div>
+                <div class="card-title">Processing Status</div>
+                <div class="card-description">
+                    Real-time monitoring of card processing pipeline, queue status, and performance metrics.
+                </div>
+            </a>
+
+            <a href="/dashboard/performance.html" class="dashboard-card">
+                <div class="card-icon">⚡</div>
+                <div class="card-title">Performance Monitor</div>
+                <div class="card-description">
+                    Advanced system metrics, SLA tracking, and predictive performance analytics.
+                </div>
+            </a>
+
+            <a href="/dashboard/verification.html" class="dashboard-card">
+                <div class="card-icon">✅</div>
+                <div class="card-title">Card Verification</div>
+                <div class="card-description">
+                    Review and validate processed cards with streamlined approval workflow.
+                </div>
+            </a>
+
+            <a href="/dashboard/ensemble-dashboard.html" class="dashboard-card">
+                <div class="card-icon">📦</div>
+                <div class="card-title">Batch Results</div>
+                <div class="card-description">
+                    View ensemble processing results, batch operations, and export processed card data.
+                </div>
+            </a>
+
+            <a href="/dashboard/health.html" class="dashboard-card">
+                <div class="card-icon">🏥</div>
+                <div class="card-title">System Health</div>
+                <div class="card-description">
+                    Comprehensive system monitoring, diagnostics, and administrative controls.
+                </div>
+            </a>
+        </div>
+
+        <div class="quick-actions">
+            <a href="/api/health" class="action-button">Health Check</a>
+            <a href="/api/queue/status" class="action-button">Queue Status</a>
+            <a href="/api/cards" class="action-button">API Docs</a>
+        </div>
+
+        <div class="footer">
+            <p>CardMint v2.0 | Mac M4 ML Processing | Production Ready</p>
+        </div>
+    </div>
+
+    <script>
+        // Check system health on load
+        async function checkSystemHealth() {
+            try {
+                const response = await fetch('/api/health');
+                const health = await response.json();
+                
+                if (health.status === 'healthy') {
+                    document.getElementById('systemStatus').textContent = '● System Online';
+                    document.getElementById('systemStatus').style.background = 'rgba(76, 175, 80, 0.2)';
+                    document.getElementById('systemStatus').style.borderColor = '#4caf50';
+                    document.getElementById('systemStatus').style.color = '#4caf50';
+                } else {
+                    document.getElementById('systemStatus').textContent = '⚠ System Issues';
+                    document.getElementById('systemStatus').style.background = 'rgba(255, 152, 0, 0.2)';
+                    document.getElementById('systemStatus').style.borderColor = '#ff9800';
+                    document.getElementById('systemStatus').style.color = '#ff9800';
+                }
+            } catch (error) {
+                document.getElementById('systemStatus').textContent = '● System Offline';
+                document.getElementById('systemStatus').style.background = 'rgba(244, 67, 54, 0.2)';
+                document.getElementById('systemStatus').style.borderColor = '#f44336';
+                document.getElementById('systemStatus').style.color = '#f44336';
+            }
+        }
+
+        // Check health on page load
+        checkSystemHealth();
+        
+        // Check health every 30 seconds
+        setInterval(checkSystemHealth, 30000);
+    </script>
+    
+    <!-- Hot-reload reconnection toast (TypeScript + HMR-safe) -->
+</body>
+</html>
