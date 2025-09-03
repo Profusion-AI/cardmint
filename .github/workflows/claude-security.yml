@@ -1,0 +1,35 @@
+name: Claude Security Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  sec_review:
+    name: Claude Security Review
+    runs-on: ubuntu-latest
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@v2
+        with:
+          egress-policy: audit
+
+      - name: Load security prompt
+        id: security_prompt
+        shell: bash
+        run: |
+          echo 'prompt<<EOF' >> $GITHUB_OUTPUT
+          cat .github/claude/SECURITY_PROMPT.md >> $GITHUB_OUTPUT
+          echo 'EOF' >> $GITHUB_OUTPUT
+
+      - uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          prompt: ${{ steps.security_prompt.outputs.prompt }}
+          claude_args: |
+            --max-turns 4
+            --model claude-sonnet-4-20250514

@@ -1,0 +1,43 @@
+name: Codex PR Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  pull_request_review_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: ${{ github.repository }}-${{ github.event.number || github.head_ref || github.sha }}-${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  review:
+    if: github.event.pull_request.draft == false
+    name: Codex PR Review
+    runs-on: ubuntu-latest
+    steps:
+      - uses: AIdeaLab/openai-pr-reviewer@latest
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_MODEL: gpt-5
+        with:
+          debug: false
+          review_simple_changes: false
+          review_comment_lgtm: false
+          openai_heavy_model: gpt-5
+          openai_light_model: gpt-5
+          system_message: |
+            You are Codex, lead PR agent for CardMint.
+            Enforce succinctly with actionable diffs:
+            - TypeScript strict; Node >=20; keep modules small, typed.
+            - No imports from legacy/ into src/.
+            - src/core/** cannot import adapters/** or app/**.
+            - No // TODO, no dist/, no .env* or secrets in PR.
+            - Maintain >=80% coverage; tests beside code or under test/unit.
+            - Preserve capture loop performance; side effects via services/queues.
+            - Filenames kebab-case; classes PascalCase; identifiers camelCase.
