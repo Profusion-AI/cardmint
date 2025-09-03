@@ -10,6 +10,7 @@ import * as path from 'path';
 import axios, { AxiosInstance } from 'axios';
 import FormData from 'form-data';
 import { createLogger } from '../utils/logger';
+import { ports } from '../app/wiring';
 
 const logger = createLogger('ml-service-client');
 
@@ -318,7 +319,33 @@ export class MLServiceClient {
 }
 
 // Export singleton instance for convenience
-export const mlServiceClient = ports.infer;
+// (Codex-CTO) Adapter wrapper to bridge existing call sites to LMStudio inference
+export const mlServiceClient = {
+  async recognizeCard(imagePath: string, _enableCache: boolean = true): Promise<MLPrediction | null> {
+    try {
+      const inf = await ports.infer.classify(imagePath, { timeout: 30000 });
+      const status = await ports.infer.getStatus().catch(() => ({ model_name: 'unknown' } as any));
+      const mapped: MLPrediction = {
+        card_id: '',
+        card_name: inf.card_title || '',
+        set_name: inf.set_name || '',
+        card_number: inf.identifier?.number || '',
+        rarity: '',
+        confidence: inf.confidence,
+        ensemble_confidence: inf.confidence,
+        inference_time_ms: inf.inference_time_ms,
+        active_models: status?.model_name ? [status.model_name] : [],
+        cached: false,
+        timestamp: new Date().toISOString(),
+      };
+      logger.info('LM adapter recognizeCard mapped result', { card: mapped.card_name, conf: mapped.ensemble_confidence });
+      return mapped;
+    } catch (error) {
+      logger.error('LM adapter recognizeCard failed', error);
+      return null;
+    }
+  },
+};
 
 // Also export for testing and custom configurations
 export default MLServiceClient;

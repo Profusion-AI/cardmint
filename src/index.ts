@@ -7,6 +7,7 @@ import { gracefulShutdown } from './utils/shutdown';
 import { migrateToWalOrLog } from './lib/db/migrateToWal';
 import { config } from './config';
 import { NoopQueueManager, NoopMetricsCollector } from './utils/e2e-stubs';
+import { FileQueueManager } from './queue/FileQueueManager';
 import { SonyCameraIntegration } from './services/SonyCameraIntegration';
 import { ProductionCaptureWatcher } from './services/ProductionCaptureWatcher';
 import { CameraInputIntegration } from './services/CameraInputIntegration';
@@ -38,7 +39,8 @@ async function main() {
     
     let queueManager: any;
     if (e2eNoRedis) {
-      queueManager = new NoopQueueManager();
+      logger.info('Starting FileQueueManager for E2E mode...');
+      queueManager = new FileQueueManager('./data/queue');
       await queueManager.initialize();
     } else {
       logger.info('Starting queue manager...');
@@ -69,7 +71,17 @@ async function main() {
     let controllerService: ControllerService | undefined;
     let inputBus: InputBus | undefined;
     let cameraInputIntegration: CameraInputIntegration | undefined;
-    
+
+    // Start production capture watcher regardless of camera status
+    // This ensures files placed in the directory are always discovered
+    try {
+      captureWatcher = new ProductionCaptureWatcher(queueManager, cardRepository);
+      await captureWatcher.start();
+      logger.info('Production capture watcher started monitoring ./data/inventory_images/');
+    } catch (error) {
+      logger.error('Failed to start production capture watcher:', error);
+    }
+
     try {
       // Initialize Sony camera integration
       cameraIntegration = new SonyCameraIntegration();
@@ -85,11 +97,6 @@ async function main() {
         } else {
           logger.warn('Sony camera not connected during startup - will retry on first capture');
         }
-        
-        // Initialize capture watcher for inventory_images directory
-        captureWatcher = new ProductionCaptureWatcher(queueManager, cardRepository);
-        await captureWatcher.start();
-        logger.info('Production capture watcher started monitoring ./data/inventory_images/');
         
         // Initialize input bus for keyboard/controller events
         inputBus = new InputBus();
@@ -133,9 +140,39 @@ async function main() {
       cameraIntegration = undefined;
     }
     
-    // Phase 3: Use existing integrated services that combine all components
-    // IntegratedScannerService disabled in fast-build path; enable later if needed
-    logger.info('IntegratedScannerService not started (fast-build mode)');
+    // Phase 3: Enable IntegratedScannerService for E2E processing pipeline
+    let integratedScanner: any = undefined;
+    if (e2eNoRedis) {
+      logger.info('Starting IntegratedScannerService for E2E processing...');
+      const modPath = './services/' + 'IntegratedScannerService';
+      const mod: any = await import(modPath);
+      integratedScanner = mod.integratedScanner; // Use singleton instance
+      
+      // Connect queue to scanner for processing jobs
+      queueManager.on('processJob', async (job: any) => {
+        try {
+          if (job.imagePath && integratedScanner) {
+            logger.info(`Processing image via IntegratedScannerService: ${job.imagePath}`);
+            const result = await integratedScanner.processCard(job.imagePath);
+            if (result) {
+              await queueManager.completeJob(job.id, result);
+              logger.info(`Job ${job.id} completed successfully: ${result.name}`);
+            } else {
+              await queueManager.failJob(job.id, 'IntegratedScannerService returned null');
+            }
+          } else {
+            await queueManager.failJob(job.id, 'Missing imagePath or scanner service');
+          }
+        } catch (error) {
+          logger.error(`Job ${job.id} processing failed:`, error);
+          await queueManager.failJob(job.id, error.message);
+        }
+      });
+      
+      logger.info('IntegratedScannerService connected to FileQueueManager');
+    } else {
+      logger.info('IntegratedScannerService not started (Redis mode uses different pipeline)');
+    }
     
     // Optionally enable distributed pipeline when explicitly requested
     const enableDistributed = process.env.ENABLE_DISTRIBUTED === 'true';
@@ -164,7 +201,7 @@ async function main() {
       // Cleanup camera services first
       if (controllerService) {
         logger.info('Shutting down controller service...');
-        await controllerService.shutdown();
+        await controllerService.cleanup();
       }
       
       if (cameraInputIntegration) {
@@ -180,6 +217,11 @@ async function main() {
       if (cameraIntegration) {
         logger.info('Cleaning up Sony camera integration...');
         await cameraIntegration.cleanup();
+      }
+      
+      if (integratedScanner) {
+        logger.info('Cleaning up IntegratedScannerService...');
+        // IntegratedScannerService is a singleton, no explicit cleanup needed
       }
       
       // Standard system shutdown

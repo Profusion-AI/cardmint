@@ -97,13 +97,6 @@ export class SonyCameraWrapper {
         return this.runInSdkDirectory(() => this.camera.setProperty(name, value));
     }
 
-    startLiveView(): boolean {
-        return this.runInSdkDirectory(() => this.camera.startLiveView());
-    }
-
-    stopLiveView(): boolean {
-        return this.runInSdkDirectory(() => this.camera.stopLiveView());
-    }
 }
 
 // Export factory function

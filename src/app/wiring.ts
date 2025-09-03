@@ -4,6 +4,7 @@ import { LmStudioInference } from "../adapters/lmstudio/LmStudioInference";
 import type { InferencePort } from "../core/infer/InferencePort";
 import { ImageValidationAdapter } from "../adapters/validation/ImageValidationAdapter";
 import type { ValidationPort } from "../core/validate/ValidationPort";
+import { LocalFirstPipeline } from "../worker/verification/LocalFirstPipeline";
 import { logger } from "../utils/logger";
 
 /**
@@ -21,6 +22,7 @@ export type Ports = {
   image: ImageProcessorPort;
   infer: InferencePort;
   validate: ValidationPort;
+  localFirst: LocalFirstPipeline; // Local-First recognition pipeline
   // persist: PersistencePort; // Future: database adapter
 };
 
@@ -33,13 +35,16 @@ function createPorts(): Ports {
   const imageProcessor = new OpenCvImageProcessor();
   const inference = new LmStudioInference(LM_BASE, LM_MODEL);
   const validation = new ImageValidationAdapter();
+  const localFirst = new LocalFirstPipeline();
   
   logger.info(`Configured LMStudio: ${LM_BASE} (model: ${LM_MODEL})`);
+  logger.info(`Local-First enabled: ${process.env.LOCAL_FIRST_MATCH === 'true'}`);
   
   return {
     image: imageProcessor,
     infer: inference,
     validate: validation,
+    localFirst: localFirst,
   };
 }
 

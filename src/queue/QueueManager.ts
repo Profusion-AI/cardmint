@@ -5,6 +5,7 @@ import { createLogger } from '../utils/logger';
 import { CardStatus } from '../types';
 import { CardRepository } from '../storage/CardRepository';
 import { ports } from '../app/wiring';
+import { ImageProcessor } from '../processing/ImageProcessor';
 
 const logger = createLogger('queue');
 
@@ -18,6 +19,13 @@ export class QueueManager {
   
   async initialize(): Promise<void> {
     try {
+      // Debug: Check config availability
+      logger.debug('Config check:', {
+        processing: config.processing,
+        retryAttempts: config.processing?.retryAttempts,
+        retryDelayMs: config.processing?.retryDelayMs
+      });
+      
       // BullMQ needs its own Redis connection with specific settings
       const connection = {
         host: config.redis.host,
@@ -27,15 +35,19 @@ export class QueueManager {
         maxRetriesPerRequest: null, // Required by BullMQ
       };
       
+      // Use fallback values if config is not available
+      const retryAttempts = config.processing?.retryAttempts || 3;
+      const retryDelayMs = config.processing?.retryDelayMs || 1000;
+      
       this.captureQueue = new Queue('capture', {
         connection,
         defaultJobOptions: {
           removeOnComplete: 100,
           removeOnFail: 1000,
-          attempts: config.processing.retryAttempts,
+          attempts: retryAttempts,
           backoff: {
             type: 'exponential',
-            delay: config.processing.retryDelayMs,
+            delay: retryDelayMs,
           },
         },
       });
@@ -45,17 +57,18 @@ export class QueueManager {
         defaultJobOptions: {
           removeOnComplete: 100,
           removeOnFail: 1000,
-          attempts: config.processing.retryAttempts,
+          attempts: retryAttempts,
           backoff: {
             type: 'exponential',
-            delay: config.processing.retryDelayMs,
+            delay: retryDelayMs,
           },
         },
       });
       
       this.queueEvents = new QueueEvents('processing', { connection });
       
-      this.imageProcessor = ports.image;
+      // (Codex-CTO) Use the full processing pipeline (ML + OCR), not the low-level image adapter
+      this.imageProcessor = new ImageProcessor();
       this.cardRepository = new CardRepository();
       
       await this.startWorkers();
@@ -71,7 +84,7 @@ export class QueueManager {
   }
   
   private async startWorkers(): Promise<void> {
-    const workerCount = config.processing.maxWorkers;
+    const workerCount = config.processing?.maxWorkers || 2;
     
     for (let i = 0; i < workerCount; i++) {
       const worker = new Worker(
@@ -87,7 +100,7 @@ export class QueueManager {
             db: config.redis.db,
             maxRetriesPerRequest: null,
           },
-          concurrency: config.processing.workerConcurrency,
+          concurrency: config.processing?.workerConcurrency || 3,
           limiter: {
             max: 100,
             duration: 60000,
@@ -153,7 +166,7 @@ export class QueueManager {
       if (cardId) {
         await this.cardRepository!.updateStatus(
           cardId,
-          job.attemptsMade >= config.processing.retryAttempts
+          job.attemptsMade >= (config.processing?.retryAttempts || 3)
             ? CardStatus.FAILED
             : CardStatus.RETRYING,
           error instanceof Error ? error.message : 'Unknown error'
@@ -245,6 +258,57 @@ export class QueueManager {
     };
   }
   
+  /**
+   * Pause all queues to stop accepting new jobs
+   */
+  async pause(): Promise<void> {
+    logger.info('Pausing all queues...');
+    
+    const pausePromises = [];
+    if (this.captureQueue) {
+      pausePromises.push(this.captureQueue.pause());
+    }
+    if (this.processingQueue) {
+      pausePromises.push(this.processingQueue.pause());
+    }
+    
+    await Promise.all(pausePromises);
+    logger.info('All queues paused');
+  }
+
+  /**
+   * Wait for all active jobs to complete
+   */
+  async drain(): Promise<void> {
+    logger.info('Draining all queues (waiting for active jobs to complete)...');
+    
+    const drainPromises = [];
+    if (this.captureQueue) {
+      drainPromises.push(this.captureQueue.drain());
+    }
+    if (this.processingQueue) {
+      drainPromises.push(this.processingQueue.drain());
+    }
+    
+    // Also wait for workers to complete their current jobs
+    const workerPromises = this.workers.map(async (worker) => {
+      // Wait for worker to finish current job (if any)
+      return new Promise<void>((resolve) => {
+        if (worker.isRunning()) {
+          worker.once('completed', () => resolve());
+          worker.once('failed', () => resolve());
+          // Timeout after 10 seconds
+          setTimeout(() => resolve(), 10000);
+        } else {
+          resolve();
+        }
+      });
+    });
+    
+    await Promise.all([...drainPromises, ...workerPromises]);
+    logger.info('All queues drained and workers completed');
+  }
+
   async shutdown(): Promise<void> {
     logger.info('Shutting down queue manager...');
     

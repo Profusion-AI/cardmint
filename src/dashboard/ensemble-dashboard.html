@@ -3,6 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="api-url" content="http://localhost:3000">
+    <meta name="ws-url" content="ws://localhost:3001">
     <title>CardMint Vision - Batch Results Dashboard</title>
     <style>
         * {
@@ -807,7 +809,8 @@
         }
     </style>
 </head>
-<body>
+  <body>
+    <script type="module" src="/lib/banner.js"></script>
     <!-- Animated particles background -->
     <div class="particles" id="particles"></div>
 
@@ -944,7 +947,7 @@
                         </div>
                         <div style="text-align: center; padding: 15px; background: #F8FAFC; border-radius: 8px;">
                             <div style="font-size: 1.8em; font-weight: 700; color: #F59E0B;" id="reviewRequiredCount">0</div>
-                            <div style="color: #6B7280; font-size: 0.9em;">Requires Review (<80%)</div>
+                              <div style="color: #6B7280; font-size: 0.9em;">Requires Review (&lt;80%)</div>
                         </div>
                         <div style="text-align: center; padding: 15px; background: #F8FAFC; border-radius: 8px;">
                             <div style="font-size: 1.8em; font-weight: 700; color: #EF4444;" id="failedCount">0</div>
@@ -1182,7 +1185,7 @@
         // WebSocket connection for real-time updates (optional)
         let ws = null;
         const WS_URL = 'ws://localhost:3001';
-        const API_URL = 'http://localhost:8000';
+        const API_URL = 'http://localhost:3000';
 
         function connectWebSocket() {
             try {

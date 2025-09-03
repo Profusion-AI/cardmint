@@ -12,15 +12,20 @@ export class MetricsCollector {
   private gaugeCallbacks: Map<string, () => number> = new Map();
   
   async start(): Promise<void> {
-    if (!config.performance.enableMetrics) {
+    const enable = (config as any)?.performance?.enableMetrics ?? false;
+    if (!enable) {
       logger.info('Metrics collection disabled');
       return;
     }
     
-    this.setupMetricsServer();
-    this.startCollecting();
-    
-    logger.info(`Metrics server started on port ${config.monitoring.metricsPort}`);
+    try {
+      this.setupMetricsServer();
+      this.startCollecting();
+      logger.info('Metrics collection started');
+    } catch (error) {
+      logger.error('Failed to start metrics server:', error);
+      logger.info('Continuing without metrics server (non-critical service)');
+    }
   }
   
   private setupMetricsServer(): void {
@@ -37,9 +42,46 @@ export class MetricsCollector {
       }
     });
     
-    this.server.listen(config.monitoring.metricsPort);
+    // Handle port conflicts with graceful fallback
+    this.server.on('error', (error: NodeJS.ErrnoException) => {
+      if (error.code === 'EADDRINUSE') {
+        const port = (config as any)?.monitoring?.metricsPort ?? 9090;
+        logger.warn(`Metrics port ${port} in use, trying fallback port`);
+        // Try alternative ports
+        const fallbackPorts = [9092, 9093, 9094, 0]; // 0 = any available port
+        this.tryFallbackPorts(fallbackPorts);
+      } else {
+        logger.error('Metrics server error:', error);
+      }
+    });
+    
+    const port = (config as any)?.monitoring?.metricsPort ?? 9090;
+    this.server.listen(port);
   }
   
+  private tryFallbackPorts(ports: number[]): void {
+    if (ports.length === 0) {
+      logger.error('Failed to start metrics server on any available port');
+      return;
+    }
+    
+    const nextPort = ports.shift()!;
+    logger.info(`Trying metrics server on port ${nextPort}`);
+    
+    this.server?.removeAllListeners('error');
+    this.server?.on('error', (error: NodeJS.ErrnoException) => {
+      if (error.code === 'EADDRINUSE' && ports.length > 0) {
+        this.tryFallbackPorts(ports);
+      } else {
+        logger.error(`Metrics server failed on port ${nextPort}:`, error);
+      }
+    });
+    
+    this.server?.listen(nextPort, () => {
+      logger.info(`Metrics server started on fallback port ${nextPort}`);
+    });
+  }
+
   private startCollecting(): void {
     setInterval(() => {
       this.collectSystemMetrics();

@@ -1,0 +1,1145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="api-url" content="http://localhost:3000">
+    <meta name="ws-url" content="ws://localhost:3001">
+    <title>CardMint - Processing Status Dashboard</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 90px 20px 20px 20px;
+            color: white;
+        }
+        
+        .container {
+            max-width: 1200px;
+            width: 100%;
+        }
+        
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        
+        .header h1 {
+            font-size: 2.5rem;
+            margin-bottom: 10px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.2);
+        }
+        
+        .status {
+            display: inline-block;
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-size: 0.9rem;
+            font-weight: 600;
+            margin-top: 10px;
+        }
+        
+        .status.connected {
+            background: #48bb78;
+        }
+        
+        .status.disconnected {
+            background: #f56565;
+        }
+        
+        .main-panel {
+            background: white;
+            border-radius: 20px;
+            padding: 20px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            color: #333;
+        }
+        
+        /* Processing Overview Section */
+        .processing-overview {
+            background: #f7fafc;
+            border-radius: 10px;
+            padding: 20px;
+            margin-bottom: 20px;
+            min-height: 300px;
+        }
+        
+        .overview-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+        
+        .overview-title {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: #2d3748;
+        }
+        
+        .batch-controls {
+            display: flex;
+            gap: 10px;
+        }
+        
+        .btn {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 8px;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            background: #e2e8f0;
+            color: #4a5568;
+        }
+        
+        .btn:not(.btn-primary):not(.btn-success):not(.btn-info):hover {
+            background: #cbd5e0;
+        }
+        
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(0,0,0,0.2);
+        }
+        
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
+        
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+        
+        .btn-success {
+            background: linear-gradient(135deg, #48bb78 0%, #38a169 100%);
+            color: white;
+        }
+        
+        .btn-info {
+            background: linear-gradient(135deg, #4299e1 0%, #3182ce 100%);
+            color: white;
+        }
+        
+        /* Queue Status Grid */
+        .queue-status-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-bottom: 25px;
+        }
+        
+        .queue-card {
+            background: white;
+            padding: 20px;
+            border-radius: 12px;
+            border-left: 4px solid #667eea;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            transition: transform 0.2s;
+        }
+        
+        .queue-card:hover {
+            transform: translateY(-2px);
+        }
+        
+        .queue-card.capture {
+            border-left-color: #4299e1;
+        }
+        
+        .queue-card.processing {
+            border-left-color: #ed8936;
+        }
+        
+        .queue-card.completed {
+            border-left-color: #48bb78;
+        }
+        
+        .queue-card.failed {
+            border-left-color: #f56565;
+        }
+        
+        .queue-title {
+            font-size: 0.9rem;
+            color: #718096;
+            margin-bottom: 8px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            font-weight: 600;
+        }
+        
+        .queue-value {
+            font-size: 2rem;
+            font-weight: bold;
+            color: #2d3748;
+            margin-bottom: 5px;
+        }
+        
+        .queue-subtitle {
+            font-size: 0.8rem;
+            color: #a0aec0;
+        }
+        
+        /* Card Status Distribution */
+        .status-distribution {
+            background: #edf2f7;
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+        
+        .distribution-title {
+            font-size: 1.2rem;
+            font-weight: 700;
+            color: #2d3748;
+            margin-bottom: 15px;
+        }
+        
+        .status-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+            gap: 10px;
+        }
+        
+        .status-item {
+            background: white;
+            padding: 15px;
+            border-radius: 8px;
+            text-align: center;
+            border: 2px solid transparent;
+            transition: all 0.2s;
+        }
+        
+        .status-item:hover {
+            border-color: #667eea;
+            transform: scale(1.02);
+        }
+        
+        .status-item.capturing {
+            background: linear-gradient(to bottom, rgba(66, 153, 225, 0.1), white);
+        }
+        
+        .status-item.queued {
+            background: linear-gradient(to bottom, rgba(237, 137, 54, 0.1), white);
+        }
+        
+        .status-item.processing {
+            background: linear-gradient(to bottom, rgba(245, 101, 101, 0.1), white);
+        }
+        
+        .status-item.processed {
+            background: linear-gradient(to bottom, rgba(72, 187, 120, 0.1), white);
+        }
+        
+        .status-item.failed {
+            background: linear-gradient(to bottom, rgba(245, 101, 101, 0.2), white);
+        }
+        
+        .status-item.retrying {
+            background: linear-gradient(to bottom, rgba(236, 201, 75, 0.1), white);
+        }
+        
+        .status-count {
+            font-size: 1.8rem;
+            font-weight: bold;
+            color: #2d3748;
+        }
+        
+        .status-label {
+            font-size: 0.8rem;
+            color: #718096;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-top: 5px;
+        }
+        
+        /* Batch Processing Metrics */
+        .batch-metrics {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin-top: 20px;
+        }
+        
+        .metric-card {
+            background: #f7fafc;
+            padding: 20px;
+            border-radius: 12px;
+            border-left: 4px solid #667eea;
+            text-align: center;
+        }
+        
+        .metric-value {
+            font-size: 2.2rem;
+            font-weight: bold;
+            color: #667eea;
+            margin-bottom: 5px;
+        }
+        
+        .metric-label {
+            font-size: 0.9rem;
+            color: #718096;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        
+        .metric-subtitle {
+            font-size: 0.8rem;
+            color: #a0aec0;
+            margin-top: 5px;
+        }
+        
+        /* Progress Bars */
+        .progress-section {
+            margin: 20px 0;
+        }
+        
+        .progress-item {
+            margin-bottom: 15px;
+        }
+        
+        .progress-header {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 5px;
+        }
+        
+        .progress-label {
+            font-size: 0.9rem;
+            font-weight: 600;
+            color: #4a5568;
+        }
+        
+        .progress-percentage {
+            font-size: 0.9rem;
+            color: #718096;
+        }
+        
+        .progress-bar {
+            height: 8px;
+            background: #e2e8f0;
+            border-radius: 4px;
+            overflow: hidden;
+        }
+        
+        .progress-fill {
+            height: 100%;
+            border-radius: 4px;
+            transition: width 0.3s ease;
+        }
+        
+        .progress-fill.completion {
+            background: linear-gradient(90deg, #48bb78 0%, #38a169 100%);
+        }
+        
+        .progress-fill.throughput {
+            background: linear-gradient(90deg, #4299e1 0%, #3182ce 100%);
+        }
+        
+        .progress-fill.error-rate {
+            background: linear-gradient(90deg, #f56565 0%, #e53e3e 100%);
+        }
+        
+        /* Log Container */
+        .log-container {
+            margin-top: 20px;
+            background: #2d3748;
+            color: #e2e8f0;
+            padding: 15px;
+            border-radius: 8px;
+            font-family: 'Monaco', 'Menlo', monospace;
+            font-size: 0.85rem;
+            height: 200px;
+            overflow-y: auto;
+        }
+        
+        .log-entry {
+            margin-bottom: 5px;
+            opacity: 0;
+            animation: fadeIn 0.3s forwards;
+        }
+        
+        @keyframes fadeIn {
+            to { opacity: 1; }
+        }
+        
+        .log-time {
+            color: #718096;
+            margin-right: 10px;
+        }
+        
+        .log-success { color: #48bb78; }
+        .log-error { color: #f56565; }
+        .log-info { color: #63b3ed; }
+        .log-warning { color: #ed8936; }
+        
+        /* Upload/Capture UI Styles */
+        #fileInput {
+            display: none;
+        }
+        
+        .upload-area {
+            border: 2px dashed #cbd5e0;
+            border-radius: 8px;
+            padding: 30px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.2s;
+            background: #f7fafc;
+        }
+        
+        .upload-area:hover {
+            border-color: #667eea;
+            background: #edf2f7;
+        }
+        
+        .upload-icon {
+            font-size: 2rem;
+            margin-bottom: 10px;
+            color: #a0aec0;
+        }
+        
+        .upload-text {
+            font-size: 1rem;
+            color: #4a5568;
+            margin-bottom: 5px;
+        }
+        
+        .upload-hint {
+            font-size: 0.8rem;
+            color: #718096;
+        }
+        
+        .progress-container {
+            margin: 15px 0;
+        }
+        
+        .progress-container .progress-label {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 5px;
+            font-size: 0.9rem;
+            color: #4a5568;
+        }
+        
+        /* Processing overlay */
+        #processingOverlay {
+            display: none;
+            position: absolute;
+            inset: 0;
+            background: rgba(0,0,0,0.35);
+            backdrop-filter: saturate(120%) blur(2px);
+            border-radius: 12px;
+            z-index: 10;
+        }
+        
+        .spinner {
+            width: 40px;
+            height: 40px;
+            border: 4px solid #ffffff20;
+            border-top-color: #ffffff;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+        
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        
+        /* Respect reduced motion / kiosk mode */
+        @media (prefers-reduced-motion: reduce) {
+            .spinner { animation: none !important; }
+        }
+        body[data-mode="kiosk"] .spinner { animation: none !important; }
+        
+        /* Responsive */
+        @media (max-width: 768px) {
+            .queue-status-grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
+            
+            .status-grid {
+                grid-template-columns: repeat(3, 1fr);
+            }
+            
+            .batch-metrics {
+                grid-template-columns: repeat(2, 1fr);
+            }
+        }
+    </style>
+    <!-- Load navigation styles and component -->
+    <script type="module">
+        import { createNavigationHeader, createNavigationStyles, initializeNavigation } from './lib/navigation.ts';
+        
+        // Inject navigation styles
+        document.head.insertAdjacentHTML('beforeend', createNavigationStyles());
+        
+        // Inject navigation header
+        document.addEventListener('DOMContentLoaded', () => {
+            const navHTML = createNavigationHeader('/dashboard/index.html');
+            document.body.insertAdjacentHTML('afterbegin', navHTML);
+            initializeNavigation();
+        });
+    </script>
+</head>
+  <body>
+    <script type="module" src="/lib/banner.js"></script>
+    <div class="container">
+        <div class="header">
+            <h1>CardMint Processing Status</h1>
+            <span id="connectionStatus" class="status disconnected">Disconnected</span>
+        </div>
+        
+        <div class="main-panel">
+            <!-- Processing Overview Section -->
+            <div class="processing-overview">
+                <div class="overview-header">
+                    <h2 class="overview-title">Batch Processing Overview</h2>
+                    <div class="batch-controls">
+                        <button id="refreshBtn" class="btn btn-info">Refresh Status</button>
+                        <button id="pauseBtn" class="btn btn-primary">Pause Processing</button>
+                        <button id="clearBtn" class="btn btn-success">Clear Completed</button>
+                    </div>
+                </div>
+                
+                <!-- Queue Status Grid -->
+                <div class="queue-status-grid">
+                    <div class="queue-card capture">
+                        <div class="queue-title">Capture Queue</div>
+                        <div class="queue-value" id="captureQueueCount">0</div>
+                        <div class="queue-subtitle">waiting to process</div>
+                    </div>
+                    <div class="queue-card processing">
+                        <div class="queue-title">Processing Queue</div>
+                        <div class="queue-value" id="processingQueueCount">0</div>
+                        <div class="queue-subtitle">actively processing</div>
+                    </div>
+                    <div class="queue-card completed">
+                        <div class="queue-title">Completed Today</div>
+                        <div class="queue-value" id="completedCount">0</div>
+                        <div class="queue-subtitle">successfully processed</div>
+                    </div>
+                    <div class="queue-card failed">
+                        <div class="queue-title">Failed</div>
+                        <div class="queue-value" id="failedCount">0</div>
+                        <div class="queue-subtitle">require attention</div>
+                    </div>
+                </div>
+                
+                <!-- Upload / Capture UI -->
+                <div id="uploadWrapper" aria-labelledby="uploadHeading">
+                    <h3 id="uploadHeading" style="color:#1F2937;margin:16px 0 8px;">Add Cards</h3>
+                    <div style="display:flex;gap:10px;margin-bottom:12px;">
+                        <button class="btn btn-success" onclick="document.getElementById('fileInput').click()">Select Image</button>
+                        <button class="btn btn-primary" onclick="captureCard()">Capture From Camera</button>
+                    </div>
+                    <input id="fileInput" type="file" accept="image/*" aria-label="Select card image" onchange="handleFileSelect(event)" />
+
+                    <!-- Drag & Drop area -->
+                    <div id="uploadArea" class="upload-area" role="button" tabindex="0" aria-label="Drop an image here or press to select">
+                        <div class="upload-icon">⬆</div>
+                        <div class="upload-text">Drop an image here</div>
+                        <div class="upload-hint">PNG, JPG up to ~20MB</div>
+                    </div>
+
+                    <!-- Image preview -->
+                    <div id="imagePreview" style="display:none;margin-top:10px;">
+                        <img id="previewImage" alt="Selected card preview" style="max-width:100%;border-radius:8px;border:1px solid #E5E7EB;" />
+                    </div>
+
+                    <!-- Selected image info -->
+                    <div id="imageInfo" style="display:none;margin-top:8px;font-size:0.9em;color:#374151;">
+                        <span id="imageFileName"></span> —
+                        <span id="imageSize"></span> —
+                        <span id="imageDimensions"></span>
+                        <button class="btn btn-success" style="margin-left:10px;flex:0;" onclick="clearImagePreview(event)">Clear</button>
+                    </div>
+                </div>
+
+                <!-- Processing overlay for preview -->
+                <div id="processingOverlay" aria-hidden="true" style="display:none;position:absolute;inset:0;background:rgba(0,0,0,0.35);backdrop-filter:saturate(120%) blur(2px);align-items:center;justify-content:center;border-radius:12px;">
+                    <div class="spinner" aria-label="Processing"></div>
+                </div>
+
+                <!-- Global progress -->
+                <div class="progress-container" aria-labelledby="progressLabel">
+                    <div id="progressLabel" class="progress-label">
+                        <span>Processing Progress</span>
+                        <span id="progressPercent">0%</span>
+                    </div>
+                    <div class="progress-bar" aria-valuemin="0" aria-valuemax="100" aria-live="polite">
+                        <div id="progressFill" class="progress-fill completion" style="width:0%"></div>
+                    </div>
+                </div>
+
+                <!-- Progress Indicators -->
+                <div class="progress-section">
+                    <div class="progress-item">
+                        <div class="progress-header">
+                            <span class="progress-label">Batch Completion</span>
+                            <span class="progress-percentage" id="completionPercentage">0%</span>
+                        </div>
+                        <div class="progress-bar">
+                            <div class="progress-fill completion" id="completionProgress" style="width: 0%"></div>
+                        </div>
+                    </div>
+                    <div class="progress-item">
+                        <div class="progress-header">
+                            <span class="progress-label">Processing Throughput</span>
+                            <span class="progress-percentage" id="throughputPercentage">0 cards/min</span>
+                        </div>
+                        <div class="progress-bar">
+                            <div class="progress-fill throughput" id="throughputProgress" style="width: 0%"></div>
+                        </div>
+                    </div>
+                    <div class="progress-item">
+                        <div class="progress-header">
+                            <span class="progress-label">Error Rate</span>
+                            <span class="progress-percentage" id="errorRatePercentage">0%</span>
+                        </div>
+                        <div class="progress-bar">
+                            <div class="progress-fill error-rate" id="errorRateProgress" style="width: 0%"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Card Status Distribution -->
+            <div class="status-distribution">
+                <h3 class="distribution-title">Card Status Distribution</h3>
+                <div class="status-grid">
+                    <div class="status-item capturing">
+                        <div class="status-count" id="capturingCount">0</div>
+                        <div class="status-label">Capturing</div>
+                    </div>
+                    <div class="status-item queued">
+                        <div class="status-count" id="queuedCount">0</div>
+                        <div class="status-label">Queued</div>
+                    </div>
+                    <div class="status-item processing">
+                        <div class="status-count" id="processingCount">0</div>
+                        <div class="status-label">Processing</div>
+                    </div>
+                    <div class="status-item processed">
+                        <div class="status-count" id="processedCount">0</div>
+                        <div class="status-label">Processed</div>
+                    </div>
+                    <div class="status-item failed">
+                        <div class="status-count" id="failedStatusCount">0</div>
+                        <div class="status-label">Failed</div>
+                    </div>
+                    <div class="status-item retrying">
+                        <div class="status-count" id="retryingCount">0</div>
+                        <div class="status-label">Retrying</div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Batch Processing Metrics -->
+            <div class="batch-metrics">
+                <div class="metric-card">
+                    <div class="metric-value" id="avgProcessingTime">-</div>
+                    <div class="metric-label">Avg Processing</div>
+                    <div class="metric-subtitle">milliseconds per card</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-value" id="queueDepth">0</div>
+                    <div class="metric-label">Queue Backlog</div>
+                    <div class="metric-subtitle">cards pending</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-value" id="memoryUsage">-</div>
+                    <div class="metric-label">Memory Usage</div>
+                    <div class="metric-subtitle">MB consumed</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-value" id="cpuUsage">-</div>
+                    <div class="metric-label">CPU Usage</div>
+                    <div class="metric-subtitle">percentage</div>
+                </div>
+            </div>
+            
+            <!-- Activity Log -->
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                <h3 style="color: #2d3748; margin: 0;">Activity Log</h3>
+                <div style="display: flex; gap: 8px;">
+                    <button id="pauseConsoleBtn" class="btn" style="padding: 6px 12px; font-size: 0.8rem;" onclick="toggleConsolePause()">Pause Console</button>
+                    <button class="btn" style="padding: 6px 12px; font-size: 0.8rem;" onclick="copyConsoleToClipboard()">Copy Log</button>
+                </div>
+            </div>
+            <div class="log-container" id="logContainer">
+                <div class="log-entry log-info">
+                    <span class="log-time">[00:00:00]</span>
+                    Processing status dashboard initialized. Monitoring batch operations.
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <script type="module">
+        import { getWebSocketManager, subscribeToQueueUpdates, subscribeToConnectionStatus, requestStatus } from './lib/websocket-manager.ts';
+        
+        // Configuration via meta tags
+        const WS_URL = document.querySelector('meta[name="ws-url"]')?.content || 'ws://localhost:3001';
+        const API_URL = document.querySelector('meta[name="api-url"]')?.content || 'http://localhost:3000';
+        
+        // Console/telemetry
+        const batchConsoleEntries = [];   // bounded in memory & DOM
+        const MAX_IN_MEMORY = 200, MAX_IN_DOM = 100;
+        let currentFilter = 'all';
+        
+        // User preferences management
+        const UserPrefs = {
+            load() {
+                try {
+                    const saved = localStorage.getItem('cardmint-dashboard-prefs');
+                    return saved ? JSON.parse(saved) : {};
+                } catch {
+                    return {};
+                }
+            },
+            save(prefs) {
+                try {
+                    const current = this.load();
+                    localStorage.setItem('cardmint-dashboard-prefs', JSON.stringify({...current, ...prefs}));
+                } catch (error) {
+                    console.warn('Could not save preferences:', error);
+                }
+            },
+            get(key, defaultValue) {
+                const prefs = this.load();
+                return prefs[key] !== undefined ? prefs[key] : defaultValue;
+            },
+            set(key, value) {
+                this.save({ [key]: value });
+            }
+        };
+        
+        // Initialize WebSocket manager
+        const wsManager = getWebSocketManager();
+        let connected = false;
+        let lastUpdateTime = Date.now();
+        
+        // Apply saved preferences
+        currentFilter = UserPrefs.get('consoleFilter', 'all');
+        
+        // Check for reduced motion preference
+        const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        if (prefersReducedMotion || UserPrefs.get('reducedMotion', false)) {
+            document.body.dataset.mode = 'kiosk';
+        }
+        
+        // DOM elements
+        const refreshBtn = document.getElementById('refreshBtn');
+        const pauseBtn = document.getElementById('pauseBtn');
+        const clearBtn = document.getElementById('clearBtn');
+        const connectionStatus = document.getElementById('connectionStatus');
+        const logContainer = document.getElementById('logContainer');
+        
+        function logBatchOperation(type, batchId, message, data = {}) {
+            const timestamp = new Date().toLocaleTimeString();
+            const entry = {
+                id: Date.now(),
+                timestamp,
+                type,
+                batchId,
+                message,
+                data
+            };
+            batchConsoleEntries.push(entry);
+            if (batchConsoleEntries.length > MAX_IN_MEMORY) {
+                batchConsoleEntries.shift();
+            }
+            if (shouldShowEntry(entry)) addConsoleEntry(entry);
+        }
+        
+        // Unified logger used by API/UI handlers
+        function logApiCall(kind, method, url, data = {}) {
+            const entry = {
+                id: Date.now(),
+                timestamp: new Date().toLocaleTimeString(),
+                type: kind,          // 'request' | 'response' | 'error' | 'warning' | 'validation'
+                method: method || '',
+                url: url || '',
+                data
+            };
+            batchConsoleEntries.push(entry);
+            if (batchConsoleEntries.length > MAX_IN_MEMORY) batchConsoleEntries.shift();
+            if (shouldShowEntry(entry)) addConsoleEntry(entry);
+        }
+        
+        function shouldShowEntry(entry) {
+            return currentFilter === 'all' || entry.type === currentFilter;
+        }
+        
+        // Console pause/resume functionality
+        let consolePaused = UserPrefs.get('consolePaused', false);
+        function toggleConsolePause() {
+            consolePaused = !consolePaused;
+            UserPrefs.set('consolePaused', consolePaused);
+            
+            const pauseButton = document.getElementById('pauseConsoleBtn');
+            if (pauseButton) {
+                pauseButton.textContent = consolePaused ? 'Resume Console' : 'Pause Console';
+            }
+            
+            log(consolePaused ? 'Console paused for debugging' : 'Console resumed', 'info');
+        }
+        
+        function addConsoleEntry(entry) {
+            if (consolePaused) return; // Skip if console is paused
+            
+            const logContainer = document.getElementById('logContainer');
+            const div = document.createElement('div');
+            div.className = `log-entry log-${entry.type}`;
+            div.appendChild(document.createElement('span')).className = 'log-time';
+            div.firstChild.textContent = `[${entry.timestamp}] `;
+            div.appendChild(document.createTextNode(entry.message || `${entry.method} ${entry.url}`));
+            logContainer.appendChild(div);
+            logContainer.scrollTop = logContainer.scrollHeight;
+            
+            // Keep only last MAX_IN_DOM entries in DOM
+            while (logContainer.children.length > MAX_IN_DOM) {
+                logContainer.removeChild(logContainer.lastChild);
+            }
+        }
+        
+        function log(message, type = 'info') {
+            logApiCall(type, '', '', { message });
+        }
+        
+        function updateStatus(isConnected) {
+            connected = isConnected;
+            connectionStatus.textContent = isConnected ? 'Connected' : 'Disconnected';
+            connectionStatus.className = `status ${isConnected ? 'connected' : 'disconnected'}`;
+        }
+        
+        function updateQueueStatus(data) {
+            if (!data) {
+                showEmptyState('No queue data available. Click "Refresh Status" to reload.');
+                return;
+            }
+            
+            if (data.capture) {
+                document.getElementById('captureQueueCount').textContent = 
+                    data.capture.waiting + data.capture.active;
+            }
+            
+            if (data.processing) {
+                document.getElementById('processingQueueCount').textContent = 
+                    data.processing.active;
+                document.getElementById('completedCount').textContent = 
+                    data.processing.completed;
+                document.getElementById('failedCount').textContent = 
+                    data.processing.failed;
+            }
+        }
+        
+        function showEmptyState(message) {
+            const logContainer = document.getElementById('logContainer');
+            if (logContainer.children.length === 0) {
+                const emptyDiv = document.createElement('div');
+                emptyDiv.className = 'log-entry log-info';
+                emptyDiv.innerHTML = `
+                    <span class="log-time">[${new Date().toLocaleTimeString()}]</span>
+                    ${message}
+                `;
+                logContainer.appendChild(emptyDiv);
+            }
+        }
+        
+        function updateCardStatusDistribution(statusData) {
+            const statusCounts = statusData || {};
+            
+            document.getElementById('capturingCount').textContent = statusCounts.capturing || 0;
+            document.getElementById('queuedCount').textContent = statusCounts.queued || 0;
+            document.getElementById('processingCount').textContent = statusCounts.processing || 0;
+            document.getElementById('processedCount').textContent = statusCounts.processed || 0;
+            document.getElementById('failedStatusCount').textContent = statusCounts.failed || 0;
+            document.getElementById('retryingCount').textContent = statusCounts.retrying || 0;
+        }
+        
+        function updateMetrics(metrics) {
+            if (metrics.processingLatencyMs) {
+                document.getElementById('avgProcessingTime').textContent = 
+                    Math.round(metrics.processingLatencyMs) + 'ms';
+            }
+            
+            if (metrics.queueDepth !== undefined) {
+                document.getElementById('queueDepth').textContent = metrics.queueDepth;
+            }
+            
+            if (metrics.memoryUsageMb) {
+                document.getElementById('memoryUsage').textContent = 
+                    Math.round(metrics.memoryUsageMb) + 'MB';
+            }
+            
+            if (metrics.cpuUsagePercent !== undefined) {
+                document.getElementById('cpuUsage').textContent = 
+                    Math.round(metrics.cpuUsagePercent) + '%';
+            }
+            
+            // Update throughput
+            if (metrics.throughputPerMinute !== undefined) {
+                document.getElementById('throughputPercentage').textContent = 
+                    metrics.throughputPerMinute + ' cards/min';
+                
+                // Update throughput progress bar (scale to reasonable max)
+                const maxThroughput = 60; // cards per minute
+                const throughputPercent = Math.min((metrics.throughputPerMinute / maxThroughput) * 100, 100);
+                document.getElementById('throughputProgress').style.width = throughputPercent + '%';
+            }
+            
+            // Calculate and update completion percentage
+            const completed = parseInt(document.getElementById('completedCount').textContent) || 0;
+            const failed = parseInt(document.getElementById('failedCount').textContent) || 0;
+            const processing = parseInt(document.getElementById('processingQueueCount').textContent) || 0;
+            const queued = parseInt(document.getElementById('captureQueueCount').textContent) || 0;
+            
+            const total = completed + failed + processing + queued;
+            if (total > 0) {
+                const completionPercent = Math.round((completed / total) * 100);
+                document.getElementById('completionPercentage').textContent = completionPercent + '%';
+                document.getElementById('completionProgress').style.width = completionPercent + '%';
+                
+                // Calculate error rate
+                const errorPercent = total > 0 ? Math.round((failed / total) * 100) : 0;
+                document.getElementById('errorRatePercentage').textContent = errorPercent + '%';
+                document.getElementById('errorRateProgress').style.width = errorPercent + '%';
+            }
+        }
+        
+        // WebSocket connection setup
+        subscribeToConnectionStatus((isConnected) => {
+            updateStatus(isConnected);
+            if (isConnected) {
+                log('WebSocket connected to CardMint server', 'success');
+                requestStatusUpdate();
+            } else {
+                log('WebSocket disconnected', 'error');
+            }
+        });
+        
+        // Subscribe to real-time updates
+        subscribeToQueueUpdates((data) => {
+            handleMessage(data);
+        });
+        
+        function handleMessage(data) {
+            switch (data.type) {
+                case 'queueStatus':
+                    updateQueueStatus(data.data);
+                    break;
+                    
+                case 'cardStatusDistribution':
+                    updateCardStatusDistribution(data.data);
+                    break;
+                    
+                case 'performanceMetrics':
+                    updateMetrics(data.data);
+                    break;
+                    
+                case 'batchProgress':
+                    log(`Batch progress: ${data.message}`, 'info');
+                    if (data.progress) {
+                        updateMetrics(data.progress);
+                    }
+                    break;
+                    
+                case 'processingStatus':
+                    log(`Processing update: ${data.message}`, data.level || 'info');
+                    break;
+                    
+                case 'cardProcessed':
+                    log(`Card processed: ${data.cardName || 'Unknown'} (${data.processingTime}ms)`, 'success');
+                    requestStatusUpdate();
+                    break;
+                    
+                case 'cardFailed':
+                    log(`Card processing failed: ${data.error}`, 'error');
+                    requestStatusUpdate();
+                    break;
+                    
+                case 'error':
+                    log('Error: ' + data.message, 'error');
+                    break;
+            }
+        }
+        
+        function requestStatusUpdate() {
+            requestStatus();
+        }
+        
+        // Button handlers
+        refreshBtn.addEventListener('click', async () => {
+            log('Refreshing status data...', 'info');
+            refreshBtn.disabled = true;
+            refreshBtn.textContent = 'Refreshing...';
+            
+            try {
+                requestStatusUpdate();
+                // Re-enable after a short delay
+                setTimeout(() => {
+                    refreshBtn.disabled = false;
+                    refreshBtn.textContent = 'Refresh Status';
+                }, 1000);
+            } catch (error) {
+                log('Failed to refresh status: ' + error.message, 'error');
+                refreshBtn.disabled = false;
+                refreshBtn.textContent = 'Retry Refresh';
+            }
+        });
+        
+        pauseBtn.addEventListener('click', () => {
+            const isPaused = pauseBtn.textContent.includes('Resume');
+            
+            wsManager.send({ 
+                action: isPaused ? 'resumeProcessing' : 'pauseProcessing' 
+            });
+            
+            pauseBtn.textContent = isPaused ? 'Pause Processing' : 'Resume Processing';
+            log(isPaused ? 'Processing resumed' : 'Processing paused', 'warning');
+        });
+        
+        clearBtn.addEventListener('click', () => {
+            wsManager.send({ 
+                action: 'clearCompleted' 
+            });
+            log('Clearing completed jobs...', 'info');
+        });
+        
+        // Periodic status updates
+        setInterval(() => {
+            if (wsManager.isConnected()) {
+                requestStatusUpdate();
+            }
+        }, 5000); // Update every 5 seconds
+        
+        // Image handling functions
+        function handleFileSelect(event) {
+            const file = event.target.files[0];
+            if (file) {
+                showImagePreview(file);
+            }
+        }
+        
+        function showImagePreview(file) {
+            const preview = document.getElementById('imagePreview');
+            const previewImage = document.getElementById('previewImage');
+            const imageInfo = document.getElementById('imageInfo');
+            const fileName = document.getElementById('imageFileName');
+            const fileSize = document.getElementById('imageSize');
+            const fileDimensions = document.getElementById('imageDimensions');
+            
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                previewImage.src = e.target.result;
+                fileName.textContent = file.name;
+                fileSize.textContent = `${Math.round(file.size / 1024)}KB`;
+                
+                previewImage.onload = () => {
+                    fileDimensions.textContent = `${previewImage.naturalWidth}x${previewImage.naturalHeight}`;
+                };
+                
+                preview.style.display = 'block';
+                imageInfo.style.display = 'block';
+                
+                logApiCall('info', 'FILE', 'selected', { fileName: file.name, size: file.size });
+            };
+            reader.readAsDataURL(file);
+        }
+        
+        function clearImagePreview(event) {
+            event?.preventDefault();
+            document.getElementById('imagePreview').style.display = 'none';
+            document.getElementById('imageInfo').style.display = 'none';
+            document.getElementById('fileInput').value = '';
+            logApiCall('info', 'FILE', 'cleared');
+        }
+        
+        async function captureCard() {
+            const processingOverlay = document.getElementById('processingOverlay');
+            processingOverlay.style.display = 'flex';
+            
+            try {
+                logApiCall('request', 'POST', `${API_URL}/api/capture`);
+                const response = await fetch(`${API_URL}/api/capture`, { method: 'POST' });
+                
+                if (response.ok) {
+                    const result = await response.json();
+                    logApiCall('response', 'POST', '/api/capture', { status: response.status, cardId: result.id });
+                    log('Card capture initiated successfully', 'success');
+                } else {
+                    logApiCall('error', 'POST', '/api/capture', { status: response.status });
+                    log('Card capture failed', 'error');
+                }
+            } catch (error) {
+                logApiCall('error', 'POST', '/api/capture', { error: error.message });
+                log('Capture error: ' + error.message, 'error');
+            } finally {
+                processingOverlay.style.display = 'none';
+            }
+        }
+        
+        function copyConsoleToClipboard() {
+            const consoleText = batchConsoleEntries
+                .filter(shouldShowEntry)
+                .map(entry => {
+                    let text = `[${entry.timestamp}] ${entry.type.toUpperCase()}: ${entry.method} ${entry.url}`;
+                    if (entry.data) {
+                        if (entry.data.status) text += ` - Status: ${entry.data.status}`;
+                        if (entry.data.confidence) text += ` - Confidence: ${(entry.data.confidence * 100).toFixed(1)}%`;
+                        if (entry.data.message) text += ` - ${entry.data.message}`;
+                        if (entry.data.result) text += `\nResult: ${JSON.stringify(entry.data.result, null, 2)}`;
+                    }
+                    return text;
+                }).join('\n\n');
+                
+            navigator.clipboard.writeText(consoleText).then(() => {
+                log('Console copied to clipboard', 'info');
+            }).catch(() => {
+                log('Failed to copy to clipboard', 'error');
+            });
+        }
+        
+        // Make functions globally available
+        window.captureCard = captureCard;
+        window.handleFileSelect = handleFileSelect;
+        window.clearImagePreview = clearImagePreview;
+        window.copyConsoleToClipboard = copyConsoleToClipboard;
+        window.toggleConsolePause = toggleConsolePause;
+        
+        // Initialize console pause button state
+        document.addEventListener('DOMContentLoaded', () => {
+            const pauseButton = document.getElementById('pauseConsoleBtn');
+            if (pauseButton) {
+                pauseButton.textContent = consolePaused ? 'Resume Console' : 'Pause Console';
+            }
+        });
+        
+        // Request initial status
+        setTimeout(() => {
+            if (wsManager.isConnected()) {
+                requestStatusUpdate();
+            }
+        }, 1000);
+    </script>
+    
+    <!-- Hot-reload reconnection toast (TypeScript + HMR-safe) -->
+    <script type="module" src="main.ts"></script>
+</body>
+</html>

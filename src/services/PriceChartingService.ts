@@ -9,13 +9,15 @@ export interface PriceChartingProduct {
   id: number;
   console_name: string;  // Set name
   product_name: string;  // Card name with number
+  // Note: PriceCharting API returns hyphenated keys (e.g., 'loose-price').
+  // Our normalization maps both hyphenated and snake_case variants.
   loose_price: number;   // Ungraded price in cents
   cib_price: number;     // Complete in box price
   new_price: number;     // Sealed/mint price
-  graded_price: number;  // Generic graded price
+  graded_price: number;  // Generic graded price (basis='graded')
   bgs_10_price: number;  // BGS 10 price
-  condition_17_price: number;  // PSA 9 price
-  condition_18_price: number;  // PSA 10 price
+  condition_17_price: number;  // CGC 10 per PC docs
+  condition_18_price: number;  // SGC 10 per PC docs
   box_only_price: number;
   manual_only_price: number;
   sales_volume: number;
@@ -46,6 +48,8 @@ export class PriceChartingService {
   private apiKey: string;
   private csvCache: Map<string, PriceChartingProduct> = new Map();
   private lastCsvUpdate: Date | null = null;
+  private requestQueue: Promise<any> = Promise.resolve();
+  private requestDelay: number = 100; // 100ms between requests for rate limiting
 
   constructor() {
     this.apiKey = process.env.PRICECHARTING_API_KEY || '';
@@ -79,6 +83,19 @@ export class PriceChartingService {
   }
 
   /**
+   * Rate-limited API request wrapper
+   */
+  private async makeRateLimitedRequest<T>(requestFn: () => Promise<T>): Promise<T> {
+    return this.requestQueue = this.requestQueue
+      .then(() => new Promise(resolve => setTimeout(resolve, this.requestDelay)))
+      .then(() => requestFn())
+      .catch(error => {
+        logger.warn('Rate-limited request failed', { error: error.message });
+        throw error;
+      });
+  }
+
+  /**
    * Search for products by query string
    */
   async searchProducts(query: string, limit: number = 20): Promise<SearchResult> {
@@ -94,38 +111,57 @@ export class PriceChartingService {
       return cached;
     }
 
-    try {
-      logger.info('Searching PriceCharting', { query });
-      
-      const response = await this.api.get('/api/products', {
-        params: {
-          t: this.apiKey,
-          q: query
+    return this.makeRateLimitedRequest(async () => {
+      try {
+        logger.info('Searching PriceCharting', { query });
+        
+        const response = await this.api.get('/api/products', {
+          params: {
+            t: this.apiKey,
+            q: query
+          }
+        });
+
+        // Handle API error responses
+        if (response.data.error) {
+          throw new Error(`PriceCharting API Error: ${response.data.error}`);
         }
-      });
 
-      const result: SearchResult = {
-        products: response.data.products || [],
-        query,
-        timestamp: new Date()
-      };
+        const result: SearchResult = {
+          products: response.data.products || [],
+          query,
+          timestamp: new Date()
+        };
 
-      // Convert prices from cents to dollars for easier use
-      result.products = result.products.map(p => this.normalizePrices(p));
+        // Convert prices from cents to dollars for easier use
+        result.products = result.products.map(p => this.normalizePrices(p));
 
-      this.cache.set(cacheKey, result);
-      
-      logger.info('Search completed', { 
-        query, 
-        resultsCount: result.products.length 
-      });
+        this.cache.set(cacheKey, result);
+        
+        logger.info('Search completed', { 
+          query, 
+          resultsCount: result.products.length 
+        });
 
-      return result;
+        return result;
 
-    } catch (error) {
-      logger.error('PriceCharting search failed', { query, error });
-      throw error;
-    }
+      } catch (error: any) {
+        // Enhanced error handling for API-specific issues
+        if (error.response?.status === 401) {
+          logger.error('PriceCharting API authentication failed', { query });
+          throw new Error('Invalid PriceCharting API key');
+        } else if (error.response?.status === 429) {
+          logger.warn('PriceCharting rate limit hit', { query });
+          throw new Error('PriceCharting rate limit exceeded');
+        } else if (error.response?.status >= 500) {
+          logger.error('PriceCharting server error', { query, status: error.response.status });
+          throw new Error('PriceCharting service unavailable');
+        }
+        
+        logger.error('PriceCharting search failed', { query, error: error.message });
+        throw error;
+      }
+    });
   }
 
   /**
@@ -143,27 +179,35 @@ export class PriceChartingService {
       return cached;
     }
 
-    try {
-      const response = await this.api.get('/api/product', {
-        params: {
-          t: this.apiKey,
-          id: productId
-        }
-      });
+    return this.makeRateLimitedRequest(async () => {
+      try {
+        const response = await this.api.get('/api/product', {
+          params: {
+            t: this.apiKey,
+            id: productId
+          }
+        });
 
-      if (!response.data) {
+        if (!response.data || response.data.error) {
+          logger.warn('Product not found', { productId, error: response.data?.error });
+          return null;
+        }
+
+        const product = this.normalizePrices(response.data);
+        this.cache.set(cacheKey, product);
+
+        return product;
+
+      } catch (error: any) {
+        if (error.response?.status === 404) {
+          logger.debug('Product not found', { productId });
+          return null;
+        }
+        
+        logger.error('Failed to get product', { productId, error: error.message });
         return null;
       }
-
-      const product = this.normalizePrices(response.data);
-      this.cache.set(cacheKey, product);
-
-      return product;
-
-    } catch (error) {
-      logger.error('Failed to get product', { productId, error });
-      return null;
-    }
+    });
   }
 
   /**
@@ -404,25 +448,82 @@ export class PriceChartingService {
   }
 
   /**
+   * Store price data in market_price_samples table
+   * Integrates with new inventory layer pricing architecture
+   */
+  async storePriceData(
+    cardId: string, 
+    product: PriceChartingProduct,
+    ingestionService?: any
+  ): Promise<void> {
+    if (!ingestionService) {
+      logger.warn('No ingestion service provided for price storage');
+      return;
+    }
+
+    try {
+      await ingestionService.ingestPriceChartingProduct(cardId, product);
+      
+      logger.debug('Stored PriceCharting data in market_price_samples', {
+        cardId,
+        productId: product.id,
+        productName: product.product_name
+      });
+
+    } catch (error) {
+      logger.error('Failed to store price data', {
+        cardId,
+        productId: product.id,
+        error
+      });
+    }
+  }
+
+  /**
    * Convert prices from cents to dollars
    */
   private normalizePrices(product: any): PriceChartingProduct {
+    // Normalize hyphenated keys from API to snake_case and ensure numeric cents
+    const keyMap: Record<string, string> = {
+      'loose-price': 'loose_price',
+      'cib-price': 'cib_price',
+      'new-price': 'new_price',
+      'graded-price': 'graded_price',
+      'bgs-10-price': 'bgs_10_price',
+      'condition-17-price': 'condition_17_price',
+      'condition-18-price': 'condition_18_price',
+      'box-only-price': 'box_only_price',
+      'manual-only-price': 'manual_only_price',
+      'product-name': 'product_name',
+      'console-name': 'console_name',
+      'release-date': 'release_date'
+    };
+
+    const normalized: any = { ...product };
+
+    // Map hyphenated keys to snake_case duplicates for compatibility
+    Object.entries(keyMap).forEach(([hyphen, snake]) => {
+      if (normalized[hyphen] != null && normalized[snake] == null) {
+        normalized[snake] = normalized[hyphen];
+      }
+    });
+
     const priceFields = [
       'loose_price', 'cib_price', 'new_price', 'graded_price',
       'bgs_10_price', 'condition_17_price', 'condition_18_price',
       'box_only_price', 'manual_only_price'
     ];
 
-    const normalized = { ...product };
-    
-    // Already in cents from API, just ensure they're numbers
+    // Ensure numeric cents for price-related fields
     priceFields.forEach(field => {
-      if (normalized[field]) {
-        normalized[field] = parseInt(normalized[field]);
+      if (normalized[field] != null && normalized[field] !== '') {
+        const val = String(normalized[field]).replace(/[$,]/g, '');
+        const num = parseInt(val, 10);
+        if (!Number.isNaN(num)) normalized[field] = num;
       }
     });
 
-    return normalized;
+    return normalized as PriceChartingProduct;
   }
 
   /**

@@ -23,8 +23,6 @@ try {
         connect() { return true; }
         disconnect() { return true; }
         captureImage() { return Promise.resolve('/tmp/mock-image.jpg'); }
-        startLiveView() { return true; }
-        stopLiveView() { return true; }
         getProperty() { return null; }
         setProperty() { return true; }
         getDeviceInfo() { return { model: 'Mock Camera', connected: false }; }
@@ -39,7 +37,6 @@ export interface SonyCameraOptions {
   deviceId?: string;
   ip?: string;
   autoReconnect?: boolean;
-  liveViewQuality?: 'low' | 'medium' | 'high';
 }
 
 export interface CaptureOptions {
@@ -51,7 +48,6 @@ export interface CaptureOptions {
 export class SonyCamera extends EventEmitter {
   private nativeCamera: any;
   private connected = false;
-  private liveViewActive = false;
   private options: SonyCameraOptions;
   private reconnectTimer?: NodeJS.Timeout;
   
@@ -98,9 +94,6 @@ export class SonyCamera extends EventEmitter {
         this.reconnectTimer = undefined;
       }
       
-      if (this.liveViewActive) {
-        await this.stopLiveView();
-      }
       
       const result = await this.nativeCamera.disconnect();
       
@@ -146,53 +139,6 @@ export class SonyCamera extends EventEmitter {
     }
   }
   
-  startLiveView(callback: (imageData: Buffer) => void): boolean {
-    if (!this.connected) {
-      throw new Error('Camera not connected');
-    }
-    
-    if (this.liveViewActive) {
-      logger.warn('Live view already active');
-      return false;
-    }
-    
-    try {
-      const result = this.nativeCamera.startLiveView((data: Buffer) => {
-        callback(data);
-        this.emit('liveViewFrame', data);
-      });
-      
-      if (result) {
-        this.liveViewActive = true;
-        logger.info('Live view started');
-      }
-      
-      return result;
-    } catch (error) {
-      logger.error('Error starting live view:', error);
-      throw error;
-    }
-  }
-  
-  stopLiveView(): boolean {
-    if (!this.liveViewActive) {
-      return true;
-    }
-    
-    try {
-      const result = this.nativeCamera.stopLiveView();
-      
-      if (result) {
-        this.liveViewActive = false;
-        logger.info('Live view stopped');
-      }
-      
-      return result;
-    } catch (error) {
-      logger.error('Error stopping live view:', error);
-      throw error;
-    }
-  }
   
   async getProperty(propertyName: string): Promise<any> {
     if (!this.connected) {
@@ -244,7 +190,6 @@ export class SonyCamera extends EventEmitter {
           maxFps: 60,
           hasAutoFocus: true,
           hasExposureControl: true,
-          hasLiveView: true,
         },
       }));
     } catch (error) {
@@ -261,7 +206,6 @@ export class SonyCamera extends EventEmitter {
       maxFps: 60,
       hasAutoFocus: true,
       hasExposureControl: true,
-      hasLiveView: true,
     };
   }
   
@@ -282,7 +226,4 @@ export class SonyCamera extends EventEmitter {
     return this.connected;
   }
   
-  isLiveViewActive(): boolean {
-    return this.liveViewActive;
-  }
 }

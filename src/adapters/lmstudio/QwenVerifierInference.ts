@@ -1,6 +1,6 @@
 import { promises as fs } from "fs";
 import type { InferencePort, InferenceResult, InferenceStatus } from "../../core/infer/InferencePort";
-import { logger } from "../../utils/logger";
+import { createLogger } from "../../utils/logger";
 import { getGlobalProfiler } from "../../utils/performanceProfiler";
 import { searchCards } from "../../storage/sqlite-database";
 
@@ -61,6 +61,7 @@ export interface VerifyOptions {
  * - Memory: Verifier kept in memory for instant verification calls
  */
 export class QwenVerifierInference implements InferencePort {
+  private readonly log = createLogger('qwen-verifier');
   private totalRequests = 0;
   private totalLatency = 0;
   private errorCount = 0;
@@ -203,7 +204,7 @@ export class QwenVerifierInference implements InferencePort {
         card_name: result.card_title
       });
 
-      logger.debug(`Verifier inference completed: ${result.card_title} (${inferenceTime}ms)`);
+      this.log.debug(`Verifier inference completed: ${result.card_title} (${inferenceTime}ms)`);
       return result;
 
     } catch (error) {
@@ -213,7 +214,7 @@ export class QwenVerifierInference implements InferencePort {
       this.lastError = String(error);
 
       profiler?.endStage('vlm_verify', { error: this.lastError });
-      logger.error('Verifier inference failed:', error);
+      this.log.error(`Verifier inference failed: ${String(error)}`);
       throw error;
     }
   }
@@ -285,12 +286,12 @@ export class QwenVerifierInference implements InferencePort {
         flags: result.semantic_flags.length
       });
 
-      logger.debug(`Tool-calling verification completed: agreement=${result.agrees_with_primary}, adjustment=${result.confidence_adjustment}`);
+      this.log.debug(`Tool-calling verification completed: agreement=${result.agrees_with_primary}, adjustment=${result.confidence_adjustment}`);
       return result;
 
     } catch (error) {
       profiler?.endStage('verification_full', { error: String(error) });
-      logger.error('Verification failed');
+      this.log.error('Verification failed');
       throw error;
     }
   }
@@ -452,9 +453,8 @@ export class QwenVerifierInference implements InferencePort {
   }
 
   private async _checkDatabase(_result: InferenceResult): Promise<DatabaseMatch[]> {
-    // Placeholder for database integration
-    // Will be implemented in CardVerificationService
-    logger.debug('Database check placeholder - implement CardVerificationService integration');
+    // Database integration hook; implemented via CardVerificationService
+    this.log.debug('Database check stub - integrate with CardVerificationService');
     return [];
   }
 
@@ -603,12 +603,12 @@ export class QwenVerifierInference implements InferencePort {
         parsing_success: toolCallResult.parsing_success
       });
 
-      logger.debug(`Tool call verification completed: ${toolCallResult.extracted_result.card_title} (confidence: ${toolCallResult.tool_confidence})`);
+      this.log.debug(`Tool call verification completed: ${toolCallResult.extracted_result.card_title} (confidence: ${toolCallResult.tool_confidence})`);
       return toolCallResult;
 
     } catch (error) {
       profiler?.endStage('tool_call_verification', { error: String(error) });
-      logger.error('Tool call verification failed');
+      this.log.error('Tool call verification failed');
       throw error;
     }
   }
@@ -715,7 +715,7 @@ Please verify this card information using the database lookup tool.`
       return this.parseToolCallWithRecovery(data, primaryResult);
 
     } catch (error) {
-      logger.warn('Tool call parsing failed, using recovery');
+      this.log.warn('Tool call parsing failed, using recovery');
       return this.parseToolCallWithRecovery(data, primaryResult);
     }
   }
@@ -798,13 +798,13 @@ Please verify this card information using the database lookup tool.`
     lookup: { card_name: string; set_code?: string; confidence: number }
   ): Promise<DatabaseMatch[]> {
     try {
-      logger.debug(`Database lookup: ${lookup.card_name} (${lookup.set_code || 'no set'})`);
+      this.log.debug(`Database lookup: ${lookup.card_name} (${lookup.set_code || 'no set'})`);
       
       // Search for cards in SQLite database
       const searchResults = searchCards(lookup.card_name, lookup.set_code);
       
       if (searchResults.length === 0) {
-        logger.debug(`No database matches found for: ${lookup.card_name}`);
+        this.log.debug(`No database matches found for: ${lookup.card_name}`);
         return [];
       }
       
@@ -843,16 +843,16 @@ Please verify this card information using the database lookup tool.`
           card_id: card.id,
           similarity_score: similarityScore,
           match_type: matchType,
-          matched_fields,
+          matched_fields: matchedFields,
           discrepancies
         };
       });
       
-      logger.debug(`Found ${matches.length} database matches, best similarity: ${matches[0]?.similarity_score.toFixed(2) || 0}`);
+      this.log.debug(`Found ${matches.length} database matches, best similarity: ${matches[0]?.similarity_score.toFixed(2) || 0}`);
       return matches;
       
     } catch (error) {
-      logger.error('Database lookup failed:', error);
+      this.log.error(`Database lookup failed: ${String(error)}`);
       // Return empty array instead of crashing
       return [];
     }

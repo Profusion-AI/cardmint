@@ -3,17 +3,25 @@ import { config } from '../config';
 import { createLogger } from '../utils/logger';
 
 const logger = createLogger('redis');
+const E2E_NO_REDIS = process.env.E2E_NO_REDIS === 'true';
+
+// In-memory fallback store for E2E_NO_REDIS mode
+const memStores: Map<string, Map<string, string>> = new Map();
 
 let redisClient: Redis | null = null;
 let pubClient: Redis | null = null;
 let subClient: Redis | null = null;
 
 export async function initializeRedis(): Promise<void> {
-  const redisConfig = {
+  if (E2E_NO_REDIS) {
+    logger.warn('E2E_NO_REDIS enabled: Redis will not be initialized (using in-memory cache)');
+    return;
+  }
+  const redisConfig: any = {
     host: config.redis.host,
     port: config.redis.port,
     password: config.redis.password,
-    db: config.redis.db,
+    db: (config as any).redis?.db ?? 0,
     retryStrategy: (times: number) => {
       const delay = Math.min(times * 50, 2000);
       logger.warn(`Redis connection retry attempt ${times}, delay: ${delay}ms`);
@@ -101,6 +109,12 @@ export class RedisCache {
   }
   
   async get<T>(key: string): Promise<T | null> {
+    if (E2E_NO_REDIS) {
+      const store = memStores.get(this.prefix);
+      const value = store?.get(key) ?? null;
+      if (!value) return null;
+      try { return JSON.parse(value) as T; } catch { return value as unknown as T; }
+    }
     const client = getRedisClient();
     const value = await client.get(this.prefix + key);
     
@@ -116,9 +130,15 @@ export class RedisCache {
   }
   
   async set<T>(key: string, value: T, ttl?: number): Promise<void> {
-    const client = getRedisClient();
     const serialized = typeof value === 'string' ? value : JSON.stringify(value);
-    
+    if (E2E_NO_REDIS) {
+      let store = memStores.get(this.prefix);
+      if (!store) { store = new Map(); memStores.set(this.prefix, store); }
+      store.set(key, serialized);
+      // TTL ignored in memory fallback
+      return;
+    }
+    const client = getRedisClient();
     if (ttl || this.ttl) {
       await client.setex(this.prefix + key, ttl || this.ttl, serialized);
     } else {
@@ -127,17 +147,32 @@ export class RedisCache {
   }
   
   async delete(key: string): Promise<void> {
+    if (E2E_NO_REDIS) {
+      memStores.get(this.prefix)?.delete(key);
+      return;
+    }
     const client = getRedisClient();
     await client.del(this.prefix + key);
   }
   
   async exists(key: string): Promise<boolean> {
+    if (E2E_NO_REDIS) {
+      return memStores.get(this.prefix)?.has(key) ?? false;
+    }
     const client = getRedisClient();
     const result = await client.exists(this.prefix + key);
     return result === 1;
   }
   
   async increment(key: string, amount = 1): Promise<number> {
+    if (E2E_NO_REDIS) {
+      let store = memStores.get(this.prefix);
+      if (!store) { store = new Map(); memStores.set(this.prefix, store); }
+      const current = Number(store.get(key) || '0');
+      const next = current + amount;
+      store.set(key, String(next));
+      return next;
+    }
     const client = getRedisClient();
     return await client.incrby(this.prefix + key, amount);
   }

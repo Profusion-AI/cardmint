@@ -21,17 +21,32 @@ export async function gracefulShutdown(server: any, queueManager: any, captureWa
   }, 30000);
   
   try {
-    logger.info('Stopping capture watcher...');
-    if (captureWatcher) {
-      await captureWatcher.stop();
+    // Stop accepting new jobs first
+    logger.info('Pausing queue manager (stopping new jobs)...');
+    if (queueManager && typeof queueManager.pause === 'function') {
+      await queueManager.pause();
     }
     
+    // Stop server from accepting new connections
     logger.info('Stopping server...');
     if (server) {
       await server.stop();
     }
     
-    logger.info('Stopping queue manager...');
+    // Stop capture watcher
+    logger.info('Stopping capture watcher...');
+    if (captureWatcher) {
+      await captureWatcher.stop();
+    }
+    
+    // Wait for all active jobs to complete
+    logger.info('Draining queue manager (waiting for active jobs)...');
+    if (queueManager && typeof queueManager.drain === 'function') {
+      await queueManager.drain();
+    }
+    
+    // Now shutdown queue manager completely
+    logger.info('Shutting down queue manager...');
     if (queueManager) {
       await queueManager.shutdown();
     }

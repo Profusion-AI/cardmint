@@ -6,6 +6,7 @@ import { OCRData, CardMetadata } from '../types';
 import { OCRService } from '../ocr/OCRService';
 import { mlServiceClient, MLPrediction } from '../ml/MLServiceClient';
 import { ports } from '../app/wiring';
+import sharp from 'sharp';
 
 const logger = createLogger('image-processor');
 
@@ -59,6 +60,7 @@ export class ImageProcessor {
     
     try {
       const result: ProcessingResult = {};
+      const cleanup: string[] = [];
       
       // Image enhancement
       if (options.settings?.enhanceImage) {
@@ -69,9 +71,17 @@ export class ImageProcessor {
       let imagePath: string;
       if (Buffer.isBuffer(options.imageData)) {
         imagePath = path.join(this.tempDir, `ml_${options.cardId}_${Date.now()}.jpg`);
-        await fs.writeFile(imagePath, options.imageData);
+        // (Codex-CTO) Ensure correct orientation: rotate 90° CCW (270°)
+        const rotated = await sharp(options.imageData).rotate(270).jpeg({ quality: 90 }).toBuffer();
+        await fs.writeFile(imagePath, rotated);
       } else {
-        imagePath = options.imageData;
+        // For file paths, rotate into a temporary derived file to avoid mutating originals
+        const rotatedPath = path.join(this.tempDir, `mlrot_${options.cardId}_${Date.now()}.jpg`);
+        const buf = await fs.readFile(options.imageData);
+        const rotated = await sharp(buf).rotate(270).jpeg({ quality: 90 }).toBuffer();
+        await fs.writeFile(rotatedPath, rotated);
+        imagePath = rotatedPath;
+        cleanup.push(rotatedPath);
       }
       
       // Try ML ensemble first (unless forced to OCR-only)
@@ -171,6 +181,9 @@ export class ImageProcessor {
       // Clean up temp file if we created one
       if (Buffer.isBuffer(options.imageData)) {
         await fs.unlink(imagePath).catch(() => {});
+      }
+      for (const p of cleanup) {
+        await fs.unlink(p).catch(() => {});
       }
       
       const processingTime = Date.now() - startTime;

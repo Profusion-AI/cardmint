@@ -107,5 +107,4 @@ export interface CameraCapabilities {
   maxFps: number;
   hasAutoFocus: boolean;
   hasExposureControl: boolean;
-  hasLiveView: boolean;
 }

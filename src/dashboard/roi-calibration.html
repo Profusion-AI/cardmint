@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ROI Calibration Tool (Legacy - Deprecated)</title>
+  <style>
+    .deprecation-banner {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      background: linear-gradient(90deg, #ff6b35, #f7931e);
+      color: white;
+      padding: 12px;
+      text-align: center;
+      z-index: 10000;
+      font-weight: bold;
+      box-shadow: 0 2px 8px rgba(255, 107, 53, 0.3);
+    }
+    .deprecation-banner a {
+      color: #fff;
+      text-decoration: underline;
+      font-weight: bold;
+    }
+    .main { margin-top: 50px; }
+  </style>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 0; display: flex; height: 100vh; }
+    .sidebar { width: 330px; border-right: 1px solid #ddd; padding: 12px; overflow: auto; }
+    .main { flex: 1; display: flex; flex-direction: column; }
+    .toolbar { border-bottom: 1px solid #eee; padding: 8px; display: flex; gap: 8px; align-items: center; }
+    .canvas-wrap { position: relative; flex: 1; overflow: auto; background: #111; display: flex; align-items: center; justify-content: center; }
+    #imageCanvas { background: #000; }
+    .roi-list { margin-top: 10px; }
+    .roi-item { display: flex; align-items: center; gap: 6px; padding: 4px 0; }
+    .roi-item input[type="text"] { flex: 1; }
+    .thumb { width: 96px; height: 64px; background: #222; border: 1px solid #444; margin: 4px; }
+    .thumbs { display: flex; flex-wrap: wrap; gap: 6px; }
+    .legend { display: inline-block; width: 12px; height: 12px; border-radius: 2px; margin-right: 6px; vertical-align: middle; }
+    .section { margin-top: 8px; padding-top: 6px; border-top: 1px dashed #ddd; }
+    button { cursor: pointer; }
+    .small { font-size: 12px; color: #666; }
+  </style>
+</head>
+<body>
+  <div class="deprecation-banner">
+    ⚠️ DEPRECATED: This tool will be removed in v3.0 • 
+    <a href="/public/dashboard/roi-calibration-enhanced.html" target="_parent">
+      Switch to Enhanced ROI Tool →
+    </a>
+  </div>
+  <div class="sidebar">
+    <h3>ROI Calibration</h3>
+    <div>
+      <label>Load Image <input type="file" id="imgInput" accept="image/*"></label>
+    </div>
+    <div class="section">
+      <label>Load Manifest <input type="file" id="manifestInput" accept="application/json"></label>
+      <div style="margin-top:6px; display:flex; gap:6px; align-items:center;">
+        <button id="loadServerManifest">Load from Server</button>
+        <label class="small">DATA_ROOT/roi_templates.json</label>
+      </div>
+      <div style="margin-top:6px;">
+        <label>Template: <select id="templateSelect"></select></label>
+      </div>
+    </div>
+    <div class="section">
+      <strong>Conditions</strong>
+      <div>
+        <label><input type="checkbox" id="condPromo"> promoOnly</label>
+        <label><input type="checkbox" id="condFirstEd"> firstEditionOnly</label>
+      </div>
+      <div style="margin-top:4px;">
+        <label>Era: 
+          <select id="condEra">
+            <option value="">(any)</option>
+            <option value="classic">classic</option>
+            <option value="neo">neo</option>
+            <option value="modern">modern</option>
+            <option value="promo">promo</option>
+          </select>
+        </label>
+      </div>
+    </div>
+    <div class="section">
+      <strong>ROIs</strong>
+      <div class="roi-list" id="roiList"></div>
+      <div style="margin-top:6px; display:flex; gap:6px;">
+        <button id="addRoi">Add ROI</button>
+        <button id="delRoi">Delete Selected</button>
+        <button id="copyRoi">Copy</button>
+        <button id="pasteRoi">Paste</button>
+      </div>
+    </div>
+    <div class="section">
+      <strong>Previews</strong>
+      <div class="thumbs" id="thumbs"></div>
+    </div>
+    <div class="section">
+      <strong>Test</strong>
+      <div style="display:flex; gap:6px; flex-wrap: wrap;">
+        <button id="testOCR">Test OCR</button>
+        <select id="ocrType">
+          <option value="name">name</option>
+          <option value="promo">promo</option>
+          <option value="set_code">set_code</option>
+          <option value="regulation_mark">regulation_mark</option>
+          <option value="text">text</option>
+        </select>
+        <button id="testZNCC">Test ZNCC (set_icon)</button>
+      </div>
+      <div id="testOut" class="small" style="margin-top:6px;"></div>
+    </div>
+    <div class="section">
+      <strong>Export</strong>
+      <div style="display:flex; gap:6px; flex-wrap: wrap;">
+        <button id="exportManifest">Download Manifest</button>
+        <button id="exportPatch">Download Patch</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="main">
+    <div class="toolbar">
+      <button id="zoomIn">+</button>
+      <button id="zoomOut">-</button>
+      <label><input type="checkbox" id="snapGrid" checked> Snap 5px</label>
+      <label><input type="checkbox" id="percentMode"> Percent mode</label>
+      <span class="small" id="status"></span>
+    </div>
+    <div class="canvas-wrap" id="canvasWrap">
+      <canvas id="imageCanvas"></canvas>
+    </div>
+  </div>
+
+  <script type="module" src="./roi-tool.ts"></script>
+</body>
+</html>
+

@@ -15,7 +15,7 @@ export class OpenCvImageProcessor implements ImageProcessorPort {
     this.scriptDir = scriptDir;
   }
   
-  async enhance(inputPath: string, options: ImageProcessingOptions = {}): Promise<{ outputPath: string; meta: { rotation?: number } }> {
+  async enhance(inputPath: string, _options: ImageProcessingOptions = {}): Promise<{ outputPath: string; meta: { rotation?: number } }> {
     try {
       await access(inputPath);
       

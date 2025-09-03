@@ -3,6 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="api-url" content="http://localhost:3000">
+    <meta name="ws-url" content="ws://localhost:3001">
     <title>CardMint - Dashboard Hub</title>
     <style>
         * {
@@ -149,7 +151,8 @@
         }
     </style>
 </head>
-<body>
+  <body>
+    <script type="module" src="/lib/banner.js"></script>
     <div class="container">
         <div class="header">
             <h1>CardMint Dashboard</h1>
@@ -158,7 +161,7 @@
         </div>
 
         <div class="dashboard-grid">
-            <a href="/dashboard/index.html" class="dashboard-card">
+            <a href="/processing-status.html" class="dashboard-card">
                 <div class="card-icon">📊</div>
                 <div class="card-title">Processing Status</div>
                 <div class="card-description">
@@ -166,19 +169,35 @@
                 </div>
             </a>
 
+            <a href="/dashboard/performance.html" class="dashboard-card">
+                <div class="card-icon">⚡</div>
+                <div class="card-title">Performance Monitor</div>
+                <div class="card-description">
+                    Advanced system metrics, SLA tracking, and predictive performance analytics.
+                </div>
+            </a>
+
             <a href="/dashboard/verification.html" class="dashboard-card">
                 <div class="card-icon">✅</div>
                 <div class="card-title">Card Verification</div>
                 <div class="card-description">
-                    Review and validate processed cards with PS4 controller integration for rapid approval.
+                    Review and validate processed cards with streamlined approval workflow.
                 </div>
             </a>
 
-            <a href="/dashboard/ensemble.html" class="dashboard-card">
+            <a href="/dashboard/ensemble-dashboard.html" class="dashboard-card">
                 <div class="card-icon">📦</div>
                 <div class="card-title">Batch Results</div>
                 <div class="card-description">
                     View ensemble processing results, batch operations, and export processed card data.
+                </div>
+            </a>
+
+            <a href="/dashboard/health.html" class="dashboard-card">
+                <div class="card-icon">🏥</div>
+                <div class="card-title">System Health</div>
+                <div class="card-description">
+                    Comprehensive system monitoring, diagnostics, and administrative controls.
                 </div>
             </a>
         </div>
@@ -226,5 +245,8 @@
         // Check health every 30 seconds
         setInterval(checkSystemHealth, 30000);
     </script>
+    
+    <!-- Hot-reload reconnection toast (TypeScript + HMR-safe) -->
+    <script type="module" src="main.ts"></script>
 </body>
 </html>

@@ -2,6 +2,7 @@ import * as path from 'path';
 import * as fs from 'fs/promises';
 import * as chokidar from 'chokidar';
 import { createLogger } from '../utils/logger';
+import { normalizeHeic, isHeicFilename } from '../utils/heic-normalizer';
 // Avoid importing QueueManager; use a minimal interface for queue dependency
 type QueueLike = {
   addProcessingJob?: (data: any, priority?: number) => Promise<any>;
@@ -26,6 +27,10 @@ export interface WatcherConfig {
   filePattern: RegExp;
   stabilityThreshold: number; // ms to wait for file write to complete
   pollInterval: number;
+  allowHeic: boolean;
+  heicPreserveOriginal: boolean;
+  heicQuality: number;
+  heicMaxDimPx?: number;
 }
 
 export interface ProcessedFile {
@@ -50,9 +55,14 @@ export class ProductionCaptureWatcher {
     this.config = {
       watchDirectory: path.resolve('./data/inventory_images'),
       processedTrackingFile: path.resolve('./data/processed_captures.json'),
-      filePattern: /^card_\d{8}_\d{6}\.jpg$/i, // Matches: card_20250827_153045.jpg
-      stabilityThreshold: 500, // Wait 500ms for Sony camera to finish writing
+      // Accept Sony camera format AND test files: card_* OR test_* OR e2e_* files
+      filePattern: /^(card_\d{8}_\d{6}(?:_\d{3})?(?:-[0-9a-f]{4})?|test_\w+|e2e_\w+)\.jpe?g$/i,
+      stabilityThreshold: 150, // Atomic rename with tmpfs allows aggressive threshold
       pollInterval: 100,
+      allowHeic: process.env.ALLOW_HEIC === '1' || process.env.ALLOW_HEIC === 'true',
+      heicPreserveOriginal: process.env.HEIC_PRESERVE_ORIGINAL === '1' || process.env.HEIC_PRESERVE_ORIGINAL === 'true',
+      heicQuality: parseInt(process.env.HEIC_NORMALIZE_QUALITY || '90', 10),
+      heicMaxDimPx: process.env.HEIC_MAX_DIM_PX ? parseInt(process.env.HEIC_MAX_DIM_PX, 10) : undefined,
       ...config,
     };
 
@@ -80,31 +90,30 @@ export class ProductionCaptureWatcher {
       await this.loadProcessedFiles();
 
       // Initialize file watcher with production-optimized settings
-      this.watcher = chokidar.watch(this.config.watchDirectory, {
+      // Use a glob to avoid accidentally ignoring the root directory
+      const pattern = this.config.allowHeic ? '*.{jpg,jpeg,heic}' : '*.{jpg,jpeg}';
+      const watchGlob = path.join(this.config.watchDirectory, pattern);
+      this.watcher = chokidar.watch(watchGlob, {
         persistent: true,
         ignoreInitial: false, // Process existing files on startup
         awaitWriteFinish: {
           stabilityThreshold: this.config.stabilityThreshold,
           pollInterval: this.config.pollInterval
         },
-        ignored: (filePath: string) => {
-          const basename = path.basename(filePath);
-          const isTargetFile = this.config.filePattern.test(basename);
-          
-          if (!isTargetFile) {
-            logger.debug(`Ignoring file (doesn't match pattern): ${basename}`);
-          }
-          
-          return !isTargetFile;
-        },
-        usePolling: false, // Use native filesystem events for better performance
-        interval: 100, // Fallback polling interval
+        usePolling: true, // More reliable inside containers/sandboxes
+        interval: 300, // Polling interval for changes
+        ignorePermissionErrors: true,
         depth: 1, // Only watch immediate directory, not subdirectories
       });
 
       // Handle new files
       this.watcher.on('add', async (filePath: string) => {
         await this.handleNewCapture(filePath);
+      });
+
+      // Debug: log all watcher events for diagnosis
+      this.watcher.on('all', (event: string, p: string) => {
+        logger.debug('Watcher event', { event, path: p });
       });
 
       // Handle file changes (in case of overwriting)
@@ -119,7 +128,7 @@ export class ProductionCaptureWatcher {
 
       // Handle watcher ready
       this.watcher.on('ready', () => {
-        logger.info(`Production capture watcher started, monitoring: ${this.config.watchDirectory}`);
+        logger.info(`Production capture watcher started, monitoring: ${watchGlob}`);
         logger.info(`Loaded ${this.processedFiles.size} previously processed files`);
       });
 
@@ -222,6 +231,37 @@ export class ProductionCaptureWatcher {
     const startTime = Date.now();
 
     try {
+      // HEIC normalize-on-ingest (Strategy A), guarded by env flag
+      // (Codex-CTO) HEIC normalize-on-ingest stub path (guarded by ALLOW_HEIC)
+      if (this.config.allowHeic && isHeicFilename(filename)) {
+        logger.info('HEIC detected — normalizing to JPEG', { filename });
+        const jpegTarget = absolutePath.replace(/\.(heic|heif)$/i, '.jpg');
+        const tmpTarget = `${jpegTarget}.tmp`;
+        try {
+          const inputBuf = await fs.readFile(absolutePath);
+          const { jpegBuffer, info } = await normalizeHeic(inputBuf, {
+            quality: this.config.heicQuality,
+            maxDimPx: this.config.heicMaxDimPx,
+            preserveMetadata: true,
+          });
+          await fs.writeFile(tmpTarget, jpegBuffer);
+          await fs.rename(tmpTarget, jpegTarget);
+          logger.info('HEIC normalized to JPEG', {
+            method: info.method,
+            sizeBytes: info.sizeBytes,
+            originalSizeBytes: info.originalSizeBytes,
+            jpegFilename: path.basename(jpegTarget),
+          });
+          if (!this.config.heicPreserveOriginal) {
+            await fs.unlink(absolutePath).catch(() => {});
+          }
+          // The watcher will pick up the new .jpg and process it
+          return;
+        } catch (e: any) {
+          logger.error('HEIC normalization failed; leaving file unprocessed', { error: e?.message || String(e) });
+          return;
+        }
+      }
       // Verify file exists and get stats
       const stats = await fs.stat(absolutePath);
       if (!stats.isFile()) {
@@ -235,8 +275,8 @@ export class ProductionCaptureWatcher {
         return;
       }
 
-      // Extract timestamp from filename (card_20250827_153045.jpg)
-      const timestampMatch = filename.match(/card_(\d{8})_(\d{6})\.jpg$/i);
+      // Extract timestamp from filename (card_YYYYMMDD_HHMMSS(_mmm)?(-xxxx)?.jpg)
+      const timestampMatch = filename.match(/card_(\d{8})_(\d{6})(?:_\d{3})?(?:-[0-9a-f]{4})?\.jpe?g$/i);
       let captureTimestamp: Date;
       
       if (timestampMatch) {

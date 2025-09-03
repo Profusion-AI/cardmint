@@ -297,7 +297,8 @@
         }
     </style>
 </head>
-<body>
+  <body>
+    <script type="module" src="/lib/banner.js"></script>
     <!-- Main dashboard layout -->
     <div class="dashboard-container">
         <!-- Left pane - Last capture display -->
@@ -510,8 +511,6 @@
                 showNotification('✅ Card approved!', 'success');
                 removeFromQueue(index);
                 
-                }
-                
             } catch (error) {
                 console.error('Approve error:', error);
                 showNotification('Failed to approve card', 'error');
@@ -529,9 +528,6 @@
                 
                 showNotification('❌ Card rejected', 'warning');
                 removeFromQueue(index);
-                
-                }
-                
             } catch (error) {
                 console.error('Reject error:', error);
                 showNotification('Failed to reject card', 'error');
@@ -545,8 +541,6 @@
             // Toggle edit mode
             document.body.classList.toggle('edit-mode');
             showNotification('📝 Edit mode toggled', 'info');
-            
-            }
         }
         
         // Remove card from queue after action
@@ -716,5 +710,9 @@
         
         console.log('📸 Passive Capture Dashboard Ready - 8BitDo Controller Integration Active');
     </script>
+    
+    <!-- Browser Input Bus for Keyboard/Controller Support -->
+    <script type="module" src="/lib/input-bus-browser.js"></script>
+    <script type="module" src="/lib/input-integration.js"></script>
 </body>
 </html>

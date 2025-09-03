@@ -7,6 +7,9 @@ import { CardStatus } from '../types';
 // Lazy-load IntegratedScannerService only when used, to avoid dragging heavy deps
 type IntegratedScanOptions = any;
 import path from 'path';
+import sharp from 'sharp';
+import { hybridOCREngine } from '../services/local-matching/ocr/HybridOCREngine';
+import { setIconMatcher } from '../services/local-matching/matchers/SetIconMatcher';
 import { createProxyHandler, isViteServerAvailable } from '../utils/devProxy';
 import { validateTelemetryEvent, TELEMETRY_CSV_HEADER } from '../schemas/input';
 import { dirname } from 'path';
@@ -23,6 +26,8 @@ const MIME_TYPES: { [key: string]: string } = {
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
   '.jpeg': 'image/jpeg',
+  '.heic': 'image/heic',
+  '.heif': 'image/heif',
   '.gif': 'image/gif',
   '.svg': 'image/svg+xml',
   '.ico': 'image/x-icon'
@@ -156,6 +161,21 @@ export function createAPIRouter(
             logger.debug('Served verification dashboard');
             return;
           }
+        } else if (pathname === '/dashboard/roi-calibration.html') {
+          // DEPRECATION: Legacy ROI Calibration Tool
+          logger.warn('⚠️ DEPRECATED: Legacy ROI calibration tool accessed');
+          logger.warn('📍 Consider migrating to Enhanced ROI Tool: /public/dashboard/roi-calibration-enhanced.html');
+          
+          const roiPath = path.join(process.cwd(), 'src', 'dashboard', 'roi-calibration.html');
+          
+          // Add deprecation headers before serving
+          res.setHeader('X-CardMint-Deprecation-Warning', 'This tool will be removed in v3.0');
+          res.setHeader('X-CardMint-Migration-Path', '/public/dashboard/roi-calibration-enhanced.html');
+          
+          if (await serveStaticFile(roiPath, res)) {
+            logger.debug('Served legacy ROI calibration tool (deprecated)');
+            return;
+          }
         } else if (pathname === '/dashboard/ensemble.html') {
           // Serve ensemble/batch results dashboard
           const ensemblePath = path.join(process.cwd(), 'src', 'dashboard', 'ensemble-dashboard.html');
@@ -227,6 +247,76 @@ export function createAPIRouter(
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(healthData));
         
+      } else if (pathname === '/api/roi/manifest' && method === 'GET') {
+        // Serve the ROI manifest from DATA_ROOT
+        try {
+          const dataRoot = process.env.DATA_ROOT || './data';
+          const manifestPath = path.join(dataRoot, 'roi_templates.json');
+          const content = await fs.readFile(manifestPath, 'utf-8');
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(content);
+        } catch (error) {
+          logger.error('Failed to read ROI manifest:', error);
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Failed to read ROI manifest' }));
+        }
+
+      } else if (pathname === '/api/roi/ocr-test' && method === 'POST') {
+        // Quick OCR on a client-provided ROI crop
+        try {
+          const body = await getRequestBody(req);
+          const data = JSON.parse(body);
+          const { imageData, roi, text_type } = data as { imageData: string; roi: {x:number;y:number;width:number;height:number}; text_type?: string };
+          if (!imageData || !roi) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'imageData and roi required' }));
+            return;
+          }
+          const buffer = Buffer.from(imageData.replace(/^data:[^,]+,/, ''), 'base64');
+          const crop = await sharp(buffer)
+            .extract({
+              left: Math.max(0, Math.round(roi.x)),
+              top: Math.max(0, Math.round(roi.y)),
+              width: Math.max(1, Math.round(roi.width)),
+              height: Math.max(1, Math.round(roi.height)),
+            })
+            .png()
+            .toBuffer();
+          await hybridOCREngine.initialize();
+          const ocr = await hybridOCREngine.recognizeROI(crop, (text_type || 'text') as any, {
+            whitelist: data.whitelist,
+            max_length: data.max_length
+          });
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ text: ocr.text, confidence: ocr.confidence, engine: ocr.engine }));
+        } catch (error) {
+          logger.error('OCR test failed:', error);
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'OCR test failed' }));
+        }
+
+      } else if (pathname === '/api/roi/zncc-test' && method === 'POST') {
+        // Quick ZNCC test on set_icon within a client-provided ROI
+        try {
+          const body = await getRequestBody(req);
+          const data = JSON.parse(body);
+          const { imageData, roi } = data as { imageData: string; roi: {x:number;y:number;width:number;height:number} };
+          if (!imageData || !roi) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'imageData and roi required' }));
+            return;
+          }
+          const buffer = Buffer.from(imageData.replace(/^data:[^,]+,/, ''), 'base64');
+          await setIconMatcher.initialize();
+          const result = await setIconMatcher.matchWithinROI('uploaded', buffer, roi);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(result));
+        } catch (error) {
+          logger.error('ZNCC test failed:', error);
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'ZNCC test failed' }));
+        }
+
       } else if (pathname === '/api/cards' && method === 'GET') {
         const cardRepository = await getCardRepository();
         const cards = await cardRepository.listCards({
@@ -656,6 +746,53 @@ export function createAPIRouter(
           logger.error('Failed to read telemetry:', error);
           res.writeHead(500, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: 'Failed to read telemetry' }));
+        }
+        
+      } else if (pathname === '/api/valuation/compare' && method === 'POST') {
+        // ValuationService API endpoint
+        try {
+          const { getValuationTool, isValuationEnabled } = await import('../services/ValuationServiceFactory');
+          
+          if (!isValuationEnabled()) {
+            res.writeHead(503, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Valuation service disabled' }));
+            return;
+          }
+          
+          const body = await getRequestBody(req);
+          const input = JSON.parse(body);
+          
+          const valuationTool = getValuationTool();
+          const result = await valuationTool.compareResale(input);
+          
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(result));
+          
+        } catch (error) {
+          logger.error('Valuation API error:', error);
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ 
+            error: 'Valuation service error',
+            message: error instanceof Error ? error.message : 'Unknown error'
+          }));
+        }
+        
+      } else if (pathname === '/api/valuation/health' && method === 'GET') {
+        // ValuationService health check
+        try {
+          const { getHealthStatus } = await import('../services/ValuationServiceFactory');
+          const health = await getHealthStatus();
+          
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(health));
+          
+        } catch (error) {
+          logger.error('Valuation health check error:', error);
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ 
+            error: 'Health check failed',
+            message: error instanceof Error ? error.message : 'Unknown error'
+          }));
         }
         
       } else {
