@@ -1,0 +1,17 @@
+syntax = "proto3";
+package cardmint.mangle;
+option go_package = "cardmint/mangle-service/gen;gen";
+
+message Fact { string pred = 1; repeated string args = 2; }
+message LoadFactsRequest { repeated Fact facts = 1; string ruleset_hash = 2; }
+message Empty {}
+
+message QueryRequest { string predicate = 1; repeated string args = 2; bool explain = 3; int32 limit = 4; }
+message QueryResponse { repeated Row rows = 1; repeated DerivationEdge derivation = 2; }
+message Row { repeated string cells = 1; }
+message DerivationEdge { string rule_id = 1; repeated Row inputs = 2; }
+
+service Rules {
+  rpc LoadFacts(LoadFactsRequest) returns (Empty);
+  rpc Query(QueryRequest) returns (QueryResponse);
+}

@@ -1,0 +1,15 @@
+{
+  "facts": [
+    {"pred":"ocr_field","args":["c1","title","Pikachu",0.97]},
+    {"pred":"ocr_field","args":["c1","set","BASE",0.95]},
+    {"pred":"map_id_to_sku","args":["c1","SKU-001"]},
+    {"pred":"vendor_price","args":["SKU-001","V1",10.0, 1700000000]},
+    {"pred":"vendor_price","args":["SKU-001","V2",11.5, 1700000100]},
+    {"pred":"fresh","args":[1700000100]},
+    {"pred":"weight","args":["V1",0.6]},
+    {"pred":"weight","args":["V2",0.4]},
+    {"pred":"img_phash","args":["c1","0xff0f","b1"]},
+    {"pred":"img_phash","args":["c2","0xff0e","b1"]}
+  ],
+  "ruleset_hash": "dev"
+}
