@@ -39,15 +39,16 @@ export default defineConfig({
   build: {
     outDir: '../../public/dashboard',
     emptyOutDir: true,
-    rollupOptions: {
-      input: {
-        index: 'src/dashboard/index.html',
-        processing: 'src/dashboard/processing-status.html',
-        verification: 'src/dashboard/verification.html',
-        ensemble: 'src/dashboard/ensemble-dashboard.html',
-        navigation: 'src/dashboard/navigation.html',
+      rollupOptions: {
+        input: {
+          index: 'src/dashboard/index.html',
+          processing: 'src/dashboard/processing-status.html',
+          verification: 'src/dashboard/verification.html',
+          ensemble: 'src/dashboard/ensemble-dashboard.html',
+          navigation: 'src/dashboard/navigation.html',
+          'roi-calibration': 'src/dashboard/roi-calibration.html',
+        },
       },
-    },
   },
   // Add SPA fallback for development
   appType: 'spa',

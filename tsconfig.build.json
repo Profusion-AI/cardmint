@@ -30,7 +30,12 @@
     "src/adapters/lmstudio/LmStudioInference.ts",
     "src/adapters/lmstudio/QwenVerifierInference.ts",
     "src/core/verification/ConfidenceRouter.ts",
-    "src/core/infer/**/*.ts"
+    "src/core/infer/**/*.ts",
+    "src/queue/QueueManager.ts",
+    "src/queue/FileQueueManager.ts",
+    "src/storage/CardRepository.ts",
+    "src/app/wiring.ts",
+    "src/types/**/*.ts"
   ],
   "exclude": [
     "node_modules",
@@ -42,7 +47,6 @@
     "src/api/camera-router.ts",
     "src/processing/**",
     "src/adapters/opencv/**",
-    "src/queue/**",
     "src/services/AsyncCaptureWatcher.ts",
     "src/services/CaptureWatcher.ts",
     "src/services/AutoApprovalService.ts",
