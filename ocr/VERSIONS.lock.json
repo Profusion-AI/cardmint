@@ -1,0 +1,45 @@
+{
+  "description": "OCR pipeline dependency versions for reproducible builds",
+  "generated": "2025-09-04T00:00:00Z",
+  "phase": "Phase 2 - PaddleX OpenVINO Backend",
+  "versions": {
+    "paddleocr": "2.8.1",
+    "paddlex": "3.0.0",
+    "openvino": "2024.3.0",
+    "onnxruntime": "1.18.1",
+    "paddle2onnx": "1.2.8",
+    "opencv-python": "4.10.0.84",
+    "numpy": "2.1.1",
+    "pillow": "10.4.0",
+    "pyyaml": "6.0.2"
+  },
+  "backend_compatibility": {
+    "native": {
+      "requires": ["paddleocr", "opencv-python", "numpy", "pillow"],
+      "status": "production_ready",
+      "notes": "Default PaddleOCR v2/v3 inference path"
+    },
+    "paddlex_openvino": {
+      "requires": ["paddlex", "openvino", "opencv-python", "numpy", "pillow"],
+      "status": "phase_2_implementation",
+      "notes": "Ultra-infer via PaddleX with OpenVINO CPU backend"
+    },
+    "onnxruntime": {
+      "requires": ["onnxruntime", "paddle2onnx", "opencv-python", "numpy", "pillow"],
+      "status": "phase_3_planned",
+      "notes": "Exported ONNX models with CPU/OpenVINO execution providers"
+    }
+  },
+  "configuration": {
+    "cpu_threads": 6,
+    "max_image_width": 1600,
+    "grayscale_processing": true,
+    "timeout_soft_limit": 2,
+    "timeout_hard_limit": 30
+  },
+  "performance_targets": {
+    "native_baseline": "~800ms for 1080p card image",
+    "paddlex_openvino": "<500ms for 1080p card image (target 2x speedup)",
+    "onnxruntime": "<400ms for 1080p card image (future target)"
+  }
+}

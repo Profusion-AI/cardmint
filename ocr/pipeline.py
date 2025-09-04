@@ -32,6 +32,16 @@ try:
 except Exception:  # pragma: no cover - allow envs without paddle installed
     PaddleOCR = None  # type: ignore
 
+# Import backends
+try:
+    from .backends import infer_paddlex_openvino, infer_onnxruntime
+except ImportError:
+    # Fallback for missing backends
+    def infer_paddlex_openvino(*args, **kwargs):  # type: ignore
+        raise ImportError("PaddleX backend not available")
+    def infer_onnxruntime(*args, **kwargs):  # type: ignore
+        raise ImportError("ONNX Runtime backend not available")
+
 
 # Local parsers
 from pathlib import Path
@@ -64,6 +74,7 @@ class OCRConfig:
     grayscale: bool = True
     backend_type: str = "native"  # native|paddlex_openvino|onnxruntime
     threads: int = 6
+    openvino_precision: str = "int8"  # int8|fp16|fp32 for OpenVINO backend
     thresholds: Tuple[float, float] = (0.94, 0.70)
     deskew_threshold: float = 0.80  # #Claude-CLI: Apply deskew only when confidence below this
     timeout_seconds: int = 2  # #CTO-Codex: Soft timeout (hard ceiling: 30s)
@@ -93,6 +104,7 @@ def load_config(path: str = str(ROOT / "configs/ocr.yaml")) -> OCRConfig:
         grayscale=bool(pipeline.get("grayscale", True)),
         backend_type=backend.get("type", "native"),
         threads=int(backend.get("threads", 6)),
+        openvino_precision=backend.get("openvino", {}).get("precision", "int8"),
         thresholds=(float(thresholds.get("tau_accept", 0.94)), float(thresholds.get("tau_low", 0.70))),
         deskew_threshold=float(pipeline.get("deskew_threshold", 0.80)),  # #Claude-CLI
         timeout_seconds=int(pipeline.get("timeout_seconds", 2)),  # #CTO-Codex: Updated default
@@ -282,6 +294,21 @@ def ocr_infer_native(ocr: Any, img: np.ndarray, timeout_seconds: int = 30) -> Tu
     return lines, confs
 
 
+def _infer_with_timeout(infer_func: callable, *args, timeout_seconds: int = 30, **kwargs) -> Tuple[List[str], List[float]]:
+    """#Claude-CLI: Generic timeout wrapper for backend inference functions"""
+    # Set up timeout for inference operation
+    old_handler = signal.signal(signal.SIGALRM, _timeout_handler)
+    signal.alarm(timeout_seconds)
+    
+    try:
+        result = infer_func(*args, **kwargs)
+        return result
+    finally:
+        # Always restore the previous signal handler and cancel alarm
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, old_handler)
+
+
 def _create_error_response(fail_reason: str, image_path: str, error_context: Optional[str] = None) -> Dict[str, Any]:
     """#Claude-CLI: Create standardized error response with enhanced fields"""
     return {
@@ -342,19 +369,31 @@ def run(image_path: str, config_path: Optional[str] = None) -> Dict[str, Any]:
     # #CTO-Codex: Stage timing - detection and recognition 
     t_det_start = time.perf_counter()
 
-    # Backend dispatch (prototype: native-only implemented; hooks for others)
+    # Backend dispatch - native, PaddleX OpenVINO, and ONNX Runtime
     try:
         if cfg.backend_type == "native":
             ocr = _load_paddleocr(cfg.flavor, cfg.enable_orientation)
             # #CTO-Codex: Enforce hard timeout ceiling of 30s
             timeout_seconds = min(cfg.timeout_seconds, 30)
             lines, confs = ocr_infer_native(ocr, img, timeout_seconds)
-        elif cfg.backend_type in ("paddlex_openvino", "onnxruntime"):
-            # Placeholder: wire ultra-infer and ORT in subsequent patch
-            ocr = _load_paddleocr(cfg.flavor, cfg.enable_orientation)
+        elif cfg.backend_type == "paddlex_openvino":
+            # #Claude-CLI: PaddleX ultra-infer with OpenVINO backend
             # #CTO-Codex: Enforce hard timeout ceiling of 30s
             timeout_seconds = min(cfg.timeout_seconds, 30)
-            lines, confs = ocr_infer_native(ocr, img, timeout_seconds)
+            lines, confs = _infer_with_timeout(
+                infer_paddlex_openvino,
+                img, cfg.flavor, cfg.openvino_precision, cfg.threads,
+                timeout_seconds
+            )
+        elif cfg.backend_type == "onnxruntime":
+            # Placeholder: ONNX Runtime path for Phase 3
+            # #CTO-Codex: Enforce hard timeout ceiling of 30s  
+            timeout_seconds = min(cfg.timeout_seconds, 30)
+            lines, confs = _infer_with_timeout(
+                infer_onnxruntime,
+                img, cfg.flavor,
+                timeout_seconds
+            )
         else:
             return _create_error_response("unsupported_backend", image_path, f"Backend '{cfg.backend_type}' not supported")
     except OCRTimeoutError:
