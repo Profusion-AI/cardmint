@@ -17,7 +17,12 @@ pipeline:
   max_width: 1600
   grayscale: true
   deskew_threshold: 0.80  # #Claude-CLI: Apply deskew when confidence below this threshold
-  timeout_seconds: 30  # #Claude-CLI: Timeout for OCR operations
+  timeout_seconds: 2  # #CTO-Codex: Soft timeout for OCR operations (hard ceiling: 30s)
+  drop_score: 0.4  # #CTO-Codex: PaddleOCR drop_score threshold for text detection
+  # #CTO-Codex: PaddleOCR detection parameters (placeholders for future Phase 2+)
+  det_db_thresh: 0.3  # Detection threshold for DB algorithm
+  det_db_box_thresh: 0.6  # Box threshold for detection
+  det_db_unclip_ratio: 1.5  # Unclip ratio for detection
 
 backend:
   # one of: native, paddlex_openvino, onnxruntime

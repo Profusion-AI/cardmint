@@ -66,7 +66,12 @@ class OCRConfig:
     threads: int = 6
     thresholds: Tuple[float, float] = (0.94, 0.70)
     deskew_threshold: float = 0.80  # #Claude-CLI: Apply deskew only when confidence below this
-    timeout_seconds: int = 30  # #Claude-CLI: OCR operation timeout
+    timeout_seconds: int = 2  # #CTO-Codex: Soft timeout (hard ceiling: 30s)
+    drop_score: float = 0.4  # #CTO-Codex: PaddleOCR drop_score threshold
+    # #CTO-Codex: PaddleOCR detection parameters (placeholders for Phase 2+)
+    det_db_thresh: float = 0.3
+    det_db_box_thresh: float = 0.6
+    det_db_unclip_ratio: float = 1.5
 
 
 def load_config(path: str = str(ROOT / "configs/ocr.yaml")) -> OCRConfig:
@@ -90,7 +95,11 @@ def load_config(path: str = str(ROOT / "configs/ocr.yaml")) -> OCRConfig:
         threads=int(backend.get("threads", 6)),
         thresholds=(float(thresholds.get("tau_accept", 0.94)), float(thresholds.get("tau_low", 0.70))),
         deskew_threshold=float(pipeline.get("deskew_threshold", 0.80)),  # #Claude-CLI
-        timeout_seconds=int(pipeline.get("timeout_seconds", 30)),  # #Claude-CLI
+        timeout_seconds=int(pipeline.get("timeout_seconds", 2)),  # #CTO-Codex: Updated default
+        drop_score=float(pipeline.get("drop_score", 0.4)),  # #CTO-Codex
+        det_db_thresh=float(pipeline.get("det_db_thresh", 0.3)),  # #CTO-Codex
+        det_db_box_thresh=float(pipeline.get("det_db_box_thresh", 0.6)),  # #CTO-Codex
+        det_db_unclip_ratio=float(pipeline.get("det_db_unclip_ratio", 1.5)),  # #CTO-Codex
     )
     return oc
 
@@ -234,9 +243,8 @@ def _timeout_handler(signum: int, frame: Any) -> None:
 
 
 def ocr_infer_native(ocr: Any, img: np.ndarray, timeout_seconds: int = 30) -> Tuple[List[str], List[float]]:
-    """#Claude-CLI: OCR inference with timeout handling"""
-    lines: List[str] = []
-    confs: List[float] = []
+    """#Claude-CLI: OCR inference with timeout handling and deterministic sorting"""
+    detections: List[Tuple[str, float, Tuple[float, float]]] = []  # (text, conf, centroid)
     
     # Set up timeout for OCR operation
     old_handler = signal.signal(signal.SIGALRM, _timeout_handler)
@@ -251,20 +259,31 @@ def ocr_infer_native(ocr: Any, img: np.ndarray, timeout_seconds: int = 30) -> Tu
                 if page is not None:
                     for det in page:
                         if det is not None and len(det) >= 2 and isinstance(det[1], (tuple, list)):
-                            text, conf = det[1][0], float(det[1][1])
+                            box, (text, conf) = det[0], det[1]
                             if text:  # Only add non-empty text
-                                lines.append(text)
-                                confs.append(conf)
+                                # Calculate centroid for deterministic sorting
+                                box_points = np.array(box) if isinstance(box, list) else box
+                                centroid_y = float(np.mean(box_points[:, 1]))  # Average Y coordinate
+                                centroid_x = float(np.mean(box_points[:, 0]))  # Average X coordinate
+                                
+                                detections.append((text, float(conf), (centroid_y, centroid_x)))
     finally:
         # Always restore the old handler and cancel the alarm
         signal.alarm(0)
         signal.signal(signal.SIGALRM, old_handler)
     
+    # #CTO-Codex: Sort deterministically by centroid (top-to-bottom, then left-to-right)
+    detections.sort(key=lambda x: x[2])  # Sort by (y, x) tuple
+    
+    # Extract sorted lines and confidences
+    lines = [det[0] for det in detections]
+    confs = [round(det[1], 3) for det in detections]  # #CTO-Codex: Round to 3 decimals for stability
+    
     return lines, confs
 
 
 def _create_error_response(fail_reason: str, image_path: str, error_context: Optional[str] = None) -> Dict[str, Any]:
-    """#Claude-CLI: Create standardized error response"""
+    """#Claude-CLI: Create standardized error response with enhanced fields"""
     return {
         "success": False,
         "fail_reason": fail_reason,  # #Claude-CLI: Canonical error codes
@@ -274,9 +293,21 @@ def _create_error_response(fail_reason: str, image_path: str, error_context: Opt
         "confs": [],
         "parsed": {"name": None, "set_name": None, "card_number": None, "rarity_text": None, "variant_text": None},
         "overall_conf": 0.0,
+        "ocr_conf": 0.0,  # #CTO-Codex: Router compatibility field
+        "line_p50_conf": 0.0,  # #CTO-Codex: P50 confidence for error cases
+        "line_p95_conf": 0.0,  # #CTO-Codex: P95 confidence for error cases
         "line_count": 0,
         "quality_flags": [],
-        "timings_ms": {"ocr": 0, "total": 0, "deskew": 0},
+        "deskew_applied": False,  # #CTO-Codex: Deskew status for error cases
+        "timings_ms": {
+            "preproc": 0,  # #CTO-Codex: Stage timings for error cases
+            "det": 0,
+            "rec": 0,
+            "parse": 0,
+            "ocr": 0,  # Legacy field
+            "total": 0,
+            "deskew": 0
+        },
     }
 
 
@@ -302,20 +333,28 @@ def run(image_path: str, config_path: Optional[str] = None) -> Dict[str, Any]:
     # Apply EXIF orientation correction
     img = _apply_exif_orientation(image_path, img)
     
+    # #CTO-Codex: Stage timing - preprocessing
+    t_preproc_start = time.perf_counter()
     # Preprocess (resize, grayscale)
     img = _preprocess(img, cfg.max_width, cfg.grayscale)
+    t_preproc_end = time.perf_counter()
     
-    t_ocr_start = time.perf_counter()
+    # #CTO-Codex: Stage timing - detection and recognition 
+    t_det_start = time.perf_counter()
 
     # Backend dispatch (prototype: native-only implemented; hooks for others)
     try:
         if cfg.backend_type == "native":
             ocr = _load_paddleocr(cfg.flavor, cfg.enable_orientation)
-            lines, confs = ocr_infer_native(ocr, img, cfg.timeout_seconds)
+            # #CTO-Codex: Enforce hard timeout ceiling of 30s
+            timeout_seconds = min(cfg.timeout_seconds, 30)
+            lines, confs = ocr_infer_native(ocr, img, timeout_seconds)
         elif cfg.backend_type in ("paddlex_openvino", "onnxruntime"):
             # Placeholder: wire ultra-infer and ORT in subsequent patch
             ocr = _load_paddleocr(cfg.flavor, cfg.enable_orientation)
-            lines, confs = ocr_infer_native(ocr, img, cfg.timeout_seconds)
+            # #CTO-Codex: Enforce hard timeout ceiling of 30s
+            timeout_seconds = min(cfg.timeout_seconds, 30)
+            lines, confs = ocr_infer_native(ocr, img, timeout_seconds)
         else:
             return _create_error_response("unsupported_backend", image_path, f"Backend '{cfg.backend_type}' not supported")
     except OCRTimeoutError:
@@ -323,7 +362,7 @@ def run(image_path: str, config_path: Optional[str] = None) -> Dict[str, Any]:
     except Exception as e:
         return _create_error_response("ocr_error", image_path, f"OCR processing failed: {e}")
 
-    t_ocr_end = time.perf_counter()
+    t_det_end = time.perf_counter()  # #CTO-Codex: Combined det+rec timing
     
     # #Claude-CLI: Check if we should apply deskew based on confidence
     overall_conf = float(np.mean(confs)) if confs else 0.0
@@ -364,11 +403,15 @@ def run(image_path: str, config_path: Optional[str] = None) -> Dict[str, Any]:
     if not lines:
         return _create_error_response("no_text", image_path, "No text detected in image")
 
+    # #CTO-Codex: Stage timing - parsing
+    t_parse_start = time.perf_counter()
     parsed = parse_card_fields(lines)
+    t_parse_end = time.perf_counter()
     
-    # #Claude-CLI: Calculate confidence statistics (p50/p95)
-    line_p50_conf = float(np.percentile(confs, 50)) if confs else 0.0
-    line_p95_conf = float(np.percentile(confs, 95)) if confs else 0.0
+    # #Claude-CLI: Calculate confidence statistics (p50/p95) with rounding
+    overall_conf = round(float(np.mean(confs)), 3) if confs else 0.0  # #CTO-Codex: Round for stability
+    line_p50_conf = round(float(np.percentile(confs, 50)), 3) if confs else 0.0
+    line_p95_conf = round(float(np.percentile(confs, 95)), 3) if confs else 0.0
     
     # Quality flags based on confidence thresholds
     quality_flags = []
@@ -379,6 +422,11 @@ def run(image_path: str, config_path: Optional[str] = None) -> Dict[str, Any]:
     if line_p95_conf - line_p50_conf > 0.3:  # High confidence variance
         quality_flags.append("uneven_confidence")
     
+    # #CTO-Codex: Calculate stage timings
+    preproc_time = int((t_preproc_end - t_preproc_start) * 1000)
+    det_time = int((t_det_end - t_det_start) * 1000)  # Combined det+rec for now
+    parse_time = int((t_parse_end - t_parse_start) * 1000)
+    
     # #Claude-CLI: Enhanced payload with comprehensive confidence metrics
     payload = {
         "success": True,
@@ -387,13 +435,18 @@ def run(image_path: str, config_path: Optional[str] = None) -> Dict[str, Any]:
         "confs": confs,
         "parsed": parsed,
         "overall_conf": overall_conf,  # #Claude-CLI: Mean confidence across all lines
+        "ocr_conf": overall_conf,  # #CTO-Codex: Router compatibility field
         "line_p50_conf": line_p50_conf,  # #Claude-CLI: 50th percentile confidence 
         "line_p95_conf": line_p95_conf,  # #Claude-CLI: 95th percentile confidence
         "line_count": len(lines),  # #Claude-CLI: Number of detected lines
         "quality_flags": quality_flags,  # #Claude-CLI: Quality assessment flags
         "deskew_applied": deskew_applied,  # #Claude-CLI: Whether deskew was applied
         "timings_ms": {
-            "ocr": int((t_ocr_end - t_ocr_start) * 1000),
+            "preproc": preproc_time,  # #CTO-Codex: Preprocessing stage timing
+            "det": det_time,  # #CTO-Codex: Detection stage timing (combined det+rec)
+            "rec": det_time,  # #CTO-Codex: Recognition stage timing (same as det for now)
+            "parse": parse_time,  # #CTO-Codex: Parsing stage timing
+            "ocr": det_time,  # Legacy field for compatibility
             "total": int((t1 - t0) * 1000),
             "deskew": deskew_time,
         },
