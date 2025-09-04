@@ -1,0 +1,47 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://cardmint/schemas/cardmint-ocr.schema.json",
+  "title": "CardMint OCR Parsed Payload",
+  "type": "object",
+  "properties": {
+    "success": { "type": "boolean" },
+    "image_path": { "type": "string" },
+    "lines": { "type": "array", "items": { "type": "string" } },
+    "confs": { "type": "array", "items": { "type": "number" } },
+    "parsed": {
+      "type": "object",
+      "properties": {
+        "name": { "type": ["string", "null"] },
+        "set_name": { "type": ["string", "null"] },
+        "card_number": { "type": ["string", "null"], "pattern": "^\\d{1,3}/\\d{1,3}$" },
+        "rarity_text": { "type": ["string", "null"] },
+        "variant_text": { "type": ["string", "null"] }
+      },
+      "required": ["name", "set_name", "card_number", "rarity_text", "variant_text"]
+    },
+    "overall_conf": { "type": "number", "minimum": 0, "maximum": 1 },
+    "line_p50_conf": { "type": "number", "minimum": 0, "maximum": 1 },
+    "line_p95_conf": { "type": "number", "minimum": 0, "maximum": 1 },
+    "line_count": { "type": "integer", "minimum": 0 },
+    "quality_flags": { "type": "array", "items": { "type": "string" } },
+    "deskew_applied": { "type": "boolean" },
+    "fail_reason": { 
+      "type": "string",
+      "enum": ["file_read_error", "no_text", "low_confidence", "timeout", "config_error", "unsupported_backend", "ocr_error"]
+    },
+    "error_context": { "type": ["string", "null"] },
+    "timings_ms": { 
+      "type": "object",
+      "properties": {
+        "ocr": { "type": "integer" },
+        "total": { "type": "integer" },
+        "deskew": { "type": "integer" }
+      }
+    }
+  },
+  "required": ["success"],
+  "if": { "properties": { "success": { "const": true } } },
+  "then": { "required": ["lines", "parsed", "overall_conf", "line_count"] },
+  "else": { "required": ["fail_reason"] }
+}
+

@@ -1,0 +1,38 @@
+# #CodexGuidance: initial OCR pivot config for PP-OCRv5 pipeline
+
+version: 1
+
+models:
+  # one of: server, mobile
+  flavor: mobile
+  # Optional override model names; leave blank for defaults resolved by PaddleOCR
+  det_model: null
+  rec_model: null
+
+pipeline:
+  enable_detection: true
+  enable_recognition: true
+  enable_orientation: true
+  enable_unwarp: false
+  max_width: 1600
+  grayscale: true
+  deskew_threshold: 0.80  # #Claude-CLI: Apply deskew when confidence below this threshold
+  timeout_seconds: 30  # #Claude-CLI: Timeout for OCR operations
+
+backend:
+  # one of: native, paddlex_openvino, onnxruntime
+  type: native
+  threads: 6
+  openvino:
+    precision: int8   # int8|fp16|fp32
+  onnxruntime:
+    execution_providers: ["CPUExecutionProvider"]
+
+thresholds:
+  tau_accept: 0.94
+  tau_low: 0.70
+
+telemetry:
+  enabled: true
+  log_samples: false
+
