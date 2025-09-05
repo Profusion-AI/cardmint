@@ -1,0 +1,122 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cardmint.dev/schemas/golden-card.schema.json",
+  "$comment": "#Codex-CTO",
+  "title": "CardMint Golden Test Card",
+  "description": "Schema for a single golden-set test card row derived from curated ground truth.",
+  "type": "object",
+  "required": [
+    "index",
+    "filename",
+    "card_title",
+    "identifier",
+    "set_name",
+    "raw_price_usd"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "index": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Sequence number in the golden set."
+    },
+    "hints": {
+      "type": "object",
+      "description": "Optional guidance for Local-First recognition without changing ground truth.",
+      "additionalProperties": false,
+      "properties": {
+        "expected_set_icon": { "type": "string", "description": "Canonical set icon key (kebab-case)." },
+        "roi_template": { "type": "string", "description": "ROI template id for layout-specific regions." },
+        "orientation_deg": { "type": "integer", "enum": [0,90,180,270], "description": "Known card rotation in degrees." },
+        "number_format": { "type": "string", "enum": ["plain","zero_padded","alphanumeric"], "description": "Formatting of the printed identifier." },
+        "promo_type": { "type": "string", "enum": ["xy","swsh"], "description": "Promo family for alphanumeric identifiers." },
+        "layout_hint": { "type": "string", "description": "Layout family (e.g., neo, sm, sv_ex, promo_xy, promo_swsh, mcd_2019)." },
+        "canonical_key": { "type": "string", "minLength": 1, "description": "Pre-normalized comparison key: set|num|size|name or promo|code|name." }
+      }
+    },
+    "filename": {
+      "type": "string",
+      "pattern": "^.+\\.(?i:jpe?g|png|webp)$",
+      "description": "Image filename including extension."
+    },
+    "image_note": {
+      "type": "string",
+      "maxLength": 200,
+      "description": "Optional note about the image (e.g., rotation/orientation)."
+    },
+    "card_title": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Printed card name/title."
+    },
+    "identifier": {
+      "description": "Either a number+set_size (e.g., 2/64) or a promo code (e.g., SWSH021, XY50).",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["number", "set_size"],
+          "additionalProperties": false,
+          "properties": {
+            "number": {
+              "type": "string",
+              "pattern": "^\\d{1,3}$",
+              "description": "Card number as printed (digits only)."
+            },
+            "set_size": {
+              "type": "string",
+              "pattern": "^\\d{1,3}$",
+              "description": "Set size as printed (digits only)."
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["promo_code"],
+          "additionalProperties": false,
+          "properties": {
+            "promo_code": {
+              "type": "string",
+              "pattern": "^[A-Z]{2,5}\\d{1,4}$",
+              "description": "Promo identifier (e.g., SWSH021, XY50)."
+            }
+          }
+        }
+      ]
+    },
+    "set_name": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Verified set name (e.g., Neo Revelation, Pokémon Sun & Moon, POP Series 6)."
+    },
+    "first_edition": {
+      "type": "boolean",
+      "description": "True if the card is explicitly 1st Edition; omit if not present on card."
+    },
+    "raw_price_usd": {
+      "type": "number",
+      "minimum": 0,
+      "description": "RAW price as a numeric USD value (e.g., 57.00)."
+    },
+    "pricing_source": {
+      "type": "string",
+      "const": "PriceCharting",
+      "default": "PriceCharting",
+      "description": "Source of RAW price."
+    },
+    "currency": {
+      "type": "string",
+      "const": "USD",
+      "default": "USD",
+      "description": "Currency for raw_price_usd."
+    },
+    "verified_by": {
+      "type": "string",
+      "description": "Human verifier initials or name (optional)."
+    },
+    "verified_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO timestamp of verification (optional)."
+    }
+  }
+}

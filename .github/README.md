@@ -1,6 +1,6 @@
 # GitHub Workflows & PR Review
 
-This repo uses CI, policy checks (Danger), and two AI reviewers to keep PRs consistent and high quality.
+This repo uses CI, policy checks (Danger), and two AI reviewers to keep PRs consistent and high quality. See `docs/llm-lanes.md` for lane rules between Codex and Claude.
 
 Workflows
 - CI: `.github/workflows/ci.yml` – lint, typecheck, tests, builds, arch lint

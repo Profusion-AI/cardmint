@@ -1,0 +1,29 @@
+[Unit]
+Description=CardMint OCR Daemon - Prewarmed PaddleOCR Service
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=profusionai
+Group=profusionai
+WorkingDirectory=/home/profusionai/CardMint
+Environment=PATH=/home/profusionai/CardMint/.venv/bin:/usr/local/bin:/usr/bin:/bin
+Environment=OMP_NUM_THREADS=1
+Environment=OPENBLAS_NUM_THREADS=1
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/home/profusionai/CardMint/.venv/bin/python scripts/ocr_daemon.py --port 8765 --host 127.0.0.1
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+# Security settings
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/profusionai/CardMint/data /tmp
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

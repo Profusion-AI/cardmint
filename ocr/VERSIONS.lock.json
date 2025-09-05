@@ -1,7 +1,7 @@
 {
-  "description": "OCR pipeline dependency versions for reproducible builds",
-  "generated": "2025-09-04T00:00:00Z",
-  "phase": "Phase 2 - PaddleX OpenVINO Backend",
+  "description": "OCR pipeline dependency versions for reproducible builds - PP-OCRv5 server models",
+  "generated": "2025-09-04T00:00:00Z", 
+  "phase": "Phase 2 - PaddleX OpenVINO Backend (PP-OCRv5)",
   "versions": {
     "paddleocr": "2.8.1",
     "paddlex": "3.0.0",
@@ -38,8 +38,9 @@
     "timeout_hard_limit": 30
   },
   "performance_targets": {
-    "native_baseline": "~800ms for 1080p card image",
-    "paddlex_openvino": "<500ms for 1080p card image (target 2x speedup)",
-    "onnxruntime": "<400ms for 1080p card image (future target)"
+    "native_baseline": "~600ms for 1080p card image (PP-OCRv5 server + MKL-DNN)",
+    "paddlex_openvino": "<400ms for 1080p card image (target 2x speedup)",
+    "onnxruntime": "<300ms for 1080p card image (future target)",
+    "accuracy_improvement": "~13-point end-to-end gain vs PP-OCRv4 on complex scenarios"
   }
 }

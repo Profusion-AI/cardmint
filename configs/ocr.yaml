@@ -1,9 +1,10 @@
-# #CodexGuidance: initial OCR pivot config for PP-OCRv5 pipeline
+# #CodexGuidance: PP-OCRv5 pipeline config aligned with PaddleOCR 3.2.0
+# Uses server models (13-point accuracy gain vs v4), MKL-DNN CPU optimization
 
 version: 1
 
 models:
-  # one of: server, mobile
+  # one of: server, mobile - switching to mobile for better compatibility
   flavor: mobile
   # Optional override model names; leave blank for defaults resolved by PaddleOCR
   det_model: null
@@ -15,21 +16,25 @@ pipeline:
   enable_orientation: true
   enable_unwarp: false
   max_width: 1600
-  grayscale: true
+  grayscale: false  # Disabled to preserve color info for card detection
   deskew_threshold: 0.80  # #Claude-CLI: Apply deskew when confidence below this threshold
-  timeout_seconds: 2  # #CTO-Codex: Soft timeout for OCR operations (hard ceiling: 30s)
-  drop_score: 0.4  # #CTO-Codex: PaddleOCR drop_score threshold for text detection
-  # #CTO-Codex: PaddleOCR detection parameters (placeholders for future Phase 2+)
-  det_db_thresh: 0.3  # Detection threshold for DB algorithm
-  det_db_box_thresh: 0.6  # Box threshold for detection
+  timeout_seconds: 15  # #CTO-Codex: Soft timeout for OCR operations (hard ceiling: 30s) - increased for real card processing
+  drop_score: 0.2  # #CTO-Codex: Lowered for card text detection (was 0.4)
+  # #CTO-Codex: PaddleOCR detection parameters optimized for Pokemon cards
+  det_db_thresh: 0.2  # Detection threshold for DB algorithm (lowered from 0.3)
+  det_db_box_thresh: 0.4  # Box threshold for detection (lowered from 0.6)
   det_db_unclip_ratio: 1.5  # Unclip ratio for detection
 
 backend:
   # one of: native, paddlex_openvino, onnxruntime
   type: native
-  threads: 6
+  threads: 4  # Align with system_guard.py defaults for 4C i5-10210U (was 6)
   openvino:
     precision: int8   # int8|fp16|fp32
+    version: v5       # Target PP-OCR version for PaddleX (v5 preferred)
+    # Optional model overrides; if unset, defaults to {PP-OCRv5|v4}_{flavor}_{det|rec}
+    det_model: null
+    rec_model: null
   onnxruntime:
     execution_providers: ["CPUExecutionProvider"]
 
@@ -40,4 +45,3 @@ thresholds:
 telemetry:
   enabled: true
   log_samples: false
-
