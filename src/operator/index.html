@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>CardMint Operator</title>
+    <!-- Offline‑first CSP: self + localhost:3000 for API; data/blob for images -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' http://localhost:3000; object-src 'none'; base-uri 'none'; form-action 'self'">
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <header>
+      <h1>CardMint Operator</h1>
+      <div id="badges">
+        <span class="badge" id="badge-offline">Offline</span>
+        <span class="badge" id="badge-api">API: Unknown</span>
+        <span class="badge" id="badge-build">Build: local</span>
+      </div>
+    </header>
+    <main>
+      <section id="dropzone" aria-label="Drop a card photo to scan" tabindex="0">
+        <input id="file-input" type="file" accept="image/jpeg,image/png" />
+        <p>Drop a card photo here to begin, or click to choose a file.</p>
+      </section>
+
+      <section id="preview">
+        <canvas id="canvas" width="1000" height="600" aria-label="Card preview with ROI overlays"></canvas>
+        <div id="crops">
+          <figure>
+            <figcaption>Name</figcaption>
+            <img id="crop-name" alt="Name crop" />
+          </figure>
+          <figure>
+            <figcaption>HP</figcaption>
+            <img id="crop-hp" alt="HP crop" />
+          </figure>
+          <figure>
+            <figcaption>Set number</figcaption>
+            <img id="crop-set" alt="Set number crop" />
+          </figure>
+        </div>
+      </section>
+
+      <section id="results">
+        <div class="field"><label for="out-name">Name</label><output id="out-name">—</output><small id="conf-name"></small></div>
+        <div class="field"><label for="out-hp">HP</label><output id="out-hp">—</output><small id="conf-hp"></small></div>
+        <div class="field"><label for="out-set">Set number</label><output id="out-set">—</output><small id="conf-set"></small></div>
+        <div id="decision" class="decision">Decision: —</div>
+      </section>
+
+      <section id="session">
+        <h2>Inventory</h2>
+        <ul id="history" aria-live="polite"></ul>
+        <button id="btn-export" type="button">Export CSV</button>
+      </section>
+
+      <section id="actions">
+        <button id="btn-scan" type="button" disabled>Scan new</button>
+        <button id="btn-accept" type="button" disabled>Accept</button>
+        <button id="btn-accept-top3" type="button" hidden>Accept selection</button>
+        <button id="btn-recap" type="button" disabled>Recapture</button>
+      </section>
+    </main>
+    <div id="toasts" aria-live="assertive" aria-atomic="true"></div>
+    <script type="module" src="./main.ts"></script>
+  </body>
+  </html>
+
