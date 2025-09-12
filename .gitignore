@@ -127,3 +127,11 @@ Thumbs.db
 *.bak
 *~
 *.old.cert/
+
+# Exclude old CardMint directory
+CardMint-old/
+cardmint-old/
+
+# Exclude old CardMint directory
+CardMint-old/
+cardmint-old/
