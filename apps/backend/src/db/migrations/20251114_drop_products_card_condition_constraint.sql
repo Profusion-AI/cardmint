@@ -1,0 +1,37 @@
+-- Migration: Drop products (cm_card_id, condition_bucket) unique constraint
+-- Date: 2025-11-14
+-- Purpose: Align products schema with Stage-2 1:1 model
+--
+-- Background:
+-- The original 20251024_products_items_inventory.sql migration enforced
+-- a unique constraint on (cm_card_id, condition_bucket) to support product pooling:
+-- one product per card+condition, with multiple items pointing at it.
+--
+-- Stage-2 implementation changed this to a strict 1:1 model:
+-- 1 scan → 1 item → 1 product_uid (no pooling).
+-- Every scan creates its own unique product, even if multiple scans represent
+-- the same card in the same condition.
+--
+-- The old unique constraint conflicts with this model:
+-- - Scan #1: EVO-014-base / NM → product abc-123 ✓
+-- - Scan #2: EVO-014-base / NM → product def-456 ✓
+-- - Canonicalize scan #2: tries to set (EVO-014-base, NM) on product def-456
+--   → constraint violation because product abc-123 already has that pair
+--   → returns 500 INTERNAL_ERROR with no user feedback
+--
+-- This migration removes the constraint to allow multiple products to share
+-- the same canonical (cm_card_id, condition_bucket) when representing duplicate
+-- physical cards.
+--
+-- New model (Stage-2):
+-- - One product = one physical card (1 scan → 1 item → 1 product)
+-- - Multiple products MAY share the same (cm_card_id, condition_bucket)
+--   if there are duplicate copies in inventory
+-- - WYSIWYG promise from operator-expectations.md: what you scan is what you get
+--
+-- Downstream impact:
+-- - EverShop importer handles multiple product records for same card+condition
+-- - CSV exports include all products (no deduplication at product level)
+-- - Pricing and PPT bridging work per-product (as intended)
+
+DROP INDEX IF EXISTS idx_products_card_condition;

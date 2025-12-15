@@ -1,0 +1,39 @@
+{
+  "name": "cardmint-operator",
+  "version": "1.0.0",
+  "description": "CardMint Operator Stack",
+  "engines": {
+    "node": ">=20",
+    "npm": ">=10"
+  },
+  "scripts": {
+    "ci:assert-node20": "node -p \"process.version.startsWith('v20') || process.version.startsWith('v22') ? '✓ Node.js version OK' : process.exit(1)\"",
+    "ci:install-offline": "npm ci --omit=optional --prefer-offline --no-audit --no-fund",
+    "dev:operator": "echo 'CardMint Operator stack ready - requires repository'",
+    "dev:operator:reset": "echo 'Reset ports/crops - requires dev-reset.sh script'",
+    "typecheck": "echo 'TypeScript check - requires tsconfig.json'",
+    "lint": "echo 'Lint check - requires eslint config'",
+    "test:unit:roi": "echo 'Unit tests - requires test framework'",
+    "test:e2e:roi": "echo 'E2E tests - requires Playwright setup'",
+    "ci:forbid-online": "echo 'Checking for online dependencies - placeholder'",
+    "ci:golden-regression": "echo 'Golden regression check - requires CI setup'",
+    "obs:dev": "echo 'Observability UI - requires observability stack'",
+    "dev:backend": "npm --prefix apps/backend run dev",
+    "dev:frontend": "npm --prefix apps/frontend run dev",
+    "dev:keepwarm": "bash scripts/dev-keepwarm.sh",
+    "dev:cleanup": "bash scripts/kill-dev-servers.sh",
+    "dev:reset-lmstudio": "bash scripts/reset-lmstudio.sh",
+    "dev:capturelab": "bash scripts/launch-capture-lab.sh",
+    "migrate": "npm --prefix apps/backend run migrate",
+    "backfill:accepted": "cd apps/backend && npx tsx scripts/backfill_accepted_inventory.ts",
+    "validate:extraction": "sqlite3 apps/backend/cardmint_dev.db < scripts/validate/acceptance_extraction.sql"
+  },
+  "dependencies": {
+    "@imagekit/react": "^5.0.1",
+    "cloudinary": "^2.8.0",
+    "typescript": "^5.9.3"
+  },
+  "devDependencies": {
+    "baseline-browser-mapping": "^2.8.32"
+  }
+}

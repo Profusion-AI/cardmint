@@ -1,0 +1,150 @@
+/* CardMint Design Tokens — Luxury Trading Terminal */
+/* Typography: Lexend (display/UI) + JetBrains Mono (data) */
+
+@import url('https://fonts.googleapis.com/css2?family=Lexend:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+:root {
+  /* ═══════════════════════════════════════════════════════════════════════
+     COLOR PALETTE — Deep Luxury
+     ═══════════════════════════════════════════════════════════════════════ */
+
+  /* Base surfaces - rich charcoal with blue undertones */
+  --bg: #0a0c10;
+  --bg-elevated: #0d1017;
+  --panel: #12161e;
+  --panel-2: #0f1318;
+  --panel-3: #181d28;
+
+  /* Text hierarchy */
+  --text: #f0f2f5;
+  --text-secondary: #c4ccd8;
+  --sub: #8b95a8;
+  --muted: #5c6578;
+
+  /* Primary accent - warm gold */
+  --accent: #d4a574;
+  --accent-hover: #e0b88a;
+  --accent-glow: rgba(212, 165, 116, 0.25);
+  --accent-dim: #b8956a;
+
+  /* Secondary accent - copper/bronze */
+  --accent-2: #c9a27e;
+  --accent-2-glow: rgba(201, 162, 126, 0.2);
+
+  /* Status colors - refined, not harsh */
+  --good: #4ade80;
+  --good-dim: #22c55e;
+  --good-glow: rgba(74, 222, 128, 0.15);
+
+  --warn: #fbbf24;
+  --warn-dim: #f59e0b;
+  --warn-glow: rgba(251, 191, 36, 0.15);
+
+  --bad: #f87171;
+  --bad-dim: #ef4444;
+  --bad-glow: rgba(248, 113, 113, 0.15);
+
+  --info: #60a5fa;
+  --info-dim: #3b82f6;
+  --info-glow: rgba(96, 165, 250, 0.15);
+
+  /* Borders and dividers */
+  --border: rgba(255, 255, 255, 0.06);
+  --border-accent: rgba(212, 165, 116, 0.25);
+  --border-hover: rgba(255, 255, 255, 0.12);
+
+  /* Shadows - deep and layered */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow: 0 4px 16px rgba(0, 0, 0, 0.5), 0 1px 4px rgba(0, 0, 0, 0.3);
+  --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.6), 0 2px 8px rgba(0, 0, 0, 0.4);
+  --shadow-glow: 0 0 24px var(--accent-glow);
+  --shadow-inset: inset 0 1px 0 rgba(255, 255, 255, 0.03), inset 0 -1px 0 rgba(0, 0, 0, 0.2);
+
+  /* ═══════════════════════════════════════════════════════════════════════
+     SPACING & SIZING
+     ═══════════════════════════════════════════════════════════════════════ */
+  --r: 12px;
+  --r-sm: 8px;
+  --r-lg: 16px;
+  --r-pill: 999px;
+
+  --sp-1: 6px;
+  --sp-2: 10px;
+  --sp-3: 14px;
+  --sp-4: 20px;
+  --sp-5: 28px;
+  --sp-6: 40px;
+
+  /* ═══════════════════════════════════════════════════════════════════════
+     TYPOGRAPHY
+     ═══════════════════════════════════════════════════════════════════════ */
+  --font-display: 'Lexend', -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-body: 'Lexend', -apple-system, BlinkMacSystemFont, sans-serif;
+  --mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* Legacy alias for backwards compatibility */
+  --sans: var(--font-body);
+
+  /* Font sizes */
+  --text-xs: 0.7rem;
+  --text-sm: 0.8rem;
+  --text-base: 0.9rem;
+  --text-lg: 1rem;
+  --text-xl: 1.15rem;
+  --text-2xl: 1.35rem;
+  --text-3xl: 1.75rem;
+
+  /* Letter spacing */
+  --tracking-tight: -0.02em;
+  --tracking-normal: 0;
+  --tracking-wide: 0.02em;
+  --tracking-wider: 0.05em;
+  --tracking-widest: 0.1em;
+
+  /* ═══════════════════════════════════════════════════════════════════════
+     EFFECTS & TRANSITIONS
+     ═══════════════════════════════════════════════════════════════════════ */
+  --transition-fast: 0.1s ease;
+  --transition: 0.2s ease;
+  --transition-slow: 0.35s ease;
+
+  --blur-sm: blur(4px);
+  --blur: blur(12px);
+  --blur-lg: blur(24px);
+
+  /* Noise texture overlay (applied via pseudo-element) */
+  --noise-opacity: 0.025;
+
+  /* Gradient overlays */
+  --gradient-surface: linear-gradient(180deg, rgba(255,255,255,0.02) 0%, transparent 100%);
+  --gradient-gold: linear-gradient(135deg, var(--accent) 0%, var(--accent-2) 100%);
+  --gradient-glow: radial-gradient(ellipse at center, var(--accent-glow) 0%, transparent 70%);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   LIGHT MODE (accessible alternative)
+   ═══════════════════════════════════════════════════════════════════════════ */
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #f8f9fb;
+    --bg-elevated: #ffffff;
+    --panel: #ffffff;
+    --panel-2: #f3f5f8;
+    --panel-3: #e8ebf0;
+
+    --text: #0f1419;
+    --text-secondary: #3d4654;
+    --sub: #5a6679;
+    --muted: #8a95a8;
+
+    --border: rgba(0, 0, 0, 0.08);
+    --border-hover: rgba(0, 0, 0, 0.15);
+
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.06);
+    --shadow: 0 4px 16px rgba(0, 0, 0, 0.08), 0 1px 4px rgba(0, 0, 0, 0.04);
+    --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.12);
+    --shadow-inset: inset 0 1px 0 rgba(255, 255, 255, 0.8);
+
+    --noise-opacity: 0.015;
+  }
+}

@@ -1,0 +1,95 @@
+# === Secrets & Environment ===
+.env*
+*.local
+
+# === Databases ===
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+
+# === Dependencies & Build ===
+**/node_modules/
+**/dist/
+**/dist-ssr/
+**/.venv/
+**/__pycache__/
+coverage/
+
+# === Large binaries ===
+*.AppImage
+*.zip
+*.tar.gz
+*.so
+*.dylib
+
+# === Media files ===
+*.wav
+*.mp3
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.webp
+*.ico
+
+# === Documentation (except essentials) ===
+*.md
+!README.md
+!LICENSE
+!SECURITY.md
+!CONTRIBUTING.md
+!apps/*/README.md
+!external/*/README.md
+*.txt
+*.pdf
+
+# === Brand assets (proprietary) ===
+/brand/
+
+# === Large data/SDK files ===
+/docs/
+/pokemoncards/
+/data/
+
+# === Development artifacts ===
+/results/
+/logs/
+/checkpoints/
+/backups/
+/exports/
+/fixtures/
+/artifacts/
+/images/
+
+# === External tools ===
+/lmstudio-observability/
+/posthog/
+/OpenAI-Oct7/
+
+# === Misc workspace files ===
+/CM/
+/newmodal/
+/launchweek-deprecated/
+/shopterms/
+/.claude/
+/.git.backup/
+/.local/
+/local/
+
+# === IDE/Editor ===
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# === Prevent compiled .js files from shadowing TS/TSX source ===
+apps/frontend/src/**/*.js
+!apps/frontend/src/**/*.config.js
+!apps/frontend/src/**/*.test.js
+
+# === Claude Code workspace files ===
+CLAUDE.md
+AGENTS.md
+**/AGENTS.md

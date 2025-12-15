@@ -1,0 +1,2 @@
+ALTER TABLE scans ADD COLUMN processor_id TEXT;
+ALTER TABLE scans ADD COLUMN locked_at INTEGER;
