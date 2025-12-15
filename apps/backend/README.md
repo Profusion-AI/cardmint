@@ -128,7 +128,7 @@ Background loop (500ms poll interval):
 ### Inference Layer
 
 **LM Studio Integration** (`services/inference/lmstudio.ts`):
-- Endpoint: `http://10.0.24.97:12345/v1/chat/completions`
+- Endpoint: `http://127.0.0.1:12345/v1/chat/completions` (default; configure via `LMSTUDIO_BASE_URL`)
 - Model: `mistralai/magistral-small-2509`
 - Config: 777 context + 42 max_tokens (Phase 4D baseline)
 - Input: base64 PNG image
@@ -160,7 +160,7 @@ interface EnrichmentAdapter {
 ### Capture Adapter
 
 Spawns external Sony capture binary:
-- Path: `/home/kyle/CardMint-workspace/apps/sony-capture-operator/target/release/sony-capture-operator`
+- Path: Configured via `CAPTURE_BINARY` env var (default: `../SonySDK/.../CardMintCapture`)
 - Timeout: 30s
 - Output: JSON with job metadata
 - Creates job in `QUEUED` state with image_path
@@ -265,7 +265,7 @@ Direct candidate attachment (testing only)
 
 ```bash
 # LM Studio endpoint
-CARDMINT_LMSTUDIO_ENDPOINT=http://10.0.24.97:12345
+CARDMINT_LMSTUDIO_ENDPOINT=http://127.0.0.1:12345
 
 # PriceCharting dataset
 CARDMINT_PRICECHARTING_CSV=/path/to/pricecharting-pokemon-cards.csv

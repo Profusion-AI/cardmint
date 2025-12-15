@@ -86,7 +86,7 @@ app.get("/health", (_req: Request, res: Response) => {
       bytes: mockSpoolPairs * 2 * 1024 * 1024, // ~2MB per pair
     },
     sftp: {
-      host: "10.0.24.10",
+      host: "127.0.0.1",
       status: "configured",
     },
     stats: {

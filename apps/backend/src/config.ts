@@ -154,7 +154,7 @@ const parsed = envSchema.parse(process.env);
 const capturePiBaseUrl =
   parsed.CAPTURE_PI_BASEURL?.trim() ||
   parsed.PI5_KIOSK_URL?.trim() ||
-  "http://10.0.24.47:8000";
+  "http://127.0.0.1:8000";
 
 const capturePiToken = parsed.CAPTURE_PI_TOKEN?.trim() || parsed.PI5_QUEUE_TOKEN?.trim() || "";
 
