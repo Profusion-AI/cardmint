@@ -1,0 +1,426 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Pi5 Capture Lab</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+      background: #0a0a0a;
+      color: #e0e0e0;
+      padding: 20px;
+      line-height: 1.6;
+    }
+    .container { max-width: 1200px; margin: 0 auto; }
+    h1 {
+      font-size: 1.8rem;
+      margin-bottom: 0.5rem;
+      color: #4a9eff;
+      border-bottom: 2px solid #4a9eff;
+      padding-bottom: 0.5rem;
+    }
+    .subtitle {
+      font-size: 0.9rem;
+      color: #888;
+      margin-bottom: 1.5rem;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      gap: 1rem;
+      margin-bottom: 1.5rem;
+    }
+    .card {
+      background: #1a1a1a;
+      border: 1px solid #333;
+      border-radius: 8px;
+      padding: 1rem;
+    }
+    .card h2 {
+      font-size: 1.2rem;
+      margin-bottom: 0.8rem;
+      color: #4a9eff;
+    }
+    .form-group {
+      margin-bottom: 0.8rem;
+    }
+    label {
+      display: block;
+      font-size: 0.85rem;
+      color: #aaa;
+      margin-bottom: 0.3rem;
+    }
+    input[type="text"],
+    input[type="number"],
+    select {
+      width: 100%;
+      padding: 0.5rem;
+      background: #0a0a0a;
+      border: 1px solid #444;
+      border-radius: 4px;
+      color: #e0e0e0;
+      font-size: 0.9rem;
+    }
+    input[type="text"]:focus,
+    input[type="number"]:focus,
+    select:focus {
+      outline: none;
+      border-color: #4a9eff;
+    }
+    button {
+      background: #4a9eff;
+      color: white;
+      border: none;
+      padding: 0.6rem 1.2rem;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 0.9rem;
+      font-weight: 500;
+      transition: background 0.2s;
+    }
+    button:hover { background: #3a8eef; }
+    button:active { transform: scale(0.98); }
+    button.secondary {
+      background: #333;
+      color: #e0e0e0;
+    }
+    button.secondary:hover { background: #444; }
+    button.danger {
+      background: #e63946;
+    }
+    button.danger:hover { background: #d62839; }
+    .button-row {
+      display: flex;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+    }
+    .output {
+      background: #0a0a0a;
+      border: 1px solid #333;
+      border-radius: 8px;
+      padding: 1rem;
+      margin-top: 1.5rem;
+      max-height: 500px;
+      overflow-y: auto;
+    }
+    .output h3 {
+      font-size: 1rem;
+      margin-bottom: 0.8rem;
+      color: #4a9eff;
+    }
+    pre {
+      white-space: pre-wrap;
+      word-wrap: break-word;
+      font-family: 'Monaco', 'Menlo', monospace;
+      font-size: 0.85rem;
+      color: #c0c0c0;
+    }
+    .status-indicator {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      margin-right: 0.5rem;
+    }
+    .status-success { background: #06d6a0; }
+    .status-error { background: #e63946; }
+    .status-pending { background: #ffd23f; }
+    .inline-group {
+      display: flex;
+      gap: 0.5rem;
+      align-items: flex-end;
+    }
+    .inline-group .form-group {
+      flex: 1;
+    }
+    .checkbox-group {
+      display: flex;
+      gap: 1rem;
+      align-items: center;
+    }
+    .checkbox-group label {
+      display: flex;
+      align-items: center;
+      gap: 0.3rem;
+      margin-bottom: 0;
+    }
+    input[type="checkbox"] {
+      width: auto;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>🔬 Pi5 Capture Lab</h1>
+    <p class="subtitle">Safe, standalone camera control sandbox — non-destructive testing environment</p>
+
+    <div class="grid">
+      <!-- Status Card -->
+      <div class="card">
+        <h2>System Status</h2>
+        <button onclick="getStatus()" style="width: 100%;">Refresh Status</button>
+        <div id="status-display" style="margin-top: 0.8rem; font-size: 0.85rem;"></div>
+      </div>
+
+      <!-- Camera Controls -->
+      <div class="card">
+        <h2>Camera Controls (/set)</h2>
+        <div class="form-group">
+          <label>Exposure (μs)</label>
+          <input type="number" id="exposure" value="10101" placeholder="e.g., 10101">
+        </div>
+        <div class="form-group">
+          <label>Analogue Gain</label>
+          <input type="number" step="0.001" id="gain" value="1.115" placeholder="e.g., 1.115">
+        </div>
+        <div class="checkbox-group">
+          <label><input type="checkbox" id="ae"> Auto-Exposure</label>
+          <label><input type="checkbox" id="awb"> Auto-WB</label>
+        </div>
+        <div class="form-group">
+          <label>Colour Gains (R,B)</label>
+          <input type="text" id="colour-gains" value="2.38,1.98" placeholder="e.g., 2.1,1.8">
+        </div>
+        <button onclick="applyControls()" style="width: 100%; margin-top: 0.5rem;">Apply Controls</button>
+      </div>
+
+      <!-- Profiles -->
+      <div class="card">
+        <h2>Profiles</h2>
+        <div class="button-row" style="margin-bottom: 0.8rem;">
+          <button class="secondary" onclick="listProfiles()">List</button>
+          <button class="secondary" onclick="loadProfile()">Load</button>
+          <button class="secondary" onclick="saveProfile()">Save</button>
+        </div>
+        <div class="inline-group">
+          <div class="form-group">
+            <label>Profile Name</label>
+            <input type="text" id="profile-name" placeholder="e.g., indoor-bright">
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Description (optional)</label>
+          <input type="text" id="profile-desc" placeholder="e.g., Optimized for indoor lighting">
+        </div>
+      </div>
+
+      <!-- Capture -->
+      <div class="card">
+        <h2>Capture</h2>
+        <div class="form-group">
+          <label>Output Filename</label>
+          <input type="text" id="capture-output" placeholder="test.jpg">
+        </div>
+        <div class="checkbox-group">
+          <label><input type="checkbox" id="capture-full" checked> Full Resolution</label>
+          <label><input type="checkbox" id="capture-confirm"> Confirm (required)</label>
+        </div>
+        <button onclick="doCapture()" class="danger" style="width: 100%; margin-top: 0.5rem;">🎯 Trigger Capture</button>
+        <p style="font-size: 0.75rem; color: #888; margin-top: 0.5rem;">⚠️ Requires "Confirm" checkbox to execute</p>
+      </div>
+
+      <!-- Advanced Controls -->
+      <div class="card">
+        <h2>Post-Processing & Timing</h2>
+        <div class="form-group">
+          <label>Stabilization Delay (ms)</label>
+          <input type="number" id="stabilize-ms" value="800" min="0">
+        </div>
+        <div class="checkbox-group">
+          <label><input type="checkbox" id="distortion-enabled" checked> Apply Distortion Correction</label>
+        </div>
+        <div class="form-group">
+          <label>Distortion Profile</label>
+          <input type="text" id="distortion-profile" value="imx477_tuned_6mm_20251010_133159">
+        </div>
+      </div>
+    </div>
+
+    <!-- Output Panel -->
+    <div class="output">
+      <h3 id="output-title">Output</h3>
+      <div id="image-preview" style="display: none; margin-bottom: 1rem;">
+        <img id="captured-image" style="max-width: 100%; border-radius: 4px; border: 1px solid #444;">
+      </div>
+      <pre id="output-content">Ready. Click any action button to see results.</pre>
+    </div>
+  </div>
+
+  <script>
+    const API_BASE = '';
+
+    function getControlsPayload() {
+      const payload = {};
+      const exposure = document.getElementById('exposure').value.trim();
+      if (exposure) payload.exposure_us = Number(exposure);
+
+      const gain = document.getElementById('gain').value.trim();
+      if (gain) payload.analogue_gain = Number(gain);
+
+      payload.ae_enable = document.getElementById('ae').checked;
+      payload.awb_enable = document.getElementById('awb').checked;
+
+      const colourGains = document.getElementById('colour-gains').value.trim();
+      if (colourGains) {
+        const parts = colourGains.split(',');
+        if (parts.length === 2) {
+          const r = Number(parts[0].trim());
+          const b = Number(parts[1].trim());
+          if (!Number.isNaN(r) && !Number.isNaN(b)) {
+            payload.colour_gains = [r, b];
+          }
+        }
+      }
+
+      return payload;
+    }
+
+    function buildControlArgs(payload) {
+      const args = [];
+      if (payload.exposure_us !== undefined) args.push('--exposure-us', payload.exposure_us.toString());
+      if (payload.analogue_gain !== undefined) args.push('--gain', payload.analogue_gain.toString());
+      if (payload.ae_enable !== undefined) args.push('--ae', payload.ae_enable.toString());
+      if (payload.awb_enable !== undefined) args.push('--awb', payload.awb_enable.toString());
+      if (payload.colour_gains) args.push('--colour-gains', payload.colour_gains.join(','));
+      return args;
+    }
+
+    function setOutput(title, content, isSuccess = true, imagePath = null) {
+      document.getElementById('output-title').innerHTML =
+        `<span class="status-indicator status-${isSuccess ? 'success' : 'error'}"></span>${title}`;
+      document.getElementById('output-content').textContent = content;
+
+      // Handle image preview
+      const preview = document.getElementById('image-preview');
+      const img = document.getElementById('captured-image');
+      if (imagePath) {
+        const imageUrl = `/images/${encodeURIComponent(imagePath)}`;
+        img.src = imageUrl;
+        preview.style.display = 'block';
+      } else {
+        preview.style.display = 'none';
+      }
+    }
+
+    function setPending(title) {
+      document.getElementById('output-title').innerHTML =
+        `<span class="status-indicator status-pending"></span>${title}`;
+      document.getElementById('output-content').textContent = 'Executing...';
+    }
+
+    async function execCommand(command, args = []) {
+      try {
+        const response = await fetch(`${API_BASE}/api/exec`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ command, args })
+        });
+
+        const result = await response.json();
+
+        if (!result.success) {
+          setOutput(`❌ ${command} (exit ${result.exitCode || 'error'})`,
+            result.stderr || result.error || 'Command failed', false);
+          return;
+        }
+
+        const output = result.stdout + (result.stderr ? '\n[stderr]\n' + result.stderr : '');
+        setOutput(`✅ ${command}`, output, true, result.imagePath || null);
+      } catch (err) {
+        setOutput('❌ Request Failed', err.message, false);
+      }
+    }
+
+    async function getStatus() {
+      setPending('status');
+      await execCommand('status');
+    }
+
+    async function applyControls() {
+      const payload = getControlsPayload();
+      const args = buildControlArgs(payload);
+      setPending('set');
+      await execCommand('set', args);
+    }
+
+    async function listProfiles() {
+      setPending('profiles list');
+      await execCommand('profiles', ['list']);
+    }
+
+    async function loadProfile() {
+      const name = document.getElementById('profile-name').value;
+      if (!name) {
+        setOutput('⚠️ Missing Profile', 'Enter a profile name', false);
+        return;
+      }
+      setPending(`profiles load ${name}`);
+      await execCommand('profiles', ['load', name]);
+    }
+
+    async function saveProfile() {
+      const name = document.getElementById('profile-name').value;
+      if (!name) {
+        setOutput('⚠️ Missing Profile', 'Enter a profile name', false);
+        return;
+      }
+
+      const args = ['save', name];
+      const desc = document.getElementById('profile-desc').value;
+      if (desc) {
+        args.push('--desc', desc);
+      }
+
+      setPending(`profiles save ${name}`);
+      await execCommand('profiles', args);
+    }
+
+    async function doCapture() {
+      const confirm = document.getElementById('capture-confirm').checked;
+      if (!confirm) {
+        setOutput('⚠️ Capture Blocked',
+          'Dry-run mode. Check "Confirm" checkbox to execute real capture.', false);
+        return;
+      }
+
+      const args = ['--confirm'];
+
+      if (document.getElementById('capture-full').checked) {
+        args.push('--full');
+      }
+
+      const output = document.getElementById('capture-output').value;
+      if (output) {
+        args.push('-o', `results/capture-lab/${output}`);
+      }
+
+      const payload = getControlsPayload();
+      const payloadJson = JSON.stringify(payload);
+      if (payloadJson && payloadJson !== '{}') {
+        args.push('--controls-json', payloadJson);
+      }
+
+      const stabilize = document.getElementById('stabilize-ms').value;
+      if (stabilize) {
+        args.push('--stabilize-ms', stabilize);
+      }
+      const distortionEnabled = document.getElementById('distortion-enabled').checked;
+      args.push(distortionEnabled ? '--correct' : '--no-correct');
+      const profile = document.getElementById('distortion-profile').value.trim();
+      if (profile) {
+        args.push('--profile', profile);
+      }
+
+      setPending('capture (confirmed)');
+      await execCommand('capture', args);
+    }
+
+    // Auto-load status on page load
+    window.addEventListener('DOMContentLoaded', () => {
+      setTimeout(getStatus, 500);
+    });
+  </script>
+</body>
+</html>

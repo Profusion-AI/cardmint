@@ -1,0 +1,36 @@
+[Unit]
+Description=CardMint KeepWarm Daemon - LM Studio Model Warmup
+Documentation=https://github.com/cardmint/operator
+After=lmstudio.service network-online.target
+Wants=network-online.target
+Requires=lmstudio.service
+# Only start if LM Studio is running
+BindsTo=lmstudio.service
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/cardmint
+Environment=PATH=/usr/local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=PYTHONUNBUFFERED=1
+# Configure LMSTUDIO_BASE_URL for your network
+Environment=LMSTUDIO_BASE_URL=http://127.0.0.1:12345
+# Wait a bit for LM Studio to fully initialize
+ExecStartPre=/bin/sleep 10
+# Start keepwarm daemon with auto-launch disabled (LM Studio already running via systemd)
+ExecStart=/opt/cardmint/.venv/bin/python3 /opt/cardmint/scripts/cardmint-keepwarm-enhanced.py --daemon --startup-warmups 2
+# Stop cleanly via SIGTERM
+ExecStop=/opt/cardmint/.venv/bin/python3 /opt/cardmint/scripts/cardmint-keepwarm-enhanced.py --stop
+Restart=on-failure
+RestartSec=10
+TimeoutStartSec=120
+TimeoutStopSec=30
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=cardmint-keepwarm
+
+# Resource limits
+MemoryMax=512M
+CPUQuota=25%
+
+[Install]
+WantedBy=default.target

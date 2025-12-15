@@ -1,0 +1,55 @@
+[Unit]
+Description=CardMint KeepWarm Daemon (Enhanced)
+Documentation=file:///opt/cardmint/scripts/cardmint-keepwarm-enhanced.py
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+# Update User/Group to match your installation
+User=cardmint
+Group=cardmint
+WorkingDirectory=/opt/cardmint
+
+# Main daemon process
+ExecStart=/usr/bin/python3 /opt/cardmint/scripts/cardmint-keepwarm-enhanced.py --daemon
+
+# Pre-start checks
+ExecStartPre=/bin/bash -c 'if ! curl -s http://127.0.0.1:12345/v1/models >/dev/null 2>&1; then echo "LM Studio not available at 127.0.0.1:12345"; exit 1; fi'
+
+# Graceful shutdown
+ExecStop=/opt/cardmint/scripts/cardmint-keepwarm-enhanced.py --stop
+TimeoutStopSec=15
+KillMode=mixed
+
+# Restart policy
+Restart=always
+RestartSec=10
+StartLimitBurst=5
+StartLimitIntervalSec=60
+
+# Resource limits appropriate for keepwarm daemon
+MemoryMax=512M
+CPUQuota=25%
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/tmp /var/log
+
+# Environment - configure LMSTUDIO_BASE_URL for your network
+Environment=PYTHONUNBUFFERED=1
+Environment=LMSTUDIO_BASE_URL=http://127.0.0.1:12345
+Environment=OMP_NUM_THREADS=4
+Environment=MKL_NUM_THREADS=4
+Environment=OPENBLAS_NUM_THREADS=1
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=cardmint-keepwarm
+
+[Install]
+WantedBy=multi-user.target

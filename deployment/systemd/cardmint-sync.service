@@ -1,0 +1,17 @@
+[Unit]
+Description=CardMint Sync Daemon
+After=network.target cardmint-backend.service
+
+[Service]
+User=cardmint
+WorkingDirectory=/var/www/cardmint-backend
+Environment=NODE_ENV=production
+EnvironmentFile=/var/www/cardmint-backend/.env
+ExecStart=/usr/bin/node /var/www/cardmint-backend/dist/services/sync/syncDaemon.js
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
