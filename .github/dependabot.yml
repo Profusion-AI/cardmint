@@ -1,0 +1,38 @@
+# Dependabot configuration - Launch Mode
+# Security updates only, no version update PR spam during sprint to production.
+# Post-launch: enable controlled version updates (minor/patch, grouped, ignore majors).
+
+version: 2
+updates:
+  # Frontend (apps/frontend)
+  - package-ecosystem: "npm"
+    directory: "/apps/frontend"
+    schedule:
+      interval: "weekly"
+    # Disable version update PRs; keep security-update PRs only
+    open-pull-requests-limit: 0
+    labels:
+      - "dependencies"
+      - "security"
+    groups:
+      security-updates:
+        applies-to: security-updates
+        patterns:
+          - "*"
+
+  # Backend (apps/backend)
+  - package-ecosystem: "npm"
+    directory: "/apps/backend"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 0
+    labels:
+      - "dependencies"
+      - "security"
+    groups:
+      security-updates:
+        applies-to: security-updates
+        patterns:
+          - "*"
+
+  # Shop submodule is managed separately in Profusion-AI/cardmint-shop
