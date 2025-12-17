@@ -118,6 +118,7 @@ scripts/id-results*.json
 *.swp
 *.swo
 .DS_Store
+.directory
 
 # === Prevent compiled .js files from shadowing TS/TSX source ===
 apps/frontend/src/**/*.js
