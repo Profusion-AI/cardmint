@@ -427,7 +427,8 @@ export class InventoryService {
         p.canonical_sku,
         p.launch_price,
         p.cdn_image_url,
-        p.staging_ready
+        p.staging_ready,
+        p.rarity
       FROM items i
       JOIN products p ON i.product_uid = p.product_uid
       WHERE i.item_uid = ?
@@ -451,6 +452,7 @@ export class InventoryService {
       price_cents: Math.round(Math.max(row.launch_price ?? 0, MINIMUM_LISTING_PRICE) * 100),
       image_url: row.cdn_image_url,
       staging_ready: row.staging_ready === 1,
+      rarity: row.rarity,
     };
   }
 
@@ -598,6 +600,36 @@ export class InventoryService {
   }
 
   /**
+   * Get ALL items by checkout session ID (for multi-item cancel/expire)
+   */
+  getItemsByCheckoutSession(checkoutSessionId: string): { item_uid: string; status: string }[] {
+    const stmt = this.db.prepare(`
+      SELECT item_uid, status
+      FROM items
+      WHERE checkout_session_id = ?
+    `);
+    return stmt.all(checkoutSessionId) as { item_uid: string; status: string }[];
+  }
+
+  /**
+   * Release ALL reservations for a checkout session (multi-item support)
+   * Returns count of items released
+   */
+  releaseReservationsByCheckoutSession(checkoutSessionId: string): number {
+    const items = this.getItemsByCheckoutSession(checkoutSessionId);
+    let releasedCount = 0;
+
+    for (const item of items) {
+      if (item.status === "RESERVED") {
+        const released = this.releaseReservation(item.item_uid);
+        if (released) releasedCount++;
+      }
+    }
+
+    return releasedCount;
+  }
+
+  /**
    * Get item by payment intent ID (for refund webhook handling)
    */
   getItemByPaymentIntent(paymentIntentId: string): { item_uid: string; status: string; stripe_product_id: string | null; stripe_price_id: string | null } | null {
@@ -689,6 +721,7 @@ export interface ItemCheckoutData {
   price_cents: number;
   image_url: string | null;
   staging_ready: boolean;
+  rarity: string | null;
 }
 
 interface ItemCheckoutRow {
@@ -706,6 +739,7 @@ interface ItemCheckoutRow {
   launch_price: number | null;
   cdn_image_url: string | null;
   staging_ready: number | null;
+  rarity: string | null;
 }
 
 export interface OverdueReservation {

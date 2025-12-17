@@ -1,0 +1,5 @@
+{
+  "methods": ["GET"],
+  "path": "/login",
+  "access": "public"
+}

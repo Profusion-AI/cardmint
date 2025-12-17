@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <!-- Product URLs are added by the storefront/importer. -->
+  <!-- The public inventory feed advertises current SKUs at /.well-known/cardmint.inventory.json -->
+</urlset>
+

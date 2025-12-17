@@ -1,0 +1,326 @@
+/**
+ * CardMint Admin Theme
+ *
+ * Brand Palette (from brand/cardmintpallet.json):
+ * - Midnight Blue (#0A203F): primary dark background
+ * - Black (#1C1C1E): card surfaces, modals
+ * - Gold/Peru (#D4AF37): premium accents, badges
+ * - Sage (#98B2A6): borders, secondary elements
+ * - CardMint Green (#4ADC61): primary CTA, active states
+ * - Aquamarine (#96E3AF): hover effects, success states
+ * - Warm Paper (#FAF7F2): light mode canvas
+ */
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
+:root {
+  /* Primary brand colors */
+  --primary: #4ADC61;           /* CardMint Green - primary actions */
+  --secondary: #0A203F;         /* Midnight Blue - headers, nav */
+  --surface: #1C1C1E;           /* Black - card surfaces */
+  --onSurface: #FFFFFF;         /* Text on dark surfaces */
+
+  /* Interactive states */
+  --interactive: #4ADC61;       /* CardMint Green */
+  --success: #4ADC61;           /* CardMint Green */
+  --highlight: #96E3AF;         /* Aquamarine */
+
+  /* Status colors */
+  --critical: #E53935;          /* Error red */
+  --warning: #D4AF37;           /* Gold - warning/premium */
+  --decorative: #D4AF37;        /* Gold - badges, accents */
+
+  /* UI elements */
+  --border: #98B2A6;            /* Sage - borders */
+  --background: #0A203F;        /* Midnight Blue - main bg */
+  --icon: #98B2A6;              /* Sage - icons */
+  --textSubdued: #98B2A6;       /* Sage - secondary text */
+  --divider: #2A3A4F;           /* Dark divider */
+  --text: #FFFFFF;              /* Primary text */
+  --formFieldBorder: #98B2A6;   /* Sage - form borders */
+  --formFieldBorderShadow: #4ADC61; /* Green focus glow */
+}
+
+/* Dark theme body */
+body {
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  background-color: #0A203F;
+  color: #FFFFFF;
+}
+
+/* Header styling - Midnight Blue with CardMint Green accent */
+.header {
+  background: linear-gradient(135deg, #0A203F 0%, #1C1C1E 100%) !important;
+  border-bottom: 2px solid #4ADC61 !important;
+  box-shadow: 0 4px 20px rgba(10, 32, 63, 0.5) !important;
+}
+
+/* Navigation sidebar */
+.admin-navigation {
+  background-color: #1C1C1E !important;
+  border-right: 1px solid #2A3A4F !important;
+}
+
+.admin-navigation a {
+  color: #FFFFFF !important;
+  transition: all 0.2s ease !important;
+}
+
+.admin-navigation a:hover,
+.admin-navigation a.active {
+  background-color: rgba(74, 220, 97, 0.15) !important;
+  color: #4ADC61 !important;
+  border-left: 3px solid #4ADC61 !important;
+}
+
+/* Main content area */
+#app {
+  background-color: #0A203F !important;
+}
+
+.content-wrapper .main-content .main-content-inner {
+  background-color: #0A203F;
+}
+
+/* Cards and panels */
+.card,
+[class*="Card"],
+.form-group,
+.admin-form-inner {
+  background-color: #1C1C1E !important;
+  border: 1px solid #2A3A4F !important;
+  border-radius: 8px !important;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3) !important;
+}
+
+/* Form inputs */
+input[type='email'],
+input[type='password'],
+input[type='tel'],
+input[type='text'],
+input[type='number'],
+select,
+textarea {
+  background-color: #0A203F !important;
+  border: 1px solid #98B2A6 !important;
+  color: #FFFFFF !important;
+  border-radius: 6px !important;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease !important;
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+  border-color: #4ADC61 !important;
+  box-shadow: 0 0 0 3px rgba(74, 220, 97, 0.25) !important;
+  outline: none !important;
+}
+
+/* Buttons - Primary */
+.button.primary,
+button.primary,
+[class*="btn-primary"],
+.btn-primary {
+  background: linear-gradient(135deg, #4ADC61 0%, #3BC952 100%) !important;
+  color: #0A203F !important;
+  font-weight: 600 !important;
+  border: none !important;
+  border-radius: 6px !important;
+  box-shadow: 0 2px 10px rgba(74, 220, 97, 0.3) !important;
+  transition: all 0.2s ease !important;
+}
+
+.button.primary:hover,
+button.primary:hover {
+  background: linear-gradient(135deg, #5DE874 0%, #4ADC61 100%) !important;
+  box-shadow: 0 4px 15px rgba(74, 220, 97, 0.4) !important;
+  transform: translateY(-1px) !important;
+}
+
+/* Secondary buttons */
+.button.secondary,
+button.secondary,
+.button.outline {
+  background-color: transparent !important;
+  border: 1px solid #98B2A6 !important;
+  color: #FFFFFF !important;
+  border-radius: 6px !important;
+}
+
+.button.secondary:hover,
+button.secondary:hover {
+  background-color: rgba(152, 178, 166, 0.15) !important;
+  border-color: #4ADC61 !important;
+}
+
+/* Tables */
+table {
+  background-color: #1C1C1E;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+table th {
+  background-color: #0A203F !important;
+  color: #98B2A6 !important;
+  font-weight: 600 !important;
+  text-transform: uppercase !important;
+  font-size: 0.75rem !important;
+  letter-spacing: 0.05em !important;
+}
+
+table td {
+  color: #FFFFFF !important;
+  border-color: #2A3A4F !important;
+}
+
+table tr:hover td {
+  background-color: rgba(74, 220, 97, 0.05) !important;
+}
+
+/* Footer */
+.footer {
+  background-color: #1C1C1E !important;
+  border-top: 1px solid #2A3A4F !important;
+  color: #98B2A6 !important;
+}
+
+/* Links */
+a {
+  color: #4ADC61 !important;
+  transition: color 0.2s ease !important;
+}
+
+a:hover {
+  color: #96E3AF !important;
+}
+
+/* Badges and status indicators */
+.badge,
+[class*="badge"],
+[class*="status"] {
+  border-radius: 4px !important;
+  font-weight: 500 !important;
+}
+
+.badge-success,
+[class*="success"] {
+  background-color: rgba(74, 220, 97, 0.2) !important;
+  color: #4ADC61 !important;
+}
+
+.badge-warning,
+[class*="warning"] {
+  background-color: rgba(212, 175, 55, 0.2) !important;
+  color: #D4AF37 !important;
+}
+
+.badge-error,
+[class*="error"],
+[class*="critical"] {
+  background-color: rgba(229, 57, 53, 0.2) !important;
+  color: #E53935 !important;
+}
+
+/* Gold accent for premium elements */
+.premium,
+[class*="premium"],
+[class*="featured"] {
+  border: 1px solid #D4AF37 !important;
+  box-shadow: 0 0 15px rgba(212, 175, 55, 0.2) !important;
+}
+
+/* Loading states */
+.loading,
+[class*="loading"],
+[class*="spinner"] {
+  border-color: #4ADC61 !important;
+  border-top-color: transparent !important;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #1C1C1E;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #98B2A6;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #4ADC61;
+}
+
+/* Logo area */
+.logo,
+[class*="logo"] {
+  filter: brightness(0) invert(1);
+}
+
+/* Dropdown menus */
+[class*="dropdown"],
+[class*="menu"],
+[class*="popover"] {
+  background-color: #1C1C1E !important;
+  border: 1px solid #2A3A4F !important;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4) !important;
+  border-radius: 8px !important;
+}
+
+/* Page headings */
+h1, h2, h3, h4, h5, h6,
+.page-heading,
+[class*="heading"] {
+  color: #FFFFFF !important;
+}
+
+/* Breadcrumbs */
+[class*="breadcrumb"] {
+  color: #98B2A6 !important;
+}
+
+[class*="breadcrumb"] a {
+  color: #4ADC61 !important;
+}
+
+/* Pagination */
+[class*="pagination"] a,
+[class*="pagination"] button {
+  background-color: #1C1C1E !important;
+  border: 1px solid #2A3A4F !important;
+  color: #FFFFFF !important;
+}
+
+[class*="pagination"] .active,
+[class*="pagination"] [aria-current] {
+  background-color: #4ADC61 !important;
+  color: #0A203F !important;
+  border-color: #4ADC61 !important;
+}
+
+/* Toast/notification messages */
+[class*="toast"],
+[class*="notification"],
+[class*="alert"] {
+  background-color: #1C1C1E !important;
+  border-left: 4px solid #4ADC61 !important;
+  color: #FFFFFF !important;
+}
+
+/* Checkbox and radio */
+input[type="checkbox"],
+input[type="radio"] {
+  accent-color: #4ADC61 !important;
+}
+
+/* Selection */
+::selection {
+  background-color: #4ADC61;
+  color: #0A203F;
+}

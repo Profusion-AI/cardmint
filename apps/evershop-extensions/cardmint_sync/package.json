@@ -1,0 +1,13 @@
+{
+  "name": "@cardmint/sync",
+  "version": "1.1.0",
+  "type": "module",
+  "description": "CardMint bidirectional sync - sends product updates to CardMint backend",
+  "scripts": {
+    "build": "mkdir -p dist && cp -r subscribers health scripts migration dist/",
+    "clean": "rm -rf dist"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

@@ -112,6 +112,9 @@ const envSchema = z.object({
   STRIPE_SECRET_KEY: z.string().optional(),
   STRIPE_WEBHOOK_SECRET: z.string().optional(),
   STRIPE_RESERVATION_TTL_MINUTES: z.coerce.number().default(30),
+  // Klaviyo email marketing (Dec 2025)
+  KLAVIYO_PRIVATE_API_KEY: z.string().optional(),
+  KLAVIYO_SUBSCRIBE_LIST_ID: z.string().optional(),
   // EverShop import safeguards (Dec 2025)
   EVERSHOP_IMPORT_ENABLE_CONFIRM: boolFromEnv(false),
   EVERSHOP_IMPORT_BATCH_LIMIT: z.coerce.number().default(25),
@@ -139,6 +142,15 @@ const envSchema = z.object({
   EVERSHOP_USE_REST_API: boolFromEnv(false),
   EVERSHOP_ADMIN_EMAIL: z.string().optional(),
   EVERSHOP_ADMIN_PASSWORD: z.string().optional(),
+  // Lot Builder LLM Preview (Dec 2025)
+  OPENROUTER_API_KEY: z.string().optional(),
+  LOTBUILDER_LLM_PRIMARY_MODEL: z.string().default("gpt-5-mini"),
+  LOTBUILDER_LLM_FALLBACK_MODEL: z.string().default("mistralai/mistral-small-creative"),
+  LOTBUILDER_LLM_TIMEOUT_MS: z.coerce.number().default(5000),
+  LOTBUILDER_LLM_CACHE_TTL_SEC: z.coerce.number().default(300), // 5 min cache for identical carts
+  LOTBUILDER_LLM_MAX_VARIANCE_PP: z.coerce.number().default(5), // Max ±5 percentage points
+  LOTBUILDER_ADMIN_TOKEN: z.string().optional(), // Admin token for cache endpoints
+  LOTBUILDER_RATE_LIMIT_RPM: z.coerce.number().default(30), // Max requests per minute per IP
   // Path C: Set Disambiguation (Dec 2025)
   ENABLE_PATH_C_SET_DISAMBIG: boolFromEnv(false),
   PATH_C_HARD_FILTER_THRESHOLD: z.coerce.number().default(0.90),
@@ -239,6 +251,9 @@ export const runtimeConfig = {
   stripeSecretKey: parsed.STRIPE_SECRET_KEY ?? "",
   stripeWebhookSecret: parsed.STRIPE_WEBHOOK_SECRET ?? "",
   stripeReservationTtlMinutes: parsed.STRIPE_RESERVATION_TTL_MINUTES,
+  // Klaviyo email marketing (Dec 2025)
+  klaviyoPrivateApiKey: parsed.KLAVIYO_PRIVATE_API_KEY ?? "",
+  klaviyoSubscribeListId: parsed.KLAVIYO_SUBSCRIBE_LIST_ID ?? "",
   // EverShop import safeguards (Dec 2025)
   evershopImportEnableConfirm: parsed.EVERSHOP_IMPORT_ENABLE_CONFIRM,
   evershopImportBatchLimit: parsed.EVERSHOP_IMPORT_BATCH_LIMIT,
@@ -266,6 +281,15 @@ export const runtimeConfig = {
   evershopUseRestApi: parsed.EVERSHOP_USE_REST_API,
   evershopAdminEmail: parsed.EVERSHOP_ADMIN_EMAIL ?? "",
   evershopAdminPassword: parsed.EVERSHOP_ADMIN_PASSWORD ?? "",
+  // Lot Builder LLM Preview (Dec 2025)
+  openrouterApiKey: parsed.OPENROUTER_API_KEY ?? "",
+  lotBuilderLlmPrimaryModel: parsed.LOTBUILDER_LLM_PRIMARY_MODEL,
+  lotBuilderLlmFallbackModel: parsed.LOTBUILDER_LLM_FALLBACK_MODEL,
+  lotBuilderLlmTimeoutMs: parsed.LOTBUILDER_LLM_TIMEOUT_MS,
+  lotBuilderLlmCacheTtlSec: parsed.LOTBUILDER_LLM_CACHE_TTL_SEC,
+  lotBuilderLlmMaxVariancePp: parsed.LOTBUILDER_LLM_MAX_VARIANCE_PP,
+  lotBuilderAdminToken: parsed.LOTBUILDER_ADMIN_TOKEN ?? "",
+  lotBuilderRateLimitRpm: parsed.LOTBUILDER_RATE_LIMIT_RPM,
   // Path C: Set Disambiguation (Dec 2025)
   enablePathCSetDisambig: parsed.ENABLE_PATH_C_SET_DISAMBIG,
   pathCHardFilterThreshold: parsed.PATH_C_HARD_FILTER_THRESHOLD,

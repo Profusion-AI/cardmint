@@ -1,0 +1,24 @@
+{
+  "shop": {
+    "weightUnit": "g"
+  },
+  "system": {
+    "extensions": [
+      {
+        "name": "cardmint_admin_theme",
+        "resolve": "extensions/cardmint_admin_theme",
+        "enabled": true
+      },
+      {
+        "name": "cardmint_sync",
+        "resolve": "extensions/cardmint_sync",
+        "enabled": true
+      },
+      {
+        "name": "cardmint_analytics",
+        "resolve": "extensions/cardmint_analytics",
+        "enabled": true
+      }
+    ]
+  }
+}

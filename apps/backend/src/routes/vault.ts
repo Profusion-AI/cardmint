@@ -81,8 +81,9 @@ export function registerVaultRoutes(app: Express, ctx: AppContext): void {
       // Note: launch_price IS NOT NULL is enforced because staging-ready items
       // are guaranteed to have launch_price populated (see pricing pipeline)
       // Filter on actual IN_STOCK items, not total_quantity (which includes RESERVED)
-      // Dec 2025: Respect EverShop visibility - only show evershop_live products
-      // or products not yet imported to EverShop (evershop_uuid IS NULL)
+      // EverShop Admin is the final authority for customer-facing visibility.
+      // Products must be published in EverShop (evershop_sync_state='evershop_live')
+      // to appear in the public vault. See docs/KNOWN_ISSUE_EVERSHOP_ADMIN_PRICE_VISIBILITY.md
       const whereClauses: string[] = [
         "staging_ready = 1",
         "pricing_status = 'fresh'",
@@ -91,7 +92,7 @@ export function registerVaultRoutes(app: Express, ctx: AppContext): void {
         "cdn_image_url IS NOT NULL",
         "EXISTS (SELECT 1 FROM items i WHERE i.product_uid = p.product_uid AND i.status = 'IN_STOCK')",
         "(accepted_without_canonical IS NULL OR accepted_without_canonical = 0)",
-        "(evershop_sync_state = 'evershop_live' OR evershop_uuid IS NULL)",
+        "evershop_sync_state = 'evershop_live'",
       ];
       const queryParams: (string | number)[] = [];
 
@@ -252,8 +253,7 @@ export function registerVaultRoutes(app: Express, ctx: AppContext): void {
    */
   app.get("/api/vault/filters", (_req: Request, res: Response) => {
     try {
-      // Get distinct sets with counts (only products with IN_STOCK items)
-      // Dec 2025: Respect EverShop visibility filter
+      // Get distinct sets with counts (only products with IN_STOCK items and published in EverShop)
       const sets = db.prepare(`
         SELECT set_name as name, COUNT(*) as count
         FROM products p
@@ -264,13 +264,12 @@ export function registerVaultRoutes(app: Express, ctx: AppContext): void {
           AND cdn_image_url IS NOT NULL
           AND EXISTS (SELECT 1 FROM items i WHERE i.product_uid = p.product_uid AND i.status = 'IN_STOCK')
           AND (accepted_without_canonical IS NULL OR accepted_without_canonical = 0)
-          AND (evershop_sync_state = 'evershop_live' OR evershop_uuid IS NULL)
+          AND evershop_sync_state = 'evershop_live'
         GROUP BY set_name
         ORDER BY set_name
       `).all() as Array<{ name: string; count: number }>;
 
-      // Get distinct conditions with counts (only products with IN_STOCK items)
-      // Dec 2025: Respect EverShop visibility filter
+      // Get distinct conditions with counts (only products with IN_STOCK items and published in EverShop)
       const conditions = db.prepare(`
         SELECT condition_bucket as name, COUNT(*) as count
         FROM products p
@@ -281,7 +280,7 @@ export function registerVaultRoutes(app: Express, ctx: AppContext): void {
           AND cdn_image_url IS NOT NULL
           AND EXISTS (SELECT 1 FROM items i WHERE i.product_uid = p.product_uid AND i.status = 'IN_STOCK')
           AND (accepted_without_canonical IS NULL OR accepted_without_canonical = 0)
-          AND (evershop_sync_state = 'evershop_live' OR evershop_uuid IS NULL)
+          AND evershop_sync_state = 'evershop_live'
         GROUP BY condition_bucket
         ORDER BY
           CASE condition_bucket
@@ -293,8 +292,7 @@ export function registerVaultRoutes(app: Express, ctx: AppContext): void {
           END
       `).all() as Array<{ name: string; count: number }>;
 
-      // Get distinct rarities with counts (only products with IN_STOCK items)
-      // Dec 2025: Respect EverShop visibility filter
+      // Get distinct rarities with counts (only products with IN_STOCK items and published in EverShop)
       const rarities = db.prepare(`
         SELECT rarity as name, COUNT(*) as count
         FROM products p
@@ -306,13 +304,12 @@ export function registerVaultRoutes(app: Express, ctx: AppContext): void {
           AND EXISTS (SELECT 1 FROM items i WHERE i.product_uid = p.product_uid AND i.status = 'IN_STOCK')
           AND rarity IS NOT NULL
           AND (accepted_without_canonical IS NULL OR accepted_without_canonical = 0)
-          AND (evershop_sync_state = 'evershop_live' OR evershop_uuid IS NULL)
+          AND evershop_sync_state = 'evershop_live'
         GROUP BY rarity
         ORDER BY rarity
       `).all() as Array<{ name: string; count: number }>;
 
-      // Get price range (only products with IN_STOCK items)
-      // Dec 2025: Respect EverShop visibility filter
+      // Get price range (only products with IN_STOCK items and published in EverShop)
       const priceRange = db.prepare(`
         SELECT
           MIN(launch_price) as min,
@@ -325,7 +322,7 @@ export function registerVaultRoutes(app: Express, ctx: AppContext): void {
           AND cdn_image_url IS NOT NULL
           AND EXISTS (SELECT 1 FROM items i WHERE i.product_uid = p.product_uid AND i.status = 'IN_STOCK')
           AND (accepted_without_canonical IS NULL OR accepted_without_canonical = 0)
-          AND (evershop_sync_state = 'evershop_live' OR evershop_uuid IS NULL)
+          AND evershop_sync_state = 'evershop_live'
       `).get() as { min: number | null; max: number | null };
 
       res.json({

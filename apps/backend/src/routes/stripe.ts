@@ -8,6 +8,42 @@ import type { Express, Request, Response } from "express";
 import type { AppContext } from "../app/context";
 import { runtimeConfig } from "../config";
 import Stripe from "stripe";
+import { lotBuilderService } from "../services/lotBuilder/lotBuilderService";
+import { getLotPreview, clearLotPreviewCache, getLotPreviewCacheStats } from "../services/lotBuilder/llmDiscountService";
+import type { LotBuilderItem, LotPreviewItem } from "../services/lotBuilder/types";
+import { quoteShipping } from "../services/shippingResolver";
+import type { Cart } from "../domain/shipping";
+
+// Simple in-memory rate limiter for lot preview endpoint
+const rateLimitMap = new Map<string, { count: number; resetAt: number }>();
+
+function checkRateLimit(ip: string, limitRpm: number): { allowed: boolean; retryAfter?: number } {
+  const now = Date.now();
+  const windowMs = 60_000; // 1 minute window
+
+  const entry = rateLimitMap.get(ip);
+
+  // Clean up old entries periodically (simple GC)
+  if (rateLimitMap.size > 10000) {
+    for (const [key, val] of rateLimitMap) {
+      if (now > val.resetAt) rateLimitMap.delete(key);
+    }
+  }
+
+  if (!entry || now > entry.resetAt) {
+    // New window
+    rateLimitMap.set(ip, { count: 1, resetAt: now + windowMs });
+    return { allowed: true };
+  }
+
+  if (entry.count >= limitRpm) {
+    const retryAfter = Math.ceil((entry.resetAt - now) / 1000);
+    return { allowed: false, retryAfter };
+  }
+
+  entry.count++;
+  return { allowed: true };
+}
 
 export function registerStripeRoutes(app: Express, ctx: AppContext): void {
   const { logger, stripeService, inventoryService } = ctx;
@@ -117,7 +153,27 @@ export function registerStripeRoutes(app: Express, ctx: AppContext): void {
       const effectiveSuccessUrl = success_url || `${baseUrl}/checkout/success?session_id={CHECKOUT_SESSION_ID}`;
       const effectiveCancelUrl = cancel_url || `${baseUrl}/checkout/cancel`;
 
-      // Create checkout session
+      // Calculate shipping
+      const cart: Cart = {
+        isUS: true, // US-only enforced by Stripe shipping_address_collection
+        quantity: 1,
+        subtotal: item.price_cents / 100,
+      };
+      const shippingQuote = quoteShipping(cart);
+
+      if (!shippingQuote.allowed) {
+        return res.status(400).json({
+          error: "SHIPPING_NOT_AVAILABLE",
+          message: shippingQuote.explanation || "Shipping not available",
+        });
+      }
+
+      logger.info(
+        { item_uid, shippingMethod: shippingQuote.method, shippingCents: shippingQuote.priceCents, requiresReview: shippingQuote.requiresManualReview },
+        "Shipping calculated for checkout"
+      );
+
+      // Create checkout session with shipping
       const session = await stripeService.createCheckoutSession(
         {
           item_uid: item.item_uid,
@@ -133,6 +189,7 @@ export function registerStripeRoutes(app: Express, ctx: AppContext): void {
           image_url: item.image_url,
         },
         stripePriceId,
+        shippingQuote,
         effectiveSuccessUrl,
         effectiveCancelUrl
       );
@@ -176,6 +233,455 @@ export function registerStripeRoutes(app: Express, ctx: AppContext): void {
     }
   });
 
+  /**
+   * POST /api/checkout/session/multi
+   * Create Stripe checkout session for multiple items (Lot Builder)
+   * Accepts array of product_uids, calculates lot discount, reserves all atomically
+   */
+  app.post("/api/checkout/session/multi", async (req: Request, res: Response) => {
+    const { product_uids, success_url, cancel_url } = req.body;
+
+    // Validate input
+    if (!Array.isArray(product_uids) || product_uids.length === 0) {
+      return res.status(400).json({
+        error: "BAD_REQUEST",
+        message: "product_uids array is required and must not be empty",
+      });
+    }
+
+    if (product_uids.length > 10) {
+      return res.status(400).json({
+        error: "BAD_REQUEST",
+        message: "Maximum 10 items per checkout",
+      });
+    }
+
+    if (!stripeService.isConfigured()) {
+      return res.status(503).json({
+        error: "STRIPE_NOT_CONFIGURED",
+        message: "Stripe payments are not configured",
+      });
+    }
+
+    try {
+      // Step 1: Resolve all product_uids to available items
+      const items: Array<{
+        item_uid: string;
+        product_uid: string;
+        itemData: ReturnType<typeof inventoryService.getItemForCheckout>;
+      }> = [];
+
+      for (const product_uid of product_uids) {
+        const item_uid = inventoryService.getAvailableItemForProduct(product_uid);
+        if (!item_uid) {
+          return res.status(409).json({
+            error: "NO_AVAILABLE_ITEMS",
+            message: `No available item for product ${product_uid}`,
+            product_uid,
+          });
+        }
+
+        const itemData = inventoryService.getItemForCheckout(item_uid);
+        if (!itemData) {
+          return res.status(404).json({
+            error: "NOT_FOUND",
+            message: `Item ${item_uid} not found`,
+          });
+        }
+
+        // Guard checks
+        if (itemData.status !== "IN_STOCK") {
+          return res.status(409).json({
+            error: "ITEM_NOT_AVAILABLE",
+            message: `Item is ${itemData.status}, not available`,
+            product_uid,
+          });
+        }
+
+        if (!itemData.staging_ready) {
+          return res.status(400).json({
+            error: "ITEM_NOT_READY",
+            message: "Item not stage-3 ready",
+            product_uid,
+          });
+        }
+
+        if (!itemData.price_cents || itemData.price_cents <= 0) {
+          return res.status(400).json({
+            error: "NO_PRICE",
+            message: "Item has no price",
+            product_uid,
+          });
+        }
+
+        items.push({ item_uid, product_uid, itemData });
+      }
+
+      // Step 2: Calculate lot discount
+      const lotBuilderItems: LotBuilderItem[] = items.map((i) => ({
+        product_uid: i.product_uid,
+        price_cents: i.itemData!.price_cents,
+        set_name: i.itemData!.set_name ?? "",
+        rarity: i.itemData!.rarity ?? "",
+        condition: i.itemData!.condition ?? "",
+      }));
+
+      const lotResult = lotBuilderService.calculateDiscount(lotBuilderItems);
+
+      logger.info(
+        {
+          itemCount: items.length,
+          discountPct: lotResult.discountPct,
+          reasonCode: lotResult.reasonCode,
+          subtotalCents: lotResult.subtotalBeforeDiscountCents,
+          finalCents: lotResult.finalTotalCents,
+        },
+        "Lot discount calculated"
+      );
+
+      // Step 3: Ensure Stripe products/prices exist for all items
+      const stripeItems: Array<{
+        itemData: NonNullable<ReturnType<typeof inventoryService.getItemForCheckout>>;
+        stripeProductId: string;
+        stripePriceId: string;
+      }> = [];
+
+      for (const { itemData } of items) {
+        let stripeProductId = itemData!.stripe_product_id;
+        let stripePriceId = itemData!.stripe_price_id;
+
+        if (!stripeProductId || !stripePriceId) {
+          const stripeData = {
+            item_uid: itemData!.item_uid,
+            product_uid: itemData!.product_uid,
+            cm_card_id: itemData!.cm_card_id,
+            set_name: itemData!.set_name,
+            collector_no: itemData!.collector_no,
+            condition: itemData!.condition,
+            canonical_sku: itemData!.canonical_sku,
+            name: itemData!.name,
+            description: `${itemData!.name} - ${itemData!.set_name ?? "Unknown Set"} ${itemData!.collector_no ?? ""} (${itemData!.condition ?? "Unknown"})`,
+            price_cents: itemData!.price_cents,
+            image_url: itemData!.image_url,
+          };
+
+          const result = await stripeService.createProductAndPrice(stripeData);
+          stripeProductId = result.stripeProductId;
+          stripePriceId = result.stripePriceId;
+        }
+
+        stripeItems.push({
+          itemData: itemData!,
+          stripeProductId,
+          stripePriceId,
+        });
+      }
+
+      // Step 4: Calculate shipping for the lot
+      // Use final total after discount for shipping threshold calculation
+      const multiCart: Cart = {
+        isUS: true, // US-only enforced by Stripe shipping_address_collection
+        quantity: items.length,
+        subtotal: lotResult.finalTotalCents / 100,
+      };
+      const multiShippingQuote = quoteShipping(multiCart);
+
+      if (!multiShippingQuote.allowed) {
+        return res.status(400).json({
+          error: "SHIPPING_NOT_AVAILABLE",
+          message: multiShippingQuote.explanation || "Shipping not available",
+        });
+      }
+
+      logger.info(
+        { itemCount: items.length, shippingMethod: multiShippingQuote.method, shippingCents: multiShippingQuote.priceCents, requiresReview: multiShippingQuote.requiresManualReview },
+        "Shipping calculated for multi-item checkout"
+      );
+
+      // Step 5: Create multi-item checkout session with shipping
+      const baseUrl = runtimeConfig.evershopApiUrl || "https://cardmintshop.com";
+      const effectiveSuccessUrl = success_url || `${baseUrl}/checkout/success?session_id={CHECKOUT_SESSION_ID}`;
+      const effectiveCancelUrl = cancel_url || `${baseUrl}/checkout/cancel`;
+
+      const stripeItemData = stripeItems.map((s) => ({
+        item_uid: s.itemData.item_uid,
+        product_uid: s.itemData.product_uid,
+        cm_card_id: s.itemData.cm_card_id,
+        set_name: s.itemData.set_name,
+        collector_no: s.itemData.collector_no,
+        condition: s.itemData.condition,
+        canonical_sku: s.itemData.canonical_sku,
+        name: s.itemData.name,
+        description: `${s.itemData.name} - ${s.itemData.set_name ?? "Unknown Set"}`,
+        price_cents: s.itemData.price_cents,
+        image_url: s.itemData.image_url,
+      }));
+
+      const lotDiscountInfo = lotResult.discountPct > 0
+        ? {
+            discountPct: lotResult.discountPct,
+            discountAmountCents: lotResult.discountAmountCents,
+            reasonCode: lotResult.reasonCode,
+            reasonText: lotResult.reasonText,
+            originalTotalCents: lotResult.subtotalBeforeDiscountCents,
+            finalTotalCents: lotResult.finalTotalCents,
+          }
+        : null;
+
+      const session = await stripeService.createMultiItemCheckoutSession(
+        stripeItemData,
+        stripeItems.map((s) => s.stripePriceId),
+        multiShippingQuote,
+        lotDiscountInfo,
+        effectiveSuccessUrl,
+        effectiveCancelUrl
+      );
+
+      // Step 6: Reserve all items atomically
+      const reservedItems: string[] = [];
+      let reservationFailed = false;
+
+      for (const { itemData, stripeProductId, stripePriceId } of stripeItems) {
+        const reserved = inventoryService.reserveItem(
+          itemData.item_uid,
+          session.sessionId,
+          stripeProductId,
+          stripePriceId,
+          session.expiresAt
+        );
+
+        if (!reserved) {
+          reservationFailed = true;
+          break;
+        }
+        reservedItems.push(itemData.item_uid);
+      }
+
+      // Rollback if any reservation failed
+      if (reservationFailed) {
+        for (const itemUid of reservedItems) {
+          inventoryService.releaseReservation(itemUid);
+        }
+        await stripeService.expireCheckoutSession(session.sessionId);
+
+        return res.status(409).json({
+          error: "RESERVATION_FAILED",
+          message: "One or more items were taken by another buyer",
+        });
+      }
+
+      logger.info(
+        {
+          sessionId: session.sessionId,
+          itemCount: items.length,
+          itemUids: session.itemUids,
+          discountPct: lotResult.discountPct,
+        },
+        "Multi-item checkout session created"
+      );
+
+      res.json({
+        ok: true,
+        checkout_url: session.checkoutUrl,
+        session_id: session.sessionId,
+        expires_at: session.expiresAt,
+        item_count: items.length,
+        lot_discount: lotDiscountInfo,
+      });
+    } catch (error) {
+      logger.error({ err: error, product_uids }, "Failed to create multi-item checkout");
+      res.status(500).json({
+        error: "CHECKOUT_FAILED",
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  });
+
+  // ==========================================================================
+  // Lot Preview (LLM-Enhanced Discount)
+  // ==========================================================================
+
+  /**
+   * POST /api/lot/preview
+   * Get real-time discount preview with LLM validation and creative text
+   * Does NOT reserve items - use this before checkout to show discount
+   *
+   * Response includes:
+   * - systemDiscountPct: Deterministic base calculation
+   * - llmAdjustedPct: LLM-adjusted percentage (±5pp variance)
+   * - llmReasonText: Creative reason text with theme detection
+   * - themeBundle: Detected theme (e.g., "Gen 1 Collection")
+   * - cached: Whether response came from cache
+   */
+  app.post("/api/lot/preview", async (req: Request, res: Response) => {
+    // Rate limiting to prevent LLM spend abuse
+    const clientIp = (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.ip || "unknown";
+    const rateCheck = checkRateLimit(clientIp, runtimeConfig.lotBuilderRateLimitRpm);
+
+    if (!rateCheck.allowed) {
+      logger.warn({ ip: clientIp, retryAfter: rateCheck.retryAfter }, "Lot preview rate limited");
+      res.setHeader("Retry-After", String(rateCheck.retryAfter));
+      return res.status(429).json({
+        error: "RATE_LIMITED",
+        message: "Too many preview requests. Please try again later.",
+        retry_after_sec: rateCheck.retryAfter,
+      });
+    }
+
+    const { product_uids } = req.body;
+
+    // Validate input
+    if (!Array.isArray(product_uids) || product_uids.length === 0) {
+      return res.status(400).json({
+        error: "BAD_REQUEST",
+        message: "product_uids array is required and must not be empty",
+      });
+    }
+
+    if (product_uids.length > 10) {
+      return res.status(400).json({
+        error: "BAD_REQUEST",
+        message: "Maximum 10 items per preview",
+      });
+    }
+
+    try {
+      // Resolve all product_uids to items (but don't reserve them)
+      const previewItems: LotPreviewItem[] = [];
+
+      for (const product_uid of product_uids) {
+        const item_uid = inventoryService.getAvailableItemForProduct(product_uid);
+        if (!item_uid) {
+          return res.status(409).json({
+            error: "NO_AVAILABLE_ITEMS",
+            message: `No available item for product ${product_uid}`,
+            product_uid,
+          });
+        }
+
+        const itemData = inventoryService.getItemForCheckout(item_uid);
+        if (!itemData) {
+          return res.status(404).json({
+            error: "NOT_FOUND",
+            message: `Item ${item_uid} not found`,
+          });
+        }
+
+        // Build preview item (includes card_name for LLM theme detection)
+        previewItems.push({
+          product_uid: itemData.product_uid,
+          price_cents: itemData.price_cents,
+          set_name: itemData.set_name ?? "",
+          rarity: itemData.rarity ?? "",
+          condition: itemData.condition ?? "",
+          card_name: itemData.name,
+          card_number: itemData.collector_no ?? undefined,
+          image_url: itemData.image_url ?? undefined,
+        });
+      }
+
+      // Get LLM-enhanced discount preview
+      const preview = await getLotPreview(previewItems);
+
+      logger.info(
+        {
+          itemCount: previewItems.length,
+          systemPct: preview.systemDiscountPct,
+          llmPct: preview.llmAdjustedPct,
+          cached: preview.cached,
+          model: preview.model,
+          themeBundle: preview.themeBundle,
+        },
+        "Lot preview calculated"
+      );
+
+      res.json({
+        ok: true,
+        preview: {
+          // Final discount values (use these for display)
+          discountPct: preview.discountPct,
+          discountAmountCents: preview.discountAmountCents,
+          subtotalCents: preview.subtotalBeforeDiscountCents,
+          finalTotalCents: preview.finalTotalCents,
+          reasonText: preview.llmReasonText,
+          // Debug/analytics fields
+          systemDiscountPct: preview.systemDiscountPct,
+          llmAdjustedPct: preview.llmAdjustedPct,
+          reasonCode: preview.reasonCode,
+          reasonTags: preview.reasonTags,
+          themeBundle: preview.themeBundle,
+          confidence: preview.confidence,
+          cached: preview.cached,
+          model: preview.model,
+        },
+        items: previewItems.map((i) => ({
+          product_uid: i.product_uid,
+          card_name: i.card_name,
+          set_name: i.set_name,
+          price_cents: i.price_cents,
+        })),
+      });
+    } catch (error) {
+      logger.error({ err: error, product_uids }, "Failed to get lot preview");
+      res.status(500).json({
+        error: "PREVIEW_FAILED",
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  });
+
+  /**
+   * DELETE /api/lot/preview/cache
+   * Clear the LLM response cache (admin only - requires LOTBUILDER_ADMIN_TOKEN)
+   */
+  app.delete("/api/lot/preview/cache", (req: Request, res: Response) => {
+    const adminToken = runtimeConfig.lotBuilderAdminToken;
+    if (!adminToken) {
+      return res.status(503).json({
+        error: "NOT_CONFIGURED",
+        message: "Admin token not configured",
+      });
+    }
+
+    const authHeader = req.headers.authorization;
+    if (!authHeader || authHeader !== `Bearer ${adminToken}`) {
+      logger.warn({ ip: req.ip }, "Unauthorized cache clear attempt");
+      return res.status(401).json({
+        error: "UNAUTHORIZED",
+        message: "Invalid or missing admin token",
+      });
+    }
+
+    clearLotPreviewCache();
+    logger.info({ ip: req.ip }, "Lot preview cache cleared by admin");
+    res.json({ ok: true, message: "Cache cleared" });
+  });
+
+  /**
+   * GET /api/lot/preview/cache/stats
+   * Get cache statistics (admin only - requires LOTBUILDER_ADMIN_TOKEN)
+   */
+  app.get("/api/lot/preview/cache/stats", (req: Request, res: Response) => {
+    const adminToken = runtimeConfig.lotBuilderAdminToken;
+    if (!adminToken) {
+      return res.status(503).json({
+        error: "NOT_CONFIGURED",
+        message: "Admin token not configured",
+      });
+    }
+
+    const authHeader = req.headers.authorization;
+    if (!authHeader || authHeader !== `Bearer ${adminToken}`) {
+      return res.status(401).json({
+        error: "UNAUTHORIZED",
+        message: "Invalid or missing admin token",
+      });
+    }
+
+    const stats = getLotPreviewCacheStats();
+    res.json({ ok: true, stats });
+  });
+
   // ==========================================================================
   // Cancel Checkout Session
   // ==========================================================================
@@ -196,19 +702,13 @@ export function registerStripeRoutes(app: Express, ctx: AppContext): void {
     }
 
     try {
-      // Find item by checkout_session_id
-      const item = inventoryService.getItemByCheckoutSession(sessionId);
+      // Release ALL items for this checkout session (multi-item support)
+      const releasedCount = inventoryService.releaseReservationsByCheckoutSession(sessionId);
 
-      if (!item) {
-        // Session may have already expired or been completed - that's okay
-        logger.debug({ sessionId }, "Cancel requested but session not found (may already be released)");
-        return res.json({ ok: true, released: false, reason: "session_not_found" });
-      }
-
-      // Only release if item is still RESERVED
-      if (item.status !== "RESERVED") {
-        logger.debug({ sessionId, status: item.status }, "Cancel requested but item not reserved");
-        return res.json({ ok: true, released: false, reason: "not_reserved" });
+      if (releasedCount === 0) {
+        // No items found or none were RESERVED - may already be released
+        logger.debug({ sessionId }, "Cancel requested but no reserved items found");
+        return res.json({ ok: true, releasedCount: 0, reason: "no_reserved_items" });
       }
 
       // Expire Stripe session (if still open)
@@ -222,14 +722,8 @@ export function registerStripeRoutes(app: Express, ctx: AppContext): void {
         }
       }
 
-      // Release reservation
-      const released = inventoryService.releaseReservation(item.item_uid);
-
-      if (released) {
-        logger.info({ sessionId, itemUid: item.item_uid }, "Checkout session cancelled, reservation released");
-      }
-
-      return res.json({ ok: true, released });
+      logger.info({ sessionId, releasedCount }, "Checkout session cancelled, reservations released");
+      return res.json({ ok: true, releasedCount });
     } catch (error) {
       logger.error({ err: error, sessionId }, "Failed to cancel checkout session");
       return res.status(500).json({
@@ -515,111 +1009,250 @@ async function handleCheckoutCompleted(
   ctx: AppContext,
   stripeEventId: string
 ): Promise<string | null> {
-  const { logger, stripeService, inventoryService, db } = ctx;
+  const { logger, stripeService, inventoryService, klaviyoService, db } = ctx;
   const sessionId = session.id;
 
-  // Find item by checkout session
-  const item = inventoryService.getItemByCheckoutSession(sessionId);
+  // Check if this is a multi-item checkout (Lot Builder)
+  const metadata = session.metadata ?? {};
+  const isMultiItem = !!metadata.item_uids;
 
-  if (!item) {
-    logger.warn({ sessionId }, "checkout.session.completed: no item found for session");
-    return null;
-  }
-
-  // Get payment intent ID
+  // Get payment intent ID (common to both flows)
   const paymentIntentId =
     typeof session.payment_intent === "string"
       ? session.payment_intent
       : session.payment_intent?.id ?? null;
 
   if (!paymentIntentId) {
-    logger.error({ sessionId }, "checkout.session.completed: no payment_intent in session");
-    return item.item_uid; // Still return item_uid for telemetry even if PI missing
+    logger.error({ sessionId, isMultiItem }, "checkout.session.completed: no payment_intent in session");
+    return null;
   }
 
-  // Mark item as sold
-  const marked = inventoryService.markItemSold(item.item_uid, paymentIntentId);
+  // Parse item UIDs - either from metadata (multi) or find by session (single)
+  let itemUids: string[];
 
-  if (!marked) {
-    logger.warn(
-      { itemUid: item.item_uid, status: item.status },
-      "checkout.session.completed: failed to mark sold (may already be processed)"
-    );
-    return item.item_uid; // Still return item_uid for idempotency record
-  }
-
-  // Archive Stripe product/price
-  const itemData = inventoryService.getItemForCheckout(item.item_uid);
-  if (itemData?.stripe_product_id && itemData?.stripe_price_id) {
+  if (isMultiItem) {
     try {
-      await stripeService.archiveProductAndPrice(
-        itemData.stripe_product_id,
-        itemData.stripe_price_id
+      itemUids = JSON.parse(metadata.item_uids);
+      if (!Array.isArray(itemUids) || itemUids.length === 0) {
+        throw new Error("Invalid item_uids format");
+      }
+    } catch (e) {
+      logger.error({ sessionId, rawItemUids: metadata.item_uids }, "Failed to parse multi-item item_uids");
+      return null;
+    }
+  } else {
+    // Single-item: find by checkout session
+    const item = inventoryService.getItemByCheckoutSession(sessionId);
+    if (!item) {
+      logger.warn({ sessionId }, "checkout.session.completed: no item found for session");
+      return null;
+    }
+    itemUids = [item.item_uid];
+  }
+
+  logger.info(
+    { sessionId, itemCount: itemUids.length, isMultiItem, lotDiscountPct: metadata.lot_discount_pct },
+    "checkout.session.completed: processing order"
+  );
+
+  // Process each item: mark sold, archive Stripe product/price, create sync event
+  const processedItems: Array<{
+    item_uid: string;
+    product_uid: string;
+    cm_card_id: string | null;
+    canonical_sku: string | null;
+    name: string;
+    set_name: string | null;
+    collector_no: string | null;
+    condition: string | null;
+    price_cents: number;
+    image_url: string | null;
+    stripe_product_id: string | null;
+    stripe_price_id: string | null;
+  }> = [];
+
+  for (const itemUid of itemUids) {
+    // Mark item as sold
+    const marked = inventoryService.markItemSold(itemUid, paymentIntentId);
+
+    if (!marked) {
+      logger.warn(
+        { itemUid, sessionId },
+        "checkout.session.completed: failed to mark sold (may already be processed)"
       );
-    } catch (error) {
+      // Continue processing other items - this one may have been processed already
+      continue;
+    }
+
+    // Get full item data
+    const itemData = inventoryService.getItemForCheckout(itemUid);
+    if (!itemData) {
+      logger.warn({ itemUid }, "checkout.session.completed: item data not found after marking sold");
+      continue;
+    }
+
+    // Archive Stripe product/price
+    if (itemData.stripe_product_id && itemData.stripe_price_id) {
+      try {
+        await stripeService.archiveProductAndPrice(
+          itemData.stripe_product_id,
+          itemData.stripe_price_id
+        );
+      } catch (error) {
+        logger.error(
+          { err: error, itemUid },
+          "Failed to archive Stripe product/price (non-fatal)"
+        );
+      }
+    }
+
+    // Create sale sync_event for staging archival
+    try {
+      const now = Math.floor(Date.now() / 1000);
+      const eventUid = `SALE:${itemUid}:${Math.floor(now / 60)}`;
+
+      const saleSnapshot = {
+        item_uid: itemUid,
+        product_uid: itemData.product_uid ?? null,
+        status: "SOLD",
+        payment_intent_id: paymentIntentId,
+        checkout_session_id: sessionId,
+        stripe_product_id: itemData.stripe_product_id ?? null,
+        stripe_price_id: itemData.stripe_price_id ?? null,
+        name: itemData.name ?? null,
+        set_name: itemData.set_name ?? null,
+        collector_no: itemData.collector_no ?? null,
+        condition: itemData.condition ?? null,
+        price_cents: itemData.price_cents ?? null,
+        sold_at: now,
+        lot_item_count: itemUids.length,
+        lot_discount_pct: metadata.lot_discount_pct ?? null,
+      };
+
+      db.prepare(
+        `INSERT INTO sync_events (event_uid, event_type, product_uid, item_uid, source_db, target_db, payload, stripe_event_id, status, created_at)
+         VALUES (?, 'sale', ?, ?, 'production', 'staging', ?, ?, 'pending', ?)
+         ON CONFLICT(event_uid) DO NOTHING`
+      ).run(
+        eventUid,
+        itemData.product_uid ?? "",
+        itemUid,
+        JSON.stringify(saleSnapshot),
+        stripeEventId,
+        now
+      );
+    } catch (syncError) {
+      logger.warn(
+        { err: syncError, itemUid, stripeEventId },
+        "Failed to create sale sync_event (non-fatal)"
+      );
+    }
+
+    // Collect for Klaviyo
+    processedItems.push({
+      item_uid: itemData.item_uid,
+      product_uid: itemData.product_uid,
+      cm_card_id: itemData.cm_card_id,
+      canonical_sku: itemData.canonical_sku,
+      name: itemData.name,
+      set_name: itemData.set_name,
+      collector_no: itemData.collector_no,
+      condition: itemData.condition,
+      price_cents: itemData.price_cents,
+      image_url: itemData.image_url,
+      stripe_product_id: itemData.stripe_product_id,
+      stripe_price_id: itemData.stripe_price_id,
+    });
+
+    logger.info({ itemUid, sessionId, paymentIntentId }, "checkout.session.completed: item marked sold");
+  }
+
+  // Emit Klaviyo order events (fire-and-forget, never block webhook)
+  if (klaviyoService.isConfigured() && processedItems.length > 0) {
+    // Build lot discount info from metadata if present
+    const lotDiscountInfo = metadata.lot_discount_pct
+      ? {
+          discountPct: parseInt(metadata.lot_discount_pct, 10) || 0,
+          reasonCode: metadata.lot_reason_code ?? "QUANTITY_ONLY",
+          reasonTags: metadata.lot_reason_code ? [metadata.lot_reason_code.toLowerCase().replace("_", "-")] : [],
+          reasonText: "",
+        }
+      : null;
+
+    void (async () => {
+      try {
+        // One "Placed Order" event with all items
+        await klaviyoService.trackPlacedOrder(session, processedItems, stripeEventId, lotDiscountInfo);
+
+        // One "Ordered Product" event per item
+        for (const item of processedItems) {
+          await klaviyoService.trackOrderedProduct(session, item, stripeEventId, processedItems.length);
+        }
+      } catch (err) {
+        logger.error(
+          { err, itemUids, stripeEventId },
+          "Klaviyo tracking failed (non-fatal)"
+        );
+      }
+    })();
+  }
+
+  // Create fulfillment record for shipping workflow
+  if (processedItems.length > 0 && metadata.shipping_method) {
+    try {
+      // Use metadata totals if available (multi-item), fallback to calculated (single-item)
+      const calculatedSubtotal = processedItems.reduce((sum, item) => sum + (item.price_cents || 0), 0);
+      const originalSubtotalCents = parseInt(metadata.original_subtotal_cents || "0", 10) || calculatedSubtotal;
+      const finalSubtotalCents = parseInt(metadata.final_subtotal_cents || "0", 10) || calculatedSubtotal;
+      const shippingCostCents = parseInt(metadata.shipping_cost_cents || "0", 10);
+      const requiresManualReview = metadata.requires_manual_review === "1" ? 1 : 0;
+
+      db.prepare(
+        `INSERT INTO fulfillment (
+          stripe_session_id,
+          stripe_payment_intent_id,
+          item_count,
+          original_subtotal_cents,
+          final_subtotal_cents,
+          shipping_method,
+          shipping_cost_cents,
+          requires_manual_review,
+          status
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending')
+        ON CONFLICT(stripe_session_id) DO NOTHING`
+      ).run(
+        sessionId,
+        paymentIntentId,
+        processedItems.length,
+        originalSubtotalCents,
+        finalSubtotalCents,
+        metadata.shipping_method,
+        shippingCostCents,
+        requiresManualReview
+      );
+
+      logger.info(
+        {
+          sessionId,
+          itemCount: processedItems.length,
+          originalSubtotalCents,
+          finalSubtotalCents,
+          shippingMethod: metadata.shipping_method,
+          shippingCostCents,
+          requiresManualReview: !!requiresManualReview,
+        },
+        "checkout.session.completed: fulfillment record created"
+      );
+    } catch (fulfillmentErr) {
       logger.error(
-        { err: error, itemUid: item.item_uid },
-        "Failed to archive Stripe product/price (non-fatal)"
+        { err: fulfillmentErr, sessionId },
+        "Failed to create fulfillment record (non-fatal)"
       );
     }
   }
 
-  logger.info(
-    { itemUid: item.item_uid, sessionId, paymentIntentId },
-    "checkout.session.completed: item marked sold"
-  );
-
-  // Create sale sync_event for staging archival (Phase 2 sync)
-  // This allows staging to learn about sales when it comes online
-  try {
-    const now = Math.floor(Date.now() / 1000);
-    const eventUid = `SALE:${item.item_uid}:${Math.floor(now / 60)}`;
-
-    // Get full item/product data for snapshot
-    const itemData = inventoryService.getItemForCheckout(item.item_uid);
-    const saleSnapshot = {
-      item_uid: item.item_uid,
-      product_uid: itemData?.product_uid ?? null,
-      status: "SOLD",
-      payment_intent_id: paymentIntentId,
-      checkout_session_id: sessionId,
-      stripe_product_id: itemData?.stripe_product_id ?? null,
-      stripe_price_id: itemData?.stripe_price_id ?? null,
-      name: itemData?.name ?? null,
-      set_name: itemData?.set_name ?? null,
-      collector_no: itemData?.collector_no ?? null,
-      condition: itemData?.condition ?? null,
-      price_cents: itemData?.price_cents ?? null,
-      sold_at: now,
-    };
-
-    db.prepare(
-      `INSERT INTO sync_events (event_uid, event_type, product_uid, item_uid, source_db, target_db, payload, stripe_event_id, status, created_at)
-       VALUES (?, 'sale', ?, ?, 'production', 'staging', ?, ?, 'pending', ?)
-       ON CONFLICT(event_uid) DO NOTHING`
-    ).run(
-      eventUid,
-      itemData?.product_uid ?? "",
-      item.item_uid,
-      JSON.stringify(saleSnapshot),
-      stripeEventId,
-      now
-    );
-
-    logger.debug(
-      { eventUid, itemUid: item.item_uid, stripeEventId },
-      "Sale sync_event created for staging archival"
-    );
-  } catch (syncError) {
-    // Non-fatal: sale succeeded, sync event creation failed
-    // Staging can recover via stripe_webhook_events query
-    logger.warn(
-      { err: syncError, itemUid: item.item_uid, stripeEventId },
-      "Failed to create sale sync_event (non-fatal)"
-    );
-  }
-
-  return item.item_uid;
+  // Return first item_uid for idempotency record (or null if none processed)
+  return itemUids[0] ?? null;
 }
 
 async function handleCheckoutExpired(
@@ -629,34 +1262,21 @@ async function handleCheckoutExpired(
   const { logger, inventoryService } = ctx;
   const sessionId = session.id;
 
-  // Find item by checkout session
-  const item = inventoryService.getItemByCheckoutSession(sessionId);
+  // Release ALL reserved items for this session (multi-item support)
+  const releasedCount = inventoryService.releaseReservationsByCheckoutSession(sessionId);
 
-  if (!item) {
-    logger.debug({ sessionId }, "checkout.session.expired: no item found for session");
+  if (releasedCount === 0) {
+    logger.debug({ sessionId }, "checkout.session.expired: no reserved items found for session");
     return null;
   }
 
-  // Only release if still RESERVED
-  if (item.status !== "RESERVED") {
-    logger.debug(
-      { itemUid: item.item_uid, status: item.status },
-      "checkout.session.expired: item not reserved, skipping"
-    );
-    return item.item_uid;
-  }
+  logger.info(
+    { sessionId, releasedCount },
+    "checkout.session.expired: reservations released"
+  );
 
-  // Release reservation
-  const released = inventoryService.releaseReservation(item.item_uid);
-
-  if (released) {
-    logger.info(
-      { itemUid: item.item_uid, sessionId },
-      "checkout.session.expired: reservation released"
-    );
-  }
-
-  return item.item_uid;
+  // Return sessionId for idempotency tracking (legacy: used to return single item_uid)
+  return sessionId;
 }
 
 /**

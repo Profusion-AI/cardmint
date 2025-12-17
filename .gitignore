@@ -8,6 +8,7 @@
 *.db
 *.db-shm
 *.db-wal
+*.db.backup*
 *.sqlite
 
 # === Dependencies & Build ===
@@ -64,6 +65,38 @@ coverage/
 /artifacts/
 /images/
 
+# === Backend runtime artifacts ===
+apps/backend/artifacts/
+apps/backend/data/
+apps/backend/exports/
+apps/backend/images/
+apps/backend/logs/
+apps/backend/results/
+apps/backend/*.json
+!apps/backend/package.json
+!apps/backend/package-lock.json
+!apps/backend/tsconfig.json
+apps/backend/*.log
+
+# === Scripts runtime data ===
+scripts/results/
+scripts/id-results*.json
+
+# === ML models (large) ===
+/models/
+/models-external
+
+# === Finance/accounting data ===
+/finance/
+
+# === Root-level data files ===
+/*.csv
+/*.json
+!package.json
+!package-lock.json
+!tsconfig.json
+!*.config.json
+
 # === External tools ===
 /lmstudio-observability/
 /posthog/
@@ -95,3 +128,11 @@ apps/frontend/src/**/*.js
 CLAUDE.md
 AGENTS.md
 **/AGENTS.md
+
+# Playwright
+node_modules/
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.cache/
+/playwright/.auth/

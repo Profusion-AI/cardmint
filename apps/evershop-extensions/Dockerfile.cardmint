@@ -1,0 +1,25 @@
+# CardMint EverShop with Extensions
+# Pin to specific version for reproducible builds
+FROM evershop/evershop:2.1.0
+
+# Copy all CardMint extensions
+COPY cardmint_admin_theme /app/extensions/cardmint_admin_theme
+COPY cardmint_sync /app/extensions/cardmint_sync
+COPY cardmint_analytics /app/extensions/cardmint_analytics
+
+# Copy workspace package.json and config
+COPY package.json /app/extensions/package.json
+COPY config/default.json /app/config/default.json
+COPY config/production.json /app/config/production.json
+
+# Set up npm workspaces and install dependencies
+WORKDIR /app
+RUN npm pkg set workspaces='["extensions/*"]' && \
+    npm install && \
+    cd extensions && npm install && npm run build
+
+# Expose ports (3000 for storefront, 9000 for admin)
+EXPOSE 3000 9000
+
+# Start command
+CMD ["npm", "start"]

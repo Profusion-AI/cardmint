@@ -1,0 +1,23 @@
+{
+  "name": "@cardmint/evershop-extensions",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "CardMint EverShop extensions workspace",
+  "workspaces": [
+    "cardmint_admin_theme",
+    "cardmint_sync",
+    "cardmint_analytics"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "clean": "rm -rf */dist */node_modules",
+    "verify": "npm run verify --workspaces --if-present"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.24.0"
+  }
+}

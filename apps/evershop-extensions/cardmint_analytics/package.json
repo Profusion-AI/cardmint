@@ -1,0 +1,15 @@
+{
+  "name": "@cardmint/analytics",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "PostHog analytics, session replay, and feature flags for CardMint",
+  "scripts": {
+    "build": "mkdir -p dist && cp -r src/* dist/",
+    "clean": "rm -rf dist",
+    "verify": "./scripts/verify_posthog_events.sh"
+  },
+  "dependencies": {
+    "posthog-node": "^4.18.0",
+    "prop-types": "^15.8.1"
+  }
+}

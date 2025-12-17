@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <sitemap>
+    <loc>https://cardmintshop.com/sitemap-static.xml</loc>
+  </sitemap>
+  <sitemap>
+    <loc>https://cardmintshop.com/sitemap-products.xml</loc>
+  </sitemap>
+  <!-- Advertise machine-readable inventory feed for LLMs/crawlers -->
+  <sitemap>
+    <loc>https://cardmintshop.com/.well-known/cardmint.inventory.json</loc>
+  </sitemap>
+</sitemapindex>
+

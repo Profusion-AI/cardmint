@@ -1,0 +1,110 @@
+/**
+ * EverShop subscriber: product_updated
+ * Sends webhook notification to CardMint backend for bidirectional sync
+ * RFC-fullduplexDB_triple Phase 2
+ */
+
+import { createHmac } from "node:crypto";
+
+// Configuration from environment (set in EverShop's config)
+const CARDMINT_WEBHOOK_URL =
+  process.env.CARDMINT_WEBHOOK_URL || "http://localhost:4000/api/webhooks/evershop";
+const CARDMINT_WEBHOOK_SECRET = process.env.CARDMINT_WEBHOOK_SECRET || "";
+const WEBHOOK_ENABLED = process.env.CARDMINT_SYNC_ENABLED !== "false";
+
+interface ProductUpdatedData {
+  product_id: number;
+  uuid: string;
+  sku: string;
+  price: number;
+  weight?: number;
+  status: boolean;
+  created_at: string;
+  updated_at: string;
+  // Additional fields that may be present
+  visibility?: boolean;
+  name?: string;
+  qty?: number;
+}
+
+interface WebhookPayload {
+  uuid: string;
+  sku: string;
+  visibility: boolean;
+  updated_at: string;
+  price?: number;
+  name?: string;
+  qty?: number;
+}
+
+/**
+ * Generate HMAC signature for webhook payload
+ */
+function signPayload(payload: string, secret: string): string {
+  if (!secret) return "";
+  return `sha256=${createHmac("sha256", secret).update(payload).digest("hex")}`;
+}
+
+/**
+ * Subscriber function - called when product_updated event fires
+ */
+export default async function notifyCardmint(
+  data: ProductUpdatedData
+): Promise<void> {
+  // Skip if disabled
+  if (!WEBHOOK_ENABLED) {
+    console.log("[cardmint_sync] Webhook disabled, skipping notification");
+    return;
+  }
+
+  // Skip if no webhook URL configured
+  if (!CARDMINT_WEBHOOK_URL) {
+    console.warn("[cardmint_sync] No CARDMINT_WEBHOOK_URL configured");
+    return;
+  }
+
+  // Build webhook payload (map EverShop schema to CardMint expectations)
+  const payload: WebhookPayload = {
+    uuid: data.uuid,
+    sku: data.sku,
+    visibility: data.visibility ?? data.status ?? true,
+    updated_at: data.updated_at,
+    price: data.price,
+    name: data.name,
+    qty: data.qty,
+  };
+
+  const payloadJson = JSON.stringify(payload);
+  const signature = signPayload(payloadJson, CARDMINT_WEBHOOK_SECRET);
+
+  try {
+    const response = await fetch(CARDMINT_WEBHOOK_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(signature && { "X-CardMint-Signature": signature }),
+      },
+      body: payloadJson,
+      signal: AbortSignal.timeout(5000), // 5s timeout
+    });
+
+    if (!response.ok) {
+      const errorBody = await response.text().catch(() => "");
+      console.error(
+        `[cardmint_sync] Webhook failed: ${response.status} ${response.statusText}`,
+        errorBody.slice(0, 200)
+      );
+      return;
+    }
+
+    const result = await response.json().catch(() => ({}));
+    console.log(
+      `[cardmint_sync] Webhook sent for product ${data.uuid}:`,
+      result.ok ? "processed" : "failed",
+      result.event_uid || ""
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown error";
+    console.error(`[cardmint_sync] Webhook request failed: ${message}`);
+  }
+}

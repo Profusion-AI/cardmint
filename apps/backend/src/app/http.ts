@@ -27,6 +27,7 @@ import { registerSyncRoutes } from "../routes/sync";
 import { registerWebhookRoutes } from "../routes/webhooks";
 import { registerSubscribeRoutes } from "../routes/subscribe";
 import { registerAnalyticsRoutes } from "../routes/analytics";
+import { registerPrivacyRoutes } from "../routes/privacy";
 
 /**
  * Create and configure the Express application.
@@ -94,6 +95,7 @@ export function createApp(ctx: AppContext): Express {
   registerWebhookRoutes(app, ctx);
   registerSubscribeRoutes(app, ctx);
   registerAnalyticsRoutes(app, ctx);
+  registerPrivacyRoutes(app, ctx);
 
   return app;
 }

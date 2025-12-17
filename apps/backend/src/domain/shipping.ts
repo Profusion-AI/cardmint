@@ -1,46 +1,28 @@
 /**
  * Shipping domain types for CardMint
  *
- * Launch policy (Oct 31, 2025) — USPS-aligned, U.S.-only:
- * - PWE (Rigid Letter, non-machinable): $1.50, ≤1 oz, ≤2 Card Saver 2s, ≤3 raw cards.
- * - Tracked First-Class (Ground Advantage 0–4 oz): $4.95 default.
- * - Priority Mail: $9.95 when quantity ≥20 or subtotal ≥$45 (or ≥$200 safeguard).
+ * Shipping Policy (Dec 2025) — Tracked-only, U.S.-only:
+ * - Tracked Package (USPS Ground Advantage): $4.95 default.
+ * - Priority Mail: $9.95 when quantity ≥20 or subtotal ≥$45.
+ *
+ * All shipments include tracking. CardMint does not offer an untracked shipping option.
  *
  * References:
- * - USPS Notice 123 (letter specs & pricing): https://pe.usps.com/text/dmm300/notice123.htm
- * - USPS First-Class Mail non-machinable rules: https://www.usps.com/ship/first-class-mail.htm
- * - USPS July 13, 2025 price update: https://about.usps.com/newsroom/national-releases/2025/0409-usps-recommends-new-prices-for-july-2025.htm
+ * - USPS Ground Advantage: https://www.usps.com/ship/ground-advantage.htm
+ * - CardMint Shipping Policy: docs/POLICY_SHIPPING_2025-10-31.md
  */
 
-export type ShippingMethod = "PWE" | "FIRST_CLASS" | "PRIORITY";
+export type ShippingMethod = "TRACKED" | "PRIORITY";
 
 export interface Cart {
   /** Customer shipping address is in U.S. (50 states, DC, APO/FPO) */
   isUS: boolean;
-
-  /** Cart uses store credit or is return/replacement shipment */
-  usesStoreCredit: boolean;
 
   /** Total card quantity in cart (raw count of singles) */
   quantity: number;
 
   /** Cart subtotal before shipping (USD) */
   subtotal: number;
-
-  /** Estimated packed weight in ounces (post-protection) */
-  estimatedWeightOz: number;
-
-  /** Number of Card Saver 2 holders in shipment */
-  cardSaverCount: number;
-
-  /** Total physical cards (allows PWE check when quantity != card count) */
-  cardCount: number;
-
-  /** Customer explicitly wants tracked shipping (disables PWE) */
-  customerRequestsTracking?: boolean;
-
-  /** Contains graded/slabbed cards, sealed items, or thick bundles ineligible for PWE */
-  containsPWEIneligible: boolean;
 }
 
 export interface ShippingQuote {
@@ -56,14 +38,17 @@ export interface ShippingQuote {
   /** Shipping price in USD */
   price?: number;
 
+  /** Shipping price in cents (for Stripe) */
+  priceCents?: number;
+
   /** Customer-facing explanation of shipping choice */
   explanation?: string;
+
+  /** Flag for orders >$100 requiring manual review before label purchase */
+  requiresManualReview?: boolean;
 }
 
-export interface ShippingResolverOptions {
-  /** Enable high-value safeguard (≥$200 → Priority Mail) */
-  highValueSafeguard?: boolean;
-}
+// ShippingResolverOptions removed - high-value safeguard was redundant with $45 threshold
 
 /**
  * Non-U.S. checkout message
@@ -77,15 +62,8 @@ export const NON_US_MESSAGE =
  * Customer-facing microcopy for shipping step
  */
 export const SHIPPING_STEP_COPY =
-  "We automatically select the best U.S. shipping option. " +
-  "Rigid letters ship non-machinable for premium protection. " +
-  "Tracked packages cover everything else, and bigger orders upgrade to Priority.";
+  "All orders ship with tracking via USPS. " +
+  "Orders of 20+ cards or $45+ ship Priority Mail for faster delivery.";
 
-export const PWE_RIGID_COPY =
-  "Rigid letter (non-machinable) for premium protection; no tracking included.";
-
-export const STORE_CREDIT_COPY =
-  "Store-credit shipments include tracking; the rigid letter option is not available.";
-
-export const HIGH_VALUE_COPY =
-  "High-value orders ship via Priority Mail for faster, safer delivery.";
+export const PRIORITY_THRESHOLD_COPY =
+  "Your order qualifies for Priority Mail shipping with faster 2-3 day delivery.";

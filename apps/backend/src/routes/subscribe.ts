@@ -14,7 +14,7 @@ interface SubscribeBody {
 }
 
 export function registerSubscribeRoutes(app: Express, ctx: AppContext): void {
-  const { db, logger } = ctx;
+  const { db, logger, klaviyoService } = ctx;
 
   /**
    * POST /api/subscribe
@@ -63,6 +63,17 @@ export function registerSubscribeRoutes(app: Express, ctx: AppContext): void {
 
       if (result.changes > 0) {
         logger.info({ email: email.substring(0, 3) + "***", source }, "subscribe.new");
+
+        // Phase 2: Fire-and-forget Klaviyo profile sync (never block the response)
+        if (klaviyoService.isConfigured()) {
+          void (async () => {
+            try {
+              await klaviyoService.syncSubscriber(email, source);
+            } catch (err) {
+              logger.error({ err }, "subscribe.klaviyo.failed");
+            }
+          })();
+        }
       } else {
         logger.debug({ source }, "subscribe.duplicate");
       }

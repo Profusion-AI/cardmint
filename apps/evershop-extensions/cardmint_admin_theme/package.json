@@ -1,0 +1,10 @@
+{
+  "name": "@cardmint/admin-theme",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "CardMint brand theming for EverShop admin dashboard",
+  "scripts": {
+    "build": "mkdir -p dist/pages && cp -r pages/* dist/pages/",
+    "clean": "rm -rf dist"
+  }
+}

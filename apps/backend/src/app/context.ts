@@ -47,6 +47,7 @@ import { StripeService } from "../services/stripeService";
 import { StripeExpiryJob } from "../services/stripeExpiryJob";
 import { ImportSafeguardsService } from "../services/importer/importSafeguards";
 import { SetTriangulator } from "../services/setTriangulator";
+import { KlaviyoService } from "../services/klaviyoService";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MASTER_SETLIST_PATH = path.resolve(__dirname, "../../../../data/mastersetlist.csv");
@@ -81,6 +82,7 @@ export interface AppContext {
   stripeService: StripeService;
   stripeExpiryJob: StripeExpiryJob;
   importSafeguards: ImportSafeguardsService;
+  klaviyoService: KlaviyoService;
 
   // Shutdown state and helpers
   isShuttingDown: () => boolean;
@@ -853,6 +855,9 @@ export async function createContext(): Promise<AppContext> {
   // EverShop import safeguards (Dec 2025)
   const importSafeguards = new ImportSafeguardsService(db, logger);
 
+  // Klaviyo email tracking (Dec 2025)
+  const klaviyoService = new KlaviyoService(db, logger);
+
   // Cleanup expired/aborted idempotency keys on startup
   const cleanup = importSafeguards.cleanupExpiredKeys();
   if (cleanup.deleted > 0 || cleanup.aborted > 0) {
@@ -891,6 +896,7 @@ export async function createContext(): Promise<AppContext> {
     stripeService,
     stripeExpiryJob,
     importSafeguards,
+    klaviyoService,
 
     isShuttingDown: () => shuttingDown,
     setShuttingDown: (value: boolean) => {

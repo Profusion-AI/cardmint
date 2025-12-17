@@ -1,0 +1,73 @@
+version: "3.8"
+
+services:
+  # EverShop application (via Docker Hub if available, or build from source)
+  # This is a basic setup; production would include proper config management
+  evershop:
+    image: evershop/evershop:2.1.0
+    container_name: evershop-app
+    ports:
+      - "127.0.0.1:3000:3000"  # Local only for development
+      - "127.0.0.1:9000:9000"  # Admin port
+    environment:
+      # Database configuration
+      DB_HOST: evershop-db
+      DB_PORT: 5432
+      DB_NAME: evershop
+      DB_USER: evershop
+      DB_PASSWORD: ${DB_PASSWORD:-evershop_dev_password}
+      # Core config
+      APP_URL: http://localhost:3000
+      ADMIN_URL: http://localhost:9000
+      NODE_ENV: development
+      JWT_SECRET: ${JWT_SECRET:-dev_jwt_secret_changeme}
+    depends_on:
+      evershop-db:
+        condition: service_healthy
+    networks:
+      - evershop-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # PostgreSQL database (EverShop typically uses PostgreSQL)
+  evershop-db:
+    image: postgres:15-alpine
+    container_name: evershop-db
+    environment:
+      POSTGRES_DB: evershop
+      POSTGRES_USER: evershop
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-evershop_dev_password}
+    volumes:
+      - evershop-db-data:/var/lib/postgresql/data
+    networks:
+      - evershop-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U evershop"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Nginx reverse proxy with TLS termination
+  nginx:
+    image: nginx:alpine
+    container_name: evershop-nginx
+    ports:
+      - "127.0.0.1:443:443"   # HTTPS
+      - "127.0.0.1:80:80"     # HTTP (redirects to HTTPS)
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./certs:/etc/nginx/certs:ro
+    depends_on:
+      - evershop
+    networks:
+      - evershop-network
+
+networks:
+  evershop-network:
+    driver: bridge
+
+volumes:
+  evershop-db-data:

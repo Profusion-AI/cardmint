@@ -13,6 +13,8 @@ import { computeLaunchPrice, MINIMUM_LISTING_PRICE } from "../pricing/types";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
+const DEFAULT_CARD_WEIGHT_GRAMS = 2;
+
 type MasterSetRow = {
   set_name?: string;
   series?: string;
@@ -495,7 +497,7 @@ END $$;
     const dbName = this.config.dbName ?? "evershop";
 
     const sqlBase64 = Buffer.from(sql, "utf8").toString("base64");
-    const command = `ssh -i ${sshKey} -o StrictHostKeyChecking=no ${sshUser}@${sshHost} "echo ${sqlBase64} | base64 -d | docker compose -f ${dockerPath} exec -T database psql -U ${dbUser} -d ${dbName} -t"`;
+    const command = `ssh -i ${sshKey} -o StrictHostKeyChecking=no ${sshUser}@${sshHost} "echo ${sqlBase64} | base64 -d | docker compose -f ${dockerPath} exec -T database psql -U ${dbUser} -d ${dbName} -qAt -F '|'"`;
 
     try {
       const result = execSync(command, { encoding: "utf-8", timeout: 30000 });
@@ -505,6 +507,14 @@ END $$;
       this.logger.error({ error: errorMsg, sql: sql.slice(0, 200) }, "SSH SQL execution failed");
       throw error;
     }
+  }
+
+  private parseFirstRow(result: string): string | null {
+    const line = result
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .find((l) => l.length > 0 && l.includes("|") && !/^(INSERT|UPDATE|DELETE|SELECT)\b/i.test(l));
+    return line ?? null;
   }
 
   /**
@@ -550,12 +560,14 @@ END $$;
       let existingProductId: number | null = null;
       let existingUuid: string | null = null;
       if (existsResult && existsResult.trim()) {
-        const [idStr, uuidStr] = existsResult.trim().split("|").map((s) => s.trim());
+        const row = this.parseFirstRow(existsResult) ?? existsResult.trim();
+        const [idStr, uuidStr] = row.split("|").map((s) => s.trim());
         existingProductId = idStr ? parseInt(idStr, 10) : null;
         existingUuid = uuidStr || null;
       }
 
       const urlKey = this.generateUrlKey(payload);
+      const weightGrams = DEFAULT_CARD_WEIGHT_GRAMS;
 
       if (existingProductId && !isNaN(existingProductId)) {
         // UPDATE existing product
@@ -565,7 +577,7 @@ END $$;
         // Note: visibility stays unchanged on UPDATE - operator controls publish state in EverShop admin
         const scanIdClause = payload.cardmint_scan_id ? `, cardmint_scan_id = ${sqlString(payload.cardmint_scan_id)}` : "";
         const categoryClause = payload.category_id ? `, category_id = ${sqlInt(payload.category_id)}` : "";
-        const updateProductSql = `UPDATE product SET price = ${sqlNumber(payload.price, { decimals: 4 })}, weight = 0.0100, status = true${scanIdClause}${categoryClause}, updated_at = NOW() WHERE product_id = ${sqlInt(existingProductId)}`;
+        const updateProductSql = `UPDATE product SET price = ${sqlNumber(payload.price, { decimals: 4 })}, weight = ${sqlNumber(weightGrams, { decimals: 4 })}, status = true${scanIdClause}${categoryClause}, updated_at = NOW() WHERE product_id = ${sqlInt(existingProductId)}`;
         this.executeSshSql(updateProductSql);
 
         // Update product_description
@@ -655,10 +667,11 @@ END $$;
       const categoryColumn = payload.category_id ? ", category_id" : "";
       const categoryValue = payload.category_id ? `, ${sqlInt(payload.category_id)}` : "";
       // Return both product_id and uuid for bidirectional sync linkage
-      const insertProductSql = `INSERT INTO product (sku, price, weight, status, visibility${scanIdColumn}${categoryColumn}) VALUES (${sqlString(payload.sku)}, ${sqlNumber(payload.price, { decimals: 4 })}, 0.0100, true, false${scanIdValue}${categoryValue}) RETURNING product_id, uuid`;
+      const insertProductSql = `INSERT INTO product (sku, price, weight, status, visibility${scanIdColumn}${categoryColumn}) VALUES (${sqlString(payload.sku)}, ${sqlNumber(payload.price, { decimals: 4 })}, ${sqlNumber(weightGrams, { decimals: 4 })}, true, false${scanIdValue}${categoryValue}) RETURNING product_id, uuid`;
       const insertResult = this.executeSshSql(insertProductSql);
       // Parse "product_id | uuid" format from psql output
-      const [productIdStr, uuidStr] = insertResult.trim().split("|").map((s) => s.trim());
+      const row = this.parseFirstRow(insertResult) ?? insertResult.trim();
+      const [productIdStr, uuidStr] = row.split("|").map((s) => s.trim());
       const productId = parseInt(productIdStr, 10);
       const evershopUuid = uuidStr;
 
@@ -1009,6 +1022,7 @@ END $$;
           `UPDATE products
            SET last_imported_at = ?,
                import_job_id = 'auto-import',
+               evershop_product_id = COALESCE(?, evershop_product_id),
                evershop_uuid = COALESCE(?, evershop_uuid),
                evershop_sync_state = CASE
                  WHEN ? IS NOT NULL AND (evershop_sync_state IS NULL OR evershop_sync_state IN ('not_synced', 'vault_only'))
@@ -1019,6 +1033,7 @@ END $$;
         )
         .run(
           Math.floor(Date.now() / 1000),
+          result.evershop_product_id ? parseInt(result.evershop_product_id, 10) : null,
           result.evershop_uuid ?? null,
           result.evershop_uuid ?? null,
           productUid

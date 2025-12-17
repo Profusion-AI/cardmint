@@ -8,6 +8,7 @@ import Stripe from "stripe";
 import type { Database } from "better-sqlite3";
 import type { Logger } from "pino";
 import { runtimeConfig } from "../config";
+import type { ShippingQuote } from "../domain/shipping";
 
 export interface StripeItemData {
   item_uid: string;
@@ -34,6 +35,24 @@ export interface CreateSessionResult {
   expiresAt: number;
 }
 
+export interface MultiItemSessionResult {
+  sessionId: string;
+  checkoutUrl: string;
+  expiresAt: number;
+  itemUids: string[];
+}
+
+export interface LotDiscountInfo {
+  discountPct: number;
+  discountAmountCents: number;
+  reasonCode: string;
+  reasonText: string;
+  /** Pre-discount sum of all item prices */
+  originalTotalCents: number;
+  /** Post-discount total customer pays (before shipping) */
+  finalTotalCents: number;
+}
+
 export class StripeService {
   private stripe: Stripe | null = null;
 
@@ -57,33 +76,67 @@ export class StripeService {
   }
 
   /**
-   * Create Stripe Product and Price for an item
+   * Create Stripe Product and Price for an item (idempotent)
    * Product ID: cm_item_<item_uid>
-   * Metadata includes all item identifiers for audit trail
+   * If product already exists in Stripe, retrieves and reactivates it.
+   * Always creates a fresh price (Stripe prices are immutable for amount).
+   * Metadata includes all item identifiers for audit trail.
    */
   async createProductAndPrice(item: StripeItemData): Promise<CreateProductResult> {
     const stripe = this.ensureStripe();
     const productId = `cm_item_${item.item_uid}`;
 
-    this.logger.info({ itemUid: item.item_uid, productId }, "Creating Stripe product/price");
+    this.logger.info({ itemUid: item.item_uid, productId }, "Creating/retrieving Stripe product");
 
-    const product = await stripe.products.create({
-      id: productId,
-      name: item.name,
-      description: item.description,
-      active: true,
-      images: item.image_url ? [item.image_url] : undefined,
-      metadata: {
-        item_uid: item.item_uid,
-        product_uid: item.product_uid,
-        cm_card_id: item.cm_card_id ?? "",
-        set_name: item.set_name ?? "",
-        collector_no: item.collector_no ?? "",
-        condition: item.condition ?? "",
-        canonical_sku: item.canonical_sku ?? "",
-      },
-    });
+    let product: Stripe.Product;
 
+    try {
+      // Try to retrieve existing product first
+      product = await stripe.products.retrieve(productId);
+      this.logger.info({ productId }, "Stripe product already exists, reactivating");
+
+      // Reactivate if archived and update metadata
+      product = await stripe.products.update(productId, {
+        active: true,
+        name: item.name,
+        description: item.description,
+        images: item.image_url ? [item.image_url] : undefined,
+        metadata: {
+          item_uid: item.item_uid,
+          product_uid: item.product_uid,
+          cm_card_id: item.cm_card_id ?? "",
+          set_name: item.set_name ?? "",
+          collector_no: item.collector_no ?? "",
+          condition: item.condition ?? "",
+          canonical_sku: item.canonical_sku ?? "",
+        },
+      });
+    } catch (err) {
+      // Product doesn't exist, create it
+      if ((err as { code?: string }).code === "resource_missing") {
+        product = await stripe.products.create({
+          id: productId,
+          name: item.name,
+          description: item.description,
+          active: true,
+          images: item.image_url ? [item.image_url] : undefined,
+          metadata: {
+            item_uid: item.item_uid,
+            product_uid: item.product_uid,
+            cm_card_id: item.cm_card_id ?? "",
+            set_name: item.set_name ?? "",
+            collector_no: item.collector_no ?? "",
+            condition: item.condition ?? "",
+            canonical_sku: item.canonical_sku ?? "",
+          },
+        });
+        this.logger.info({ productId }, "Stripe product created");
+      } else {
+        throw err;
+      }
+    }
+
+    // Always create a fresh price (Stripe prices are immutable)
     const price = await stripe.prices.create({
       product: product.id,
       unit_amount: item.price_cents,
@@ -93,7 +146,7 @@ export class StripeService {
 
     this.logger.info(
       { itemUid: item.item_uid, stripeProductId: product.id, stripePriceId: price.id },
-      "Stripe product/price created"
+      "Stripe product/price ready"
     );
 
     return {
@@ -133,23 +186,29 @@ export class StripeService {
   }
 
   /**
-   * Create Checkout Session for an item
+   * Create Checkout Session for an item with shipping
    * Mode: payment, quantity: 1 (non-adjustable), expires in configured TTL
+   * Includes shipping_options for deterministic shipping fee
    */
   async createCheckoutSession(
     item: StripeItemData,
     stripePriceId: string,
+    shippingQuote: ShippingQuote,
     successUrl: string,
     cancelUrl: string
   ): Promise<CreateSessionResult> {
     const stripe = this.ensureStripe();
 
+    if (!shippingQuote.allowed || !shippingQuote.method || !shippingQuote.priceCents) {
+      throw new Error("Invalid shipping quote: checkout not allowed or missing shipping details");
+    }
+
     const ttlMinutes = runtimeConfig.stripeReservationTtlMinutes;
     const expiresAt = Math.floor(Date.now() / 1000) + ttlMinutes * 60;
 
     this.logger.info(
-      { itemUid: item.item_uid, stripePriceId, ttlMinutes },
-      "Creating Stripe checkout session"
+      { itemUid: item.item_uid, stripePriceId, shippingMethod: shippingQuote.method, shippingCents: shippingQuote.priceCents, ttlMinutes },
+      "Creating Stripe checkout session with shipping"
     );
 
     const session = await stripe.checkout.sessions.create({
@@ -167,11 +226,33 @@ export class StripeService {
       shipping_address_collection: {
         allowed_countries: ["US"],
       },
+      // Single shipping option - deterministic, no customer choice
+      shipping_options: [
+        {
+          shipping_rate_data: {
+            type: "fixed_amount",
+            fixed_amount: {
+              amount: shippingQuote.priceCents,
+              currency: "usd",
+            },
+            display_name: shippingQuote.method === "PRIORITY"
+              ? "Priority Mail (2-3 business days)"
+              : "Tracked Shipping (3-5 business days)",
+            delivery_estimate: {
+              minimum: { unit: "business_day", value: shippingQuote.method === "PRIORITY" ? 2 : 3 },
+              maximum: { unit: "business_day", value: shippingQuote.method === "PRIORITY" ? 3 : 5 },
+            },
+          },
+        },
+      ],
       allow_promotion_codes: false,
       // Session-level metadata for webhook event correlation
       metadata: {
         item_uid: item.item_uid,
         product_uid: item.product_uid,
+        shipping_method: shippingQuote.method,
+        shipping_cost_cents: shippingQuote.priceCents.toString(),
+        requires_manual_review: shippingQuote.requiresManualReview ? "1" : "0",
       },
       payment_intent_data: {
         metadata: {
@@ -184,14 +265,182 @@ export class StripeService {
     });
 
     this.logger.info(
-      { itemUid: item.item_uid, sessionId: session.id, expiresAt },
-      "Stripe checkout session created"
+      { itemUid: item.item_uid, sessionId: session.id, expiresAt, shippingMethod: shippingQuote.method },
+      "Stripe checkout session created with shipping"
     );
 
     return {
       sessionId: session.id,
       checkoutUrl: session.url!,
       expiresAt,
+    };
+  }
+
+  /**
+   * Create Checkout Session for multiple items with shipping and optional lot discount
+   * Mode: payment, quantity: 1 per item (unique 1-of-1 cards), expires in configured TTL
+   * Discount applied via dynamic Stripe Coupon (negative line items not supported)
+   * Includes shipping_options for deterministic shipping fee
+   */
+  async createMultiItemCheckoutSession(
+    items: StripeItemData[],
+    stripePriceIds: string[],
+    shippingQuote: ShippingQuote,
+    lotDiscount: LotDiscountInfo | null,
+    successUrl: string,
+    cancelUrl: string
+  ): Promise<MultiItemSessionResult> {
+    const stripe = this.ensureStripe();
+
+    if (items.length !== stripePriceIds.length) {
+      throw new Error(`Item count mismatch: ${items.length} items, ${stripePriceIds.length} prices`);
+    }
+
+    if (items.length === 0) {
+      throw new Error("Cannot create checkout session with zero items");
+    }
+
+    if (!shippingQuote.allowed || !shippingQuote.method || !shippingQuote.priceCents) {
+      throw new Error("Invalid shipping quote: checkout not allowed or missing shipping details");
+    }
+
+    const ttlMinutes = runtimeConfig.stripeReservationTtlMinutes;
+    const expiresAt = Math.floor(Date.now() / 1000) + ttlMinutes * 60;
+    const itemUids = items.map((item) => item.item_uid);
+
+    this.logger.info(
+      { itemCount: items.length, itemUids, lotDiscount: lotDiscount?.discountPct ?? null, shippingMethod: shippingQuote.method, shippingCents: shippingQuote.priceCents, ttlMinutes },
+      "Creating multi-item Stripe checkout session with shipping"
+    );
+
+    // Build line items for all products (each card is unique, qty=1)
+    const lineItems: Stripe.Checkout.SessionCreateParams.LineItem[] = stripePriceIds.map((priceId) => ({
+      price: priceId,
+      quantity: 1,
+      adjustable_quantity: { enabled: false },
+    }));
+
+    // Create dynamic coupon for lot discount if applicable
+    // Stripe does NOT support negative line items - must use coupons
+    // NOTE: This is separate from admin/marketing coupons:
+    //   - Lot Builder coupons: system-generated, one-time, auto-created at checkout
+    //   - Marketing coupons: admin-created in Stripe dashboard, applied via allow_promotion_codes
+    let couponId: string | undefined;
+    if (lotDiscount && lotDiscount.discountAmountCents > 0) {
+      // Customer-facing name: "Bundle Savings" (not "coupon" to avoid confusion with promo codes)
+      const coupon = await stripe.coupons.create({
+        amount_off: lotDiscount.discountAmountCents,
+        currency: "usd",
+        duration: "once",
+        name: `Bundle Savings (${lotDiscount.discountPct}% off)`,
+        metadata: {
+          coupon_type: "lot_builder",  // Internal: Distinguish from admin/marketing coupons
+          source: "system_generated",
+          reason_code: lotDiscount.reasonCode,
+          reason_text: lotDiscount.reasonText.slice(0, 500), // Stripe limit
+          created_at: new Date().toISOString(),
+        },
+      });
+      couponId = coupon.id;
+
+      this.logger.info(
+        {
+          couponId,
+          discountPct: lotDiscount.discountPct,
+          discountAmountCents: lotDiscount.discountAmountCents,
+          reasonCode: lotDiscount.reasonCode,
+        },
+        "Created Stripe coupon for lot discount"
+      );
+    }
+
+    // Calculate totals for metadata (used by webhook for fulfillment record)
+    const originalTotalCents = lotDiscount?.originalTotalCents ?? items.reduce((sum, item) => sum + item.price_cents, 0);
+    const finalTotalCents = lotDiscount?.finalTotalCents ?? originalTotalCents;
+
+    // Prepare metadata with shipping info
+    const metadata: Record<string, string> = {
+      item_uids: JSON.stringify(itemUids),
+      item_count: items.length.toString(),
+      shipping_method: shippingQuote.method,
+      shipping_cost_cents: shippingQuote.priceCents.toString(),
+      requires_manual_review: shippingQuote.requiresManualReview ? "1" : "0",
+      // Store both pre-discount and post-discount totals for operational clarity
+      original_subtotal_cents: originalTotalCents.toString(),
+      final_subtotal_cents: finalTotalCents.toString(),
+    };
+
+    if (lotDiscount) {
+      metadata.lot_discount_pct = lotDiscount.discountPct.toString();
+      metadata.lot_reason_code = lotDiscount.reasonCode;
+    }
+
+    if (couponId) {
+      metadata.lot_coupon_id = couponId;
+    }
+
+    // Aggregate product_uids for correlation (first product_uid as representative)
+    const productUid = items[0].product_uid;
+
+    const sessionParams: Stripe.Checkout.SessionCreateParams = {
+      mode: "payment",
+      line_items: lineItems,
+      expires_at: expiresAt,
+      success_url: successUrl,
+      cancel_url: cancelUrl,
+      shipping_address_collection: {
+        allowed_countries: ["US"],
+      },
+      // Single shipping option - deterministic, no customer choice
+      shipping_options: [
+        {
+          shipping_rate_data: {
+            type: "fixed_amount",
+            fixed_amount: {
+              amount: shippingQuote.priceCents,
+              currency: "usd",
+            },
+            display_name: shippingQuote.method === "PRIORITY"
+              ? "Priority Mail (2-3 business days)"
+              : "Tracked Shipping (3-5 business days)",
+            delivery_estimate: {
+              minimum: { unit: "business_day", value: shippingQuote.method === "PRIORITY" ? 2 : 3 },
+              maximum: { unit: "business_day", value: shippingQuote.method === "PRIORITY" ? 3 : 5 },
+            },
+          },
+        },
+      ],
+      metadata,
+      payment_intent_data: {
+        metadata: {
+          item_uids: JSON.stringify(itemUids),
+          item_count: items.length.toString(),
+          product_uid: productUid,
+        },
+      },
+    };
+
+    // Apply coupon discount if created
+    // Note: Stripe does not allow both allow_promotion_codes and discounts
+    // When using bundle discounts, we don't allow promotion codes
+    if (couponId) {
+      sessionParams.discounts = [{ coupon: couponId }];
+    } else {
+      sessionParams.allow_promotion_codes = false;
+    }
+
+    const session = await stripe.checkout.sessions.create(sessionParams);
+
+    this.logger.info(
+      { sessionId: session.id, itemUids, expiresAt, lotDiscount: lotDiscount?.discountPct ?? null, couponId, shippingMethod: shippingQuote.method },
+      "Multi-item Stripe checkout session created with shipping"
+    );
+
+    return {
+      sessionId: session.id,
+      checkoutUrl: session.url!,
+      expiresAt,
+      itemUids,
     };
   }
 
