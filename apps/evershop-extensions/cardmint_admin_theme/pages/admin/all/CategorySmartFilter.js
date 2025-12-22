@@ -11,8 +11,8 @@ function attachSmartFilter() {
   }
 
   const form = input.closest("form") || document;
-  const optionLabels = Array.from(form.querySelectorAll("label")).filter((label) =>
-    label.querySelector('input[type="checkbox"], input[type="radio"]'),
+  const optionLabels = Array.from(form.querySelectorAll("label")).filter(
+    (label) => label.querySelector('input[type="checkbox"], input[type="radio"]'),
   );
 
   if (optionLabels.length === 0) {
@@ -72,7 +72,7 @@ export default function CategorySmartFilter() {
     };
   }, []);
 
-  return null; // Pure behavior injection
+  return null;
 }
 
 export const layout = {

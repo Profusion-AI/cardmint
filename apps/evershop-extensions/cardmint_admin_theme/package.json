@@ -4,7 +4,7 @@
   "type": "module",
   "description": "CardMint brand theming for EverShop admin dashboard",
   "scripts": {
-    "build": "mkdir -p dist/pages && cp -r pages/* dist/pages/",
+    "build": "rm -rf dist && mkdir -p dist && cp -r pages src/* dist/",
     "clean": "rm -rf dist"
   }
 }

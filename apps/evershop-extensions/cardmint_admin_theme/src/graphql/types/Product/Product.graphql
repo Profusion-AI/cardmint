@@ -1,0 +1,29 @@
+# CardMint Product Extension: cm_* projection fields
+# These fields expose CardMint reference data in the EverShop admin grid
+# Authority: Read-only context from CardMint (not customer-facing)
+
+extend type Product {
+  # Set name from CardMint (fallback when category is missing)
+  cmSetName: String
+
+  # Canonical variant string (first variant tag)
+  cmVariant: String
+
+  # Internal market reference price (from PPT/CSV pricing sources)
+  cmMarketPrice: Float
+
+  # Pricing data source: 'ppt', 'csv', 'manual'
+  cmPricingSource: String
+
+  # Pricing data freshness: 'fresh', 'stale', 'missing'
+  cmPricingStatus: String
+
+  # When pricing was last refreshed (ISO 8601 timestamp)
+  cmPricingUpdatedAt: String
+
+  # Link back to CardMint product_uid
+  cmProductUid: String
+
+  # Aggregate inventory status: 'IN_STOCK', 'OUT_OF_STOCK'
+  cmInventoryStatus: String
+}
