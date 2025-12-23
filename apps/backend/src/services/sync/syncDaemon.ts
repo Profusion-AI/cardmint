@@ -290,6 +290,10 @@ export class SyncDaemon {
           this.logger.debug({ eventUid: event.event_uid }, "Sale event in local queue (processed by syncSales)");
           break;
 
+        case "evershop_hide_listing":
+          await this.syncService.processEvershopHideListing(event);
+          break;
+
         case "unpromote":
           // Unpromote should complete synchronously, not go through daemon
           this.logger.warn({ eventUid: event.event_uid }, "Unexpected unpromote event in daemon queue");
@@ -308,6 +312,14 @@ export class SyncDaemon {
         { eventUid: event.event_uid, error },
         "Failed to process sync event"
       );
+      // BUG 1 fix: Update event status on unhandled errors so it doesn't retry forever
+      // Note: evershop_hide_listing handles its own errors; this catches promote/other events
+      try {
+        const errMsg = error instanceof Error ? error.message : String(error);
+        this.syncService.markEventFailed(event.event_uid, errMsg);
+      } catch (markErr) {
+        this.logger.warn({ eventUid: event.event_uid, markErr }, "Failed to mark event as failed");
+      }
     }
   }
 

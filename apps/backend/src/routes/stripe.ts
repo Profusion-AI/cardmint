@@ -45,6 +45,39 @@ function checkRateLimit(ip: string, limitRpm: number): { allowed: boolean; retry
   return { allowed: true };
 }
 
+// Allowed domains for checkout redirect URLs (prevents open redirect attacks)
+const REDIRECT_ALLOWLIST = ["cardmintshop.com", "www.cardmintshop.com", "localhost", "127.0.0.1"];
+
+/**
+ * Validate redirect URL against domain allowlist.
+ * Prevents open redirect attacks via checkout success/cancel URLs.
+ * Returns null if URL is invalid or not in allowlist.
+ */
+function validateRedirectUrl(url: string | undefined, allowedDomains: string[]): string | null {
+  if (!url) return null;
+
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return null; // Invalid URL
+  }
+
+  // Only allow http/https protocols
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    return null;
+  }
+
+  // Check hostname against allowlist
+  const hostname = parsed.hostname.toLowerCase();
+  const isAllowed = allowedDomains.some((domain) => {
+    const d = domain.toLowerCase();
+    return hostname === d || hostname.endsWith(`.${d}`);
+  });
+
+  return isAllowed ? url : null;
+}
+
 export function registerStripeRoutes(app: Express, ctx: AppContext): void {
   const { logger, stripeService, inventoryService } = ctx;
 
@@ -148,10 +181,12 @@ export function registerStripeRoutes(app: Express, ctx: AppContext): void {
         stripePriceId = result.stripePriceId;
       }
 
-      // Determine URLs (default to generic if not provided)
+      // Determine URLs (validate user-supplied against allowlist, default to safe values)
       const baseUrl = runtimeConfig.evershopApiUrl || "https://cardmintshop.com";
-      const effectiveSuccessUrl = success_url || `${baseUrl}/checkout/success?session_id={CHECKOUT_SESSION_ID}`;
-      const effectiveCancelUrl = cancel_url || `${baseUrl}/checkout/cancel`;
+      const validatedSuccessUrl = validateRedirectUrl(success_url, REDIRECT_ALLOWLIST);
+      const validatedCancelUrl = validateRedirectUrl(cancel_url, REDIRECT_ALLOWLIST);
+      const effectiveSuccessUrl = validatedSuccessUrl || `${baseUrl}/checkout/success?session_id={CHECKOUT_SESSION_ID}`;
+      const effectiveCancelUrl = validatedCancelUrl || `${baseUrl}/checkout/cancel`;
 
       // Calculate shipping
       const cart: Cart = {
@@ -239,7 +274,7 @@ export function registerStripeRoutes(app: Express, ctx: AppContext): void {
    * Accepts array of product_uids, calculates lot discount, reserves all atomically
    */
   app.post("/api/checkout/session/multi", async (req: Request, res: Response) => {
-    const { product_uids, success_url, cancel_url } = req.body;
+    const { product_uids, success_url, cancel_url, cart_session_id } = req.body;
 
     // Validate input
     if (!Array.isArray(product_uids) || product_uids.length === 0) {
@@ -256,6 +291,9 @@ export function registerStripeRoutes(app: Express, ctx: AppContext): void {
       });
     }
 
+    // Optional cart_session_id for cart-reserved items
+    const hasCartSession = cart_session_id && typeof cart_session_id === "string" && /^[0-9a-f-]{36}$/i.test(cart_session_id);
+
     if (!stripeService.isConfigured()) {
       return res.status(503).json({
         error: "STRIPE_NOT_CONFIGURED",
@@ -265,14 +303,32 @@ export function registerStripeRoutes(app: Express, ctx: AppContext): void {
 
     try {
       // Step 1: Resolve all product_uids to available items
+      // Now supports both cart-reserved items (promote) and fresh items (reserve)
       const items: Array<{
         item_uid: string;
         product_uid: string;
         itemData: ReturnType<typeof inventoryService.getItemForCheckout>;
+        wasCartReserved: boolean; // Track if item was cart-reserved for later promotion
       }> = [];
 
       for (const product_uid of product_uids) {
-        const item_uid = inventoryService.getAvailableItemForProduct(product_uid);
+        let item_uid: string | null = null;
+        let wasCartReserved = false;
+
+        // Check if item is already cart-reserved by this session
+        if (hasCartSession) {
+          const cartReserved = inventoryService.getReservedItemForProduct(product_uid, cart_session_id);
+          if (cartReserved) {
+            item_uid = cartReserved.item_uid;
+            wasCartReserved = true;
+          }
+        }
+
+        // If not cart-reserved, look for available IN_STOCK item
+        if (!item_uid) {
+          item_uid = inventoryService.getAvailableItemForProduct(product_uid);
+        }
+
         if (!item_uid) {
           return res.status(409).json({
             error: "NO_AVAILABLE_ITEMS",
@@ -289,8 +345,8 @@ export function registerStripeRoutes(app: Express, ctx: AppContext): void {
           });
         }
 
-        // Guard checks
-        if (itemData.status !== "IN_STOCK") {
+        // Guard checks - allow RESERVED status if it's our cart reservation
+        if (itemData.status !== "IN_STOCK" && !wasCartReserved) {
           return res.status(409).json({
             error: "ITEM_NOT_AVAILABLE",
             message: `Item is ${itemData.status}, not available`,
@@ -314,7 +370,7 @@ export function registerStripeRoutes(app: Express, ctx: AppContext): void {
           });
         }
 
-        items.push({ item_uid, product_uid, itemData });
+        items.push({ item_uid, product_uid, itemData, wasCartReserved });
       }
 
       // Step 2: Calculate lot discount
@@ -399,9 +455,12 @@ export function registerStripeRoutes(app: Express, ctx: AppContext): void {
       );
 
       // Step 5: Create multi-item checkout session with shipping
+      // Validate user-supplied URLs against allowlist, default to safe values
       const baseUrl = runtimeConfig.evershopApiUrl || "https://cardmintshop.com";
-      const effectiveSuccessUrl = success_url || `${baseUrl}/checkout/success?session_id={CHECKOUT_SESSION_ID}`;
-      const effectiveCancelUrl = cancel_url || `${baseUrl}/checkout/cancel`;
+      const validatedSuccessUrl = validateRedirectUrl(success_url, REDIRECT_ALLOWLIST);
+      const validatedCancelUrl = validateRedirectUrl(cancel_url, REDIRECT_ALLOWLIST);
+      const effectiveSuccessUrl = validatedSuccessUrl || `${baseUrl}/checkout/success?session_id={CHECKOUT_SESSION_ID}`;
+      const effectiveCancelUrl = validatedCancelUrl || `${baseUrl}/checkout/cancel`;
 
       const stripeItemData = stripeItems.map((s) => ({
         item_uid: s.itemData.item_uid,
@@ -437,20 +496,43 @@ export function registerStripeRoutes(app: Express, ctx: AppContext): void {
         effectiveCancelUrl
       );
 
-      // Step 6: Reserve all items atomically
+      // Step 6: Reserve or promote all items atomically
+      // Cart-reserved items are promoted to checkout; fresh items are reserved new
       const reservedItems: string[] = [];
+      const promotedItems: string[] = [];
       let reservationFailed = false;
 
-      for (const { itemData, stripeProductId, stripePriceId } of stripeItems) {
-        const reserved = inventoryService.reserveItem(
-          itemData.item_uid,
-          session.sessionId,
-          stripeProductId,
-          stripePriceId,
-          session.expiresAt
-        );
+      for (let i = 0; i < stripeItems.length; i++) {
+        const { itemData, stripeProductId, stripePriceId } = stripeItems[i];
+        const wasCartReserved = items[i].wasCartReserved;
 
-        if (!reserved) {
+        let success: boolean;
+
+        if (wasCartReserved && hasCartSession) {
+          // Promote cart reservation to checkout reservation
+          success = inventoryService.promoteCartToCheckout(
+            itemData.item_uid,
+            cart_session_id,
+            session.sessionId,
+            stripeProductId,
+            stripePriceId,
+            session.expiresAt
+          );
+          if (success) {
+            promotedItems.push(itemData.item_uid);
+          }
+        } else {
+          // Fresh reservation for IN_STOCK item
+          success = inventoryService.reserveItem(
+            itemData.item_uid,
+            session.sessionId,
+            stripeProductId,
+            stripePriceId,
+            session.expiresAt
+          );
+        }
+
+        if (!success) {
           reservationFailed = true;
           break;
         }
@@ -515,7 +597,8 @@ export function registerStripeRoutes(app: Express, ctx: AppContext): void {
    */
   app.post("/api/lot/preview", async (req: Request, res: Response) => {
     // Rate limiting to prevent LLM spend abuse
-    const clientIp = (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.ip || "unknown";
+    // Use req.ip which respects the "trust proxy 1" setting configured in http.ts
+    const clientIp = req.ip || "unknown";
     const rateCheck = checkRateLimit(clientIp, runtimeConfig.lotBuilderRateLimitRpm);
 
     if (!rateCheck.allowed) {
@@ -690,6 +773,10 @@ export function registerStripeRoutes(app: Express, ctx: AppContext): void {
    * POST /api/checkout/session/:sessionId/cancel
    * Cancel an active checkout session and release the reserved item.
    * Called by the cart when user removes an item or abandons checkout.
+   *
+   * IMPORTANT: Will NOT release inventory if session is already paid/complete.
+   * This prevents double-sell scenarios where success page or stale client
+   * accidentally releases inventory that the webhook should mark as SOLD.
    */
   app.post("/api/checkout/session/:sessionId/cancel", async (req: Request, res: Response) => {
     const { sessionId } = req.params;
@@ -702,6 +789,52 @@ export function registerStripeRoutes(app: Express, ctx: AppContext): void {
     }
 
     try {
+      // CRITICAL: Check Stripe session payment status before releasing inventory.
+      // If the session is paid/complete, refuse to release - webhook will mark SOLD.
+      // FAIL-CLOSED: If we can't verify status, refuse to release (prevents double-sell on API errors).
+      if (stripeService.isConfigured()) {
+        try {
+          const stripeSession = await stripeService.getCheckoutSession(sessionId);
+          if (stripeSession.payment_status === "paid" || stripeSession.status === "complete") {
+            logger.info(
+              { sessionId, payment_status: stripeSession.payment_status, status: stripeSession.status },
+              "Cancel rejected: session already paid/complete - inventory protected"
+            );
+            return res.status(409).json({
+              ok: false,
+              error: "SESSION_ALREADY_PAID",
+              message: "Cannot cancel a paid session. Inventory will be marked SOLD by webhook.",
+              payment_status: stripeSession.payment_status,
+              status: stripeSession.status,
+            });
+          }
+          // Session exists and is NOT paid - safe to proceed with release
+        } catch (stripeError: unknown) {
+          // FAIL-CLOSED: Only proceed if the session genuinely doesn't exist in Stripe.
+          // Any other error (auth, network, rate limit) means we can't verify payment status,
+          // so we must refuse to release to prevent double-sell risk.
+          const isResourceMissing =
+            stripeError instanceof Stripe.errors.StripeError &&
+            stripeError.code === "resource_missing";
+
+          if (isResourceMissing) {
+            // Session doesn't exist in Stripe - safe to release (was never created or already expired)
+            logger.debug({ sessionId }, "Stripe session not found (resource_missing), proceeding with release");
+          } else {
+            // Cannot verify payment status - refuse to release inventory
+            logger.warn(
+              { sessionId, err: stripeError },
+              "Cancel rejected: cannot verify Stripe session status - inventory protected (fail-closed)"
+            );
+            return res.status(503).json({
+              ok: false,
+              error: "STRIPE_VERIFICATION_FAILED",
+              message: "Cannot verify payment status. Retry later or wait for session TTL expiry.",
+            });
+          }
+        }
+      }
+
       // Release ALL items for this checkout session (multi-item support)
       const releasedCount = inventoryService.releaseReservationsByCheckoutSession(sessionId);
 
@@ -1071,6 +1204,12 @@ async function handleCheckoutCompleted(
     stripe_price_id: string | null;
   }> = [];
 
+  const shouldQueueEvershopHide =
+    session.livemode === true &&
+    runtimeConfig.cardmintEnv === "production" &&
+    runtimeConfig.evershopSaleSyncEnabled;
+  const queuedHideProducts = new Set<string>();
+
   for (const itemUid of itemUids) {
     // Mark item as sold
     const marked = inventoryService.markItemSold(itemUid, paymentIntentId);
@@ -1165,6 +1304,83 @@ async function handleCheckoutCompleted(
     });
 
     logger.info({ itemUid, sessionId, paymentIntentId }, "checkout.session.completed: item marked sold");
+
+    // Enqueue EverShop hide listing event (async worker handles actual mutation)
+    if (shouldQueueEvershopHide && itemData.product_uid && !queuedHideProducts.has(itemData.product_uid)) {
+      const productRow = db
+        .prepare(
+          `SELECT product_sku, listing_sku, total_quantity, evershop_product_id
+           FROM products WHERE product_uid = ?`
+        )
+        .get(itemData.product_uid) as
+        | {
+            product_sku: string | null;
+            listing_sku: string | null;
+            total_quantity: number;
+            evershop_product_id: number | null;
+          }
+        | undefined;
+
+      if (!productRow) {
+        logger.warn({ product_uid: itemData.product_uid }, "EverShop hide skipped: product not found");
+      } else if (productRow.total_quantity > 0) {
+        logger.debug(
+          { product_uid: itemData.product_uid, total_quantity: productRow.total_quantity },
+          "EverShop hide skipped: product still has inventory"
+        );
+      } else {
+        const productSku = productRow.product_sku ?? productRow.listing_sku;
+        if (!productSku) {
+          logger.warn({ product_uid: itemData.product_uid }, "EverShop hide skipped: missing product_sku");
+        } else {
+          const now = Math.floor(Date.now() / 1000);
+          const eventUid = `EVERSHOP_HIDE:${sessionId}:${productSku}`;
+          const payload = {
+            product_uid: itemData.product_uid,
+            item_uid: itemUid,
+            stripe_session_id: sessionId,
+            product_sku: productSku,
+            reason: "sold",
+            total_quantity: productRow.total_quantity,
+            livemode: session.livemode === true,
+            evershop_product_id: productRow.evershop_product_id ?? null,
+          };
+
+          db.prepare(
+            `INSERT OR IGNORE INTO sync_events (
+              event_uid,
+              event_type,
+              product_uid,
+              item_uid,
+              stripe_session_id,
+              product_sku,
+              source_db,
+              target_db,
+              operator_id,
+              payload,
+              stripe_event_id,
+              status,
+              created_at
+            ) VALUES (?, 'evershop_hide_listing', ?, ?, ?, ?, 'production', 'production', 'stripe_webhook', ?, ?, 'pending', ?)`
+          ).run(
+            eventUid,
+            itemData.product_uid,
+            itemUid,
+            sessionId,
+            productSku,
+            JSON.stringify(payload),
+            stripeEventId,
+            now
+          );
+
+          queuedHideProducts.add(itemData.product_uid);
+          logger.info(
+            { product_uid: itemData.product_uid, product_sku: productSku, sessionId },
+            "EverShop hide listing event enqueued"
+          );
+        }
+      }
+    }
   }
 
   // Emit Klaviyo order events (fire-and-forget, never block webhook)
@@ -1331,6 +1547,8 @@ async function handleChargeRefunded(
     );
     return item.item_uid;
   }
+
+  // NOTE: EverShop republish is manual; refunds do NOT auto-unhide listings.
 
   // Re-activate Stripe product/price so item can be sold again
   if (item.stripe_product_id && item.stripe_price_id) {

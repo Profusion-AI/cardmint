@@ -3,7 +3,14 @@
  * RFC-fullduplexDB_triple Phase 1
  */
 
-export type SyncEventType = "promote" | "sale" | "price_update" | "return" | "rollback" | "unpromote";
+export type SyncEventType =
+  | "promote"
+  | "sale"
+  | "price_update"
+  | "return"
+  | "rollback"
+  | "unpromote"
+  | "evershop_hide_listing";
 export type SyncEventStatus = "pending" | "synced" | "failed" | "conflict" | "partial_failure";
 export type SyncDbSource = "staging" | "production";
 export type EverShopSyncState = "not_synced" | "vault_only" | "evershop_hidden" | "evershop_live" | "sync_error";
@@ -36,10 +43,12 @@ export interface SyncEvent {
   event_type: SyncEventType;
   product_uid: string;
   item_uid: string | null;
+  stripe_session_id: string | null;
+  product_sku: string | null;
   source_db: SyncDbSource;
   target_db: SyncDbSource;
   operator_id: string | null;
-  payload: ProductSnapshot;
+  payload: string;
   stripe_event_id: string | null;
   status: SyncEventStatus;
   error_message: string | null;
@@ -71,6 +80,9 @@ export interface SyncHealthReport {
   oldest_pending_age_seconds: number | null;
   failed_events: number;
   conflict_events: number;
+  pending_evershop_hide_events: number;
+  oldest_pending_evershop_hide_age_seconds: number | null;
+  evershop_visible_zero_qty_count: number;
   last_sync_cycle: string | null;
   daemon_lease_holder: string | null;
   daemon_lease_expires: string | null;
@@ -148,6 +160,17 @@ export interface SaleSnapshot {
   condition: string | null;
   price_cents: number | null;
   sold_at: number;
+}
+
+export interface EvershopHideListingPayload {
+  product_uid: string;
+  item_uid: string;
+  stripe_session_id: string;
+  product_sku: string;
+  reason: "sold";
+  total_quantity: number;
+  livemode: boolean;
+  evershop_product_id?: number | null;
 }
 
 export interface SyncSalesResult {

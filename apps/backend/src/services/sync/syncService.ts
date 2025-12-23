@@ -17,6 +17,7 @@ import type {
   SyncSalesResult,
   ProductSnapshot,
   SaleSnapshot,
+  EvershopHideListingPayload,
   EverShopSyncState,
   PromoteCandidateRow,
   SyncEventStatus,
@@ -414,6 +415,181 @@ export class SyncService {
   }
 
   // ==========================================================================
+  // EverShop Sale Sync (Hide Listing)
+  // ==========================================================================
+
+  /**
+   * Mark a sync event as failed with error message and increment retry count
+   * Public method for daemon error handling (BUG 1 fix)
+   */
+  markEventFailed(eventUid: string, errorMessage: string, maxRetries = 5): void {
+    const event = this.db
+      .prepare("SELECT retry_count FROM sync_events WHERE event_uid = ?")
+      .get(eventUid) as { retry_count: number | null } | undefined;
+
+    const nextRetry = (event?.retry_count ?? 0) + 1;
+    const status = nextRetry >= maxRetries ? "conflict" : "failed";
+
+    this.db
+      .prepare(
+        `UPDATE sync_events
+         SET status = ?, error_message = ?, retry_count = ?
+         WHERE event_uid = ?`
+      )
+      .run(status, errorMessage, nextRetry, eventUid);
+  }
+
+  /**
+   * Process a pending evershop_hide_listing event (hide listing + zero inventory)
+   */
+  async processEvershopHideListing(event: SyncEvent): Promise<void> {
+    const now = Math.floor(Date.now() / 1000);
+    const maxRetries = runtimeConfig.evershopSaleSyncMaxRetries;
+
+    const markFailure = (message: string, productUid?: string): void => {
+      const nextRetry = (event.retry_count ?? 0) + 1;
+      const terminal = nextRetry >= maxRetries;
+      const status: SyncEventStatus = terminal ? "conflict" : "failed";
+      this.db
+        .prepare(
+          `UPDATE sync_events
+           SET status = ?, error_message = ?, retry_count = ?
+           WHERE event_uid = ?`
+        )
+        .run(status, message, nextRetry, event.event_uid);
+
+      // BUG 3 fix: Update evershop_sync_state to 'sync_error' on terminal failure
+      if (terminal && productUid) {
+        this.db
+          .prepare(
+            `UPDATE products
+             SET evershop_sync_state = 'sync_error'
+             WHERE product_uid = ?`
+          )
+          .run(productUid);
+        this.logger.warn(
+          { product_uid: productUid, event_uid: event.event_uid },
+          "Hide event hit max retries - marked product as sync_error"
+        );
+      }
+    };
+
+    const markSuccess = (): void => {
+      this.db
+        .prepare(
+          `UPDATE sync_events
+           SET status = 'synced', synced_at = ?, error_message = NULL
+           WHERE event_uid = ?`
+        )
+        .run(now, event.event_uid);
+    };
+
+    if (!runtimeConfig.evershopSaleSyncEnabled || runtimeConfig.cardmintEnv !== "production") {
+      this.logger.warn(
+        { event_uid: event.event_uid },
+        "EverShop sale sync disabled or non-production environment"
+      );
+      this.db
+        .prepare(
+          `UPDATE sync_events
+           SET status = 'conflict', error_message = ?
+           WHERE event_uid = ?`
+        )
+        .run("Sale sync disabled or non-production environment", event.event_uid);
+      return;
+    }
+
+    if (!this.evershopImporter) {
+      markFailure("EverShop importer not configured");
+      return;
+    }
+
+    let payload: EvershopHideListingPayload;
+    try {
+      payload = JSON.parse(event.payload) as EvershopHideListingPayload;
+    } catch {
+      markFailure("Invalid JSON payload");
+      return;
+    }
+
+    if (!payload.livemode) {
+      this.logger.warn({ event_uid: event.event_uid }, "Skipping non-livemode sale event");
+      this.db
+        .prepare(
+          `UPDATE sync_events
+           SET status = 'conflict', error_message = ?
+           WHERE event_uid = ?`
+        )
+        .run("Sale was not livemode", event.event_uid);
+      return;
+    }
+
+    const productRow = this.db
+      .prepare(
+        `SELECT product_uid, product_sku, total_quantity, evershop_product_id
+         FROM products WHERE product_uid = ?`
+      )
+      .get(payload.product_uid) as
+      | { product_uid: string; product_sku: string | null; total_quantity: number; evershop_product_id: number | null }
+      | undefined;
+
+    if (!productRow) {
+      markFailure(`Product not found: ${payload.product_uid}`);
+      return;
+    }
+
+    if (productRow.total_quantity > 0) {
+      this.logger.warn(
+        { product_uid: productRow.product_uid, total_quantity: productRow.total_quantity },
+        "Skipping EverShop hide: product still has inventory"
+      );
+      this.db
+        .prepare(
+          `UPDATE sync_events
+           SET status = 'conflict', error_message = ?
+           WHERE event_uid = ?`
+        )
+        .run("Product still has inventory; hide not required", event.event_uid);
+      return;
+    }
+
+    const sku = productRow.product_sku ?? payload.product_sku;
+    const productId =
+      payload.evershop_product_id ??
+      productRow.evershop_product_id ??
+      (sku ? await this.evershopImporter.findProductIdBySku(sku) : null);
+
+    if (!productId) {
+      markFailure(`EverShop product_id not found for sku=${sku ?? "unknown"}`, productRow.product_uid);
+      return;
+    }
+
+    try {
+      await this.evershopImporter.hideListing(productId);
+
+      // Update CardMint state for monitoring purposes
+      this.db
+        .prepare(
+          `UPDATE products
+           SET evershop_sync_state = 'evershop_hidden',
+               last_synced_at = ?
+           WHERE product_uid = ?`
+        )
+        .run(now, productRow.product_uid);
+
+      markSuccess();
+      this.logger.info(
+        { product_uid: productRow.product_uid, product_id: productId },
+        "EverShop listing hidden after sale"
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown EverShop hide error";
+      this.logger.error({ error: message, product_uid: productRow.product_uid }, "EverShop hide failed");
+      markFailure(message, productRow.product_uid);
+    }
+  }
+
+  // ==========================================================================
   // Phase 2: Sale Sync (prod -> staging)
   // ==========================================================================
 
@@ -667,6 +843,26 @@ export class SyncService {
       .prepare("SELECT COUNT(*) as count FROM sync_events WHERE status = 'conflict'")
       .get() as { count: number };
 
+    const pendingHideEvents = this.db
+      .prepare(
+        "SELECT COUNT(*) as count FROM sync_events WHERE status = 'pending' AND event_type = 'evershop_hide_listing'"
+      )
+      .get() as { count: number };
+
+    const oldestPendingHide = this.db
+      .prepare(
+        "SELECT MIN(created_at) as oldest FROM sync_events WHERE status = 'pending' AND event_type = 'evershop_hide_listing'"
+      )
+      .get() as { oldest: number | null };
+
+    const evershopVisibleZeroQty = this.db
+      .prepare(
+        `SELECT COUNT(*) as count FROM products
+         WHERE total_quantity = 0
+           AND evershop_sync_state = 'evershop_live'`
+      )
+      .get() as { count: number };
+
     // Get daemon lease status
     const leaseRow = this.db
       .prepare("SELECT lease_owner, lease_expires_at, last_heartbeat FROM sync_leader WHERE id = 1")
@@ -675,13 +871,18 @@ export class SyncService {
     // Determine overall health
     let overall: "green" | "yellow" | "red" = "green";
 
+    const evershopHideStaleSec = 1800;
+    const pendingHideAge = oldestPendingHide.oldest ? now - oldestPendingHide.oldest : null;
+
     if (prodSqlite === "unreachable" || evershopDb === "unreachable") {
       overall = "red";
     } else if (
       pendingEvents.count > 10 ||
       failedEvents.count > 0 ||
       conflictEvents.count > 0 ||
-      stateCountsMap.sync_error > 0
+      stateCountsMap.sync_error > 0 ||
+      evershopVisibleZeroQty.count > 0 ||
+      (pendingHideAge !== null && pendingHideAge > evershopHideStaleSec)
     ) {
       overall = "yellow";
     }
@@ -696,6 +897,9 @@ export class SyncService {
       oldest_pending_age_seconds: oldestPending.oldest ? now - oldestPending.oldest : null,
       failed_events: failedEvents.count,
       conflict_events: conflictEvents.count,
+      pending_evershop_hide_events: pendingHideEvents.count,
+      oldest_pending_evershop_hide_age_seconds: pendingHideAge,
+      evershop_visible_zero_qty_count: evershopVisibleZeroQty.count,
       last_sync_cycle: null, // Set by daemon
       daemon_lease_holder: leaseRow?.lease_owner ?? null,
       daemon_lease_expires: leaseRow ? new Date(leaseRow.lease_expires_at * 1000).toISOString() : null,

@@ -63,6 +63,7 @@ const envSchema = z.object({
   PPT_PRICING_STRATEGY: z.enum(["cards_query", "parse_title", "shadow"]).default("cards_query"),
   EXTERNAL_LLM_BUDGET_CENTS: z.coerce.number().optional(),
   DEV_MODE: boolFromEnv(false),
+  CARDMINT_ENV: z.enum(["development", "staging", "production"]).default("development"),
   // Path A (OpenAI)
   OPENAI_API_KEY: z.string().optional(),
   OPENAI_MODEL: z.string().default("gpt-5.1-2025-11-13"),
@@ -112,6 +113,11 @@ const envSchema = z.object({
   STRIPE_SECRET_KEY: z.string().optional(),
   STRIPE_WEBHOOK_SECRET: z.string().optional(),
   STRIPE_RESERVATION_TTL_MINUTES: z.coerce.number().default(30),
+  // Cart reservation settings (Dec 2025 - WYSIWYG inventory)
+  CART_RESERVATION_TTL_MINUTES: z.coerce.number().default(15),
+  CART_MAX_ITEMS_PER_SESSION: z.coerce.number().default(10),
+  CART_MAX_EXTENSION_WINDOW_MINUTES: z.coerce.number().default(60),
+  CART_RESERVE_RATE_LIMIT_RPM: z.coerce.number().default(30),
   // Klaviyo email marketing (Dec 2025)
   KLAVIYO_PRIVATE_API_KEY: z.string().optional(),
   KLAVIYO_SUBSCRIBE_LIST_ID: z.string().optional(),
@@ -125,6 +131,8 @@ const envSchema = z.object({
   SYNC_RETURNS_ENABLED: boolFromEnv(false),
   SYNC_AUTO_PUBLISH_EVERSHOP: boolFromEnv(false),
   SYNC_AUDIT_RETENTION_DAYS: z.coerce.number().default(90),
+  EVERSHOP_SALE_SYNC_ENABLED: boolFromEnv(false),
+  EVERSHOP_SALE_SYNC_MAX_RETRIES: z.coerce.number().default(5),
   // Prod SQLite connection (reuses SSH host from EverShop by default)
   PROD_SSH_HOST: z.string().optional(),
   PROD_SSH_USER: z.string().optional(),
@@ -159,6 +167,25 @@ const envSchema = z.object({
   PATH_C_PPT_QUERY_LIMIT: z.coerce.number().default(50),
   PATH_C_PPT_TIMEOUT_MS: z.coerce.number().default(900),
   PATH_C_QUOTA_WARNING_REMAINING: z.coerce.number().default(5000), // Warn at ~75% daily usage
+  // EasyPost shipping labels (Dec 2025)
+  EASYPOST_API_KEY: z.string().optional(),
+  EASYPOST_TEST_MODE: boolFromEnv(true), // Default to test mode for safety
+  // Ship-from address (CardMint return address)
+  EASYPOST_FROM_NAME: z.string().default("CardMint"),
+  EASYPOST_FROM_COMPANY: z.string().optional(),
+  EASYPOST_FROM_STREET1: z.string().optional(),
+  EASYPOST_FROM_STREET2: z.string().optional(),
+  EASYPOST_FROM_CITY: z.string().optional(),
+  EASYPOST_FROM_STATE: z.string().optional(),
+  EASYPOST_FROM_ZIP: z.string().optional(),
+  EASYPOST_FROM_PHONE: z.string().optional(),
+  EASYPOST_FROM_EMAIL: z.string().default("support@cardmintshop.com"),
+  // Default parcel specs for cards (weight in oz, dimensions in inches)
+  EASYPOST_PARCEL_WEIGHT_BASE_OZ: z.coerce.number().default(2.0), // Base weight for packaging
+  EASYPOST_PARCEL_WEIGHT_PER_CARD_OZ: z.coerce.number().default(0.1), // ~0.1oz per card
+  EASYPOST_PARCEL_LENGTH_IN: z.coerce.number().default(6.0),
+  EASYPOST_PARCEL_WIDTH_IN: z.coerce.number().default(4.0),
+  EASYPOST_PARCEL_HEIGHT_IN: z.coerce.number().default(0.5),
 });
 
 const parsed = envSchema.parse(process.env);
@@ -203,6 +230,7 @@ export const runtimeConfig = {
   pptPricingStrategy: parsed.PPT_PRICING_STRATEGY,
   externalLlmBudgetCents: parsed.EXTERNAL_LLM_BUDGET_CENTS ?? 0,
   devMode: parsed.DEV_MODE,
+  cardmintEnv: parsed.CARDMINT_ENV,
   // Path A (OpenAI)
   openaiApiKey: parsed.OPENAI_API_KEY ?? "",
   openaiModel: parsed.OPENAI_MODEL,
@@ -251,6 +279,11 @@ export const runtimeConfig = {
   stripeSecretKey: parsed.STRIPE_SECRET_KEY ?? "",
   stripeWebhookSecret: parsed.STRIPE_WEBHOOK_SECRET ?? "",
   stripeReservationTtlMinutes: parsed.STRIPE_RESERVATION_TTL_MINUTES,
+  // Cart reservation settings (Dec 2025 - WYSIWYG inventory)
+  cartReservationTtlMinutes: parsed.CART_RESERVATION_TTL_MINUTES,
+  cartMaxItemsPerSession: parsed.CART_MAX_ITEMS_PER_SESSION,
+  cartMaxExtensionWindowMinutes: parsed.CART_MAX_EXTENSION_WINDOW_MINUTES,
+  cartReserveRateLimitRpm: parsed.CART_RESERVE_RATE_LIMIT_RPM,
   // Klaviyo email marketing (Dec 2025)
   klaviyoPrivateApiKey: parsed.KLAVIYO_PRIVATE_API_KEY ?? "",
   klaviyoSubscribeListId: parsed.KLAVIYO_SUBSCRIBE_LIST_ID ?? "",
@@ -264,6 +297,8 @@ export const runtimeConfig = {
   syncReturnsEnabled: parsed.SYNC_RETURNS_ENABLED,
   syncAutoPublishEvershop: parsed.SYNC_AUTO_PUBLISH_EVERSHOP,
   syncAuditRetentionDays: parsed.SYNC_AUDIT_RETENTION_DAYS,
+  evershopSaleSyncEnabled: parsed.EVERSHOP_SALE_SYNC_ENABLED,
+  evershopSaleSyncMaxRetries: parsed.EVERSHOP_SALE_SYNC_MAX_RETRIES,
   // Prod SQLite connection (falls back to EverShop SSH settings)
   prodSshHost: parsed.PROD_SSH_HOST ?? parsed.EVERSHOP_SSH_HOST,
   prodSshUser: parsed.PROD_SSH_USER ?? parsed.EVERSHOP_SSH_USER,
@@ -298,6 +333,28 @@ export const runtimeConfig = {
   pathCPptQueryLimit: parsed.PATH_C_PPT_QUERY_LIMIT,
   pathCPptTimeoutMs: parsed.PATH_C_PPT_TIMEOUT_MS,
   pathCQuotaWarningRemaining: parsed.PATH_C_QUOTA_WARNING_REMAINING,
+  // EasyPost shipping labels (Dec 2025)
+  easypostApiKey: parsed.EASYPOST_API_KEY ?? "",
+  easypostTestMode: parsed.EASYPOST_TEST_MODE,
+  easypostFromAddress: {
+    name: parsed.EASYPOST_FROM_NAME,
+    company: parsed.EASYPOST_FROM_COMPANY ?? "",
+    street1: parsed.EASYPOST_FROM_STREET1 ?? "",
+    street2: parsed.EASYPOST_FROM_STREET2 ?? "",
+    city: parsed.EASYPOST_FROM_CITY ?? "",
+    state: parsed.EASYPOST_FROM_STATE ?? "",
+    zip: parsed.EASYPOST_FROM_ZIP ?? "",
+    phone: parsed.EASYPOST_FROM_PHONE ?? "",
+    email: parsed.EASYPOST_FROM_EMAIL,
+    country: "US",
+  },
+  easypostParcel: {
+    weightBaseOz: parsed.EASYPOST_PARCEL_WEIGHT_BASE_OZ,
+    weightPerCardOz: parsed.EASYPOST_PARCEL_WEIGHT_PER_CARD_OZ,
+    lengthIn: parsed.EASYPOST_PARCEL_LENGTH_IN,
+    widthIn: parsed.EASYPOST_PARCEL_WIDTH_IN,
+    heightIn: parsed.EASYPOST_PARCEL_HEIGHT_IN,
+  },
 };
 
 // Log API key detection status

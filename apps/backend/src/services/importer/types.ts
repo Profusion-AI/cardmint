@@ -30,6 +30,15 @@ export interface ProductPayload {
   cardmint_scan_id?: string; // CardMint scan/job ID for traceability
   category_id?: number; // EverShop category mapped from mastersetlist.csv
   variant_tags?: string[]; // Variant tags (First Edition, Holo, etc.) for bidirectional sync
+  // CardMint Ops Grid Projection Fields
+  cm_set_name?: string;
+  cm_variant?: string;
+  cm_market_price?: number | null;
+  cm_pricing_source?: string | null;
+  cm_pricing_status?: string | null;
+  cm_pricing_updated_at?: string | null;
+  cm_product_uid?: string;
+  cm_inventory_status?: string;
 }
 
 export interface ImportResult {

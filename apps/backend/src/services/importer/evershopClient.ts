@@ -44,6 +44,8 @@ interface ProductRow {
   total_quantity: number;
   staging_ready: number;
   pricing_status: string | null;
+  pricing_source: string | null; // Added
+  pricing_updated_at: number | null; // Added (epoch seconds)
   cdn_image_url: string | null;
   cdn_back_image_url: string | null;
   product_slug: string | null;
@@ -441,6 +443,14 @@ END $$;
   }
 
   /**
+   * Compute inventory status based on quantity
+   */
+  private computeInventoryStatus(product: ProductRow): string {
+    if (product.total_quantity === 0) return "OUT_OF_STOCK";
+    return "IN_STOCK";
+  }
+
+  /**
    * Build product payload for EverShop API
    */
   private buildProductPayload(product: ProductRow, categoryId?: number): ProductPayload {
@@ -481,6 +491,17 @@ END $$;
       cardmint_scan_id: product.primary_scan_id ?? undefined, // For EverShop traceability
       category_id: categoryId,
       variant_tags: variantTags,
+      // CardMint Ops Grid Projection
+      cm_set_name: product.set_name,
+      cm_variant: variantTags?.[0] ?? undefined,
+      cm_market_price: product.market_price,
+      cm_pricing_source: product.pricing_source ?? undefined,
+      cm_pricing_status: product.pricing_status ?? undefined,
+      cm_pricing_updated_at: product.pricing_updated_at
+        ? new Date(product.pricing_updated_at * 1000).toISOString()
+        : null,
+      cm_product_uid: product.product_uid,
+      cm_inventory_status: this.computeInventoryStatus(product),
     };
   }
 
@@ -507,6 +528,50 @@ END $$;
       this.logger.error({ error: errorMsg, sql: sql.slice(0, 200) }, "SSH SQL execution failed");
       throw error;
     }
+  }
+
+  /**
+   * Find EverShop product_id by SKU
+   */
+  async findProductIdBySku(sku: string): Promise<number | null> {
+    try {
+      const result = this.executeSshSql(
+        `SELECT product_id FROM product WHERE sku = ${sqlString(sku)} LIMIT 1`
+      );
+      const line = result
+        .split(/\r?\n/)
+        .map((l) => l.trim())
+        .find((l) => l.length > 0 && !/^(INSERT|UPDATE|DELETE|SELECT)\b/i.test(l));
+      if (!line) return null;
+      const productId = parseInt(line.split("|")[0] ?? line, 10);
+      return Number.isNaN(productId) ? null : productId;
+    } catch (error) {
+      this.logger.warn({ sku, error }, "Failed to look up EverShop product_id by SKU");
+      return null;
+    }
+  }
+
+  /**
+   * Hide a listing and mark inventory out of stock (idempotent)
+   */
+  async hideListing(productId: number): Promise<void> {
+    const sql = `
+      BEGIN;
+      UPDATE product_inventory
+      SET qty = 0,
+          manage_stock = true,
+          stock_availability = false
+      WHERE product_inventory_product_id = ${sqlInt(productId)};
+
+      UPDATE product
+      SET visibility = false,
+          cm_inventory_status = ${sqlString("OUT_OF_STOCK")},
+          updated_at = NOW()
+      WHERE product_id = ${sqlInt(productId)};
+      COMMIT;
+    `;
+
+    this.executeSshSql(sql);
   }
 
   private parseFirstRow(result: string): string | null {
@@ -577,7 +642,8 @@ END $$;
         // Note: visibility stays unchanged on UPDATE - operator controls publish state in EverShop admin
         const scanIdClause = payload.cardmint_scan_id ? `, cardmint_scan_id = ${sqlString(payload.cardmint_scan_id)}` : "";
         const categoryClause = payload.category_id ? `, category_id = ${sqlInt(payload.category_id)}` : "";
-        const updateProductSql = `UPDATE product SET price = ${sqlNumber(payload.price, { decimals: 4 })}, weight = ${sqlNumber(weightGrams, { decimals: 4 })}, status = true${scanIdClause}${categoryClause}, updated_at = NOW() WHERE product_id = ${sqlInt(existingProductId)}`;
+        // CRITICAL: price is NOT updated here (EverShop Admin is authoritative for live price)
+        const updateProductSql = `UPDATE product SET weight = ${sqlNumber(weightGrams, { decimals: 4 })}, status = true${scanIdClause}${categoryClause}, cm_set_name = ${sqlString(payload.cm_set_name)}, cm_variant = ${sqlString(payload.cm_variant)}, cm_market_price = ${sqlNumber(payload.cm_market_price, { decimals: 2 })}, cm_pricing_source = ${sqlString(payload.cm_pricing_source)}, cm_pricing_status = ${sqlString(payload.cm_pricing_status)}, cm_pricing_updated_at = ${sqlString(payload.cm_pricing_updated_at)}, cm_inventory_status = ${sqlString(payload.cm_inventory_status)}, updated_at = NOW() WHERE product_id = ${sqlInt(existingProductId)}`;
         this.executeSshSql(updateProductSql);
 
         // Update product_description
@@ -667,7 +733,7 @@ END $$;
       const categoryColumn = payload.category_id ? ", category_id" : "";
       const categoryValue = payload.category_id ? `, ${sqlInt(payload.category_id)}` : "";
       // Return both product_id and uuid for bidirectional sync linkage
-      const insertProductSql = `INSERT INTO product (sku, price, weight, status, visibility${scanIdColumn}${categoryColumn}) VALUES (${sqlString(payload.sku)}, ${sqlNumber(payload.price, { decimals: 4 })}, ${sqlNumber(weightGrams, { decimals: 4 })}, true, false${scanIdValue}${categoryValue}) RETURNING product_id, uuid`;
+      const insertProductSql = `INSERT INTO product (sku, price, weight, status, visibility${scanIdColumn}${categoryColumn}, cm_set_name, cm_variant, cm_market_price, cm_pricing_source, cm_pricing_status, cm_pricing_updated_at, cm_product_uid, cm_inventory_status) VALUES (${sqlString(payload.sku)}, ${sqlNumber(payload.price, { decimals: 4 })}, ${sqlNumber(weightGrams, { decimals: 4 })}, true, false${scanIdValue}${categoryValue}, ${sqlString(payload.cm_set_name)}, ${sqlString(payload.cm_variant)}, ${sqlNumber(payload.cm_market_price, { decimals: 2 })}, ${sqlString(payload.cm_pricing_source)}, ${sqlString(payload.cm_pricing_status)}, ${sqlString(payload.cm_pricing_updated_at)}, ${sqlString(payload.cm_product_uid)}, ${sqlString(payload.cm_inventory_status)}) RETURNING product_id, uuid`;
       const insertResult = this.executeSshSql(insertProductSql);
       // Parse "product_id | uuid" format from psql output
       const row = this.parseFirstRow(insertResult) ?? insertResult.trim();
