@@ -1,0 +1,22 @@
+{
+  "PreToolUse": [
+    {
+      "matcher": "Bash",
+      "hooks": [
+        {
+          "type": "prompt",
+          "prompt": "Check if this Bash command is a risky git operation that violates CardMint CI/CD policy.\n\n## Policy Violations to Check\n\n1. **Direct push to main**: `git push origin main` or `git push` when on main branch\n   - Policy: main is PR-only, no direct pushes\n   - Response: WARN with message to create PR instead\n\n2. **Force push**: `git push --force` or `git push -f`\n   - Policy: Never force push (especially to main)\n   - Response: BLOCK with explanation\n\n3. **Push without tag**: Deploying without a prod tag\n   - Check: If command deploys to prod (rsync to 157.245.213.233, or ssh to prod running systemctl/docker compose/npm ci)\n   - Policy: Deploy only from annotated prod-* tags\n   - Response: WARN to create release tag first\n\n## Response Format\n\nIf risky operation detected, respond with:\n```\n{\n  \"decision\": \"warn\" or \"block\",\n  \"reason\": \"[Policy violation explanation]\",\n  \"suggestion\": \"[What to do instead]\"\n}\n```\n\nIf no violation:\n```\n{\n  \"decision\": \"approve\",\n  \"reason\": \"No CI/CD policy violation detected\"\n}\n```\n\n## Important\n\n- Only check git and deployment operations\n- Allow normal development commands (ls, cat, grep, etc.)\n- Be conservative: when in doubt, approve\n- Focus on the three violation types above"
+        }
+      ]
+    },
+    {
+      "matcher": "Write|Edit",
+      "hooks": [
+        {
+          "type": "prompt",
+          "prompt": "Check if this file modification is to a database migration that needs rollback posture validation.\n\n## Check Criteria\n\nIF the file path matches `apps/backend/src/db/migrations/*.sql`:\n1. Look for rollback posture declaration\n2. Check for down migration or forward-only marker\n\n## Required Markers\n\nA migration MUST have one of:\n- `-- DOWN MIGRATION:` section, OR\n- `-- FORWARD-ONLY:` with `-- ROLLBACK PLAN:` section\n\n## Response\n\nIf migration without rollback posture:\n```\n{\n  \"decision\": \"warn\",\n  \"reason\": \"Migration missing rollback posture declaration\",\n  \"suggestion\": \"Add either a _down.sql file or include -- FORWARD-ONLY: with -- ROLLBACK PLAN: section\"\n}\n```\n\nIf not a migration file OR has proper posture:\n```\n{\n  \"decision\": \"approve\",\n  \"reason\": \"Not a migration or has rollback posture\"\n}\n```"
+        }
+      ]
+    }
+  ]
+}
