@@ -459,14 +459,9 @@ export class SyncService {
         .run(status, message, nextRetry, event.event_uid);
 
       // BUG 3 fix: Update evershop_sync_state to 'sync_error' on terminal failure
+      // Use updateStagingState for consistency (updates last_synced_at + sync_version)
       if (terminal && productUid) {
-        this.db
-          .prepare(
-            `UPDATE products
-             SET evershop_sync_state = 'sync_error'
-             WHERE product_uid = ?`
-          )
-          .run(productUid);
+        this.updateStagingState(productUid, "sync_error", now);
         this.logger.warn(
           { product_uid: productUid, event_uid: event.event_uid },
           "Hide event hit max retries - marked product as sync_error"
