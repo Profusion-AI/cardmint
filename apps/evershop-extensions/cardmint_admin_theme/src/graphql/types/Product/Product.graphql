@@ -26,4 +26,7 @@ extend type Product {
 
   # Aggregate inventory status: 'IN_STOCK', 'OUT_OF_STOCK'
   cmInventoryStatus: String
+
+  # EverShop sync state: 'evershop_live', 'evershop_hidden', 'vault_only', 'sync_error', 'not_synced'
+  cmEvershopSyncState: String
 }

@@ -379,7 +379,8 @@ ProductGrid.propTypes = {
             cmPricingStatus: PropTypes.string,
             cmPricingUpdatedAt: PropTypes.string,
             cmProductUid: PropTypes.string,
-            cmInventoryStatus: PropTypes.string
+            cmInventoryStatus: PropTypes.string,
+            cmEvershopSyncState: PropTypes.string
         })),
         total: PropTypes.number,
         currentFilters: PropTypes.arrayOf(PropTypes.shape({
@@ -429,6 +430,7 @@ export const query = `
         cmPricingUpdatedAt
         cmProductUid
         cmInventoryStatus
+        cmEvershopSyncState
       }
       total
       currentFilters {

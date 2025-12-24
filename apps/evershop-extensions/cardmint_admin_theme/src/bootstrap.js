@@ -15,6 +15,6 @@ export default function bootstrap() {
     };
   });
 
-  // Note: cm_* columns are already fetched by getProductsBaseQuery()'s implicit SELECT *
-  // No need to modify the query - GraphQL resolvers handle the field mapping
+  // Note: DB rows include cm_* via SELECT *, but GraphQL only returns fields requested by the admin grid query.
+  // We request cm_* fields by overriding `pages/admin/productGrid/Grid.js` in this extension.
 }

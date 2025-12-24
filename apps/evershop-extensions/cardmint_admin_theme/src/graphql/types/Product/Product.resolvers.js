@@ -21,5 +21,6 @@ export default {
     },
     cmProductUid: (product) => product.cmProductUid ?? null,
     cmInventoryStatus: (product) => product.cmInventoryStatus ?? null,
+    cmEvershopSyncState: (product) => product.cmEvershopSyncState ?? null,
   }
 };

@@ -39,6 +39,7 @@ export interface ProductPayload {
   cm_pricing_updated_at?: string | null;
   cm_product_uid?: string;
   cm_inventory_status?: string;
+  cm_evershop_sync_state?: string;
 }
 
 export interface ImportResult {

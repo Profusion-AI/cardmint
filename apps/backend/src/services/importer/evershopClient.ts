@@ -51,6 +51,7 @@ interface ProductRow {
   product_slug: string | null;
   primary_scan_id: string | null; // For EverShop traceability
   variant_tags: string | null; // JSON-encoded array from products table
+  evershop_sync_state: string | null; // Sync state for EverShop grid display
 }
 
 export class EverShopImporter {
@@ -156,7 +157,8 @@ export class EverShopImporter {
            collector_no, condition_bucket, hp_value, rarity,
            market_price, launch_price, total_quantity,
            staging_ready, pricing_status, cdn_image_url,
-           cdn_back_image_url, product_slug, primary_scan_id, variant_tags
+           cdn_back_image_url, product_slug, primary_scan_id, variant_tags,
+           evershop_sync_state
          FROM products
          WHERE staging_ready = 1
            AND pricing_status = 'fresh'
@@ -502,6 +504,7 @@ END $$;
         : null,
       cm_product_uid: product.product_uid,
       cm_inventory_status: this.computeInventoryStatus(product),
+      cm_evershop_sync_state: product.evershop_sync_state ?? 'not_synced',
     };
   }
 
@@ -643,7 +646,7 @@ END $$;
         const scanIdClause = payload.cardmint_scan_id ? `, cardmint_scan_id = ${sqlString(payload.cardmint_scan_id)}` : "";
         const categoryClause = payload.category_id ? `, category_id = ${sqlInt(payload.category_id)}` : "";
         // CRITICAL: price is NOT updated here (EverShop Admin is authoritative for live price)
-        const updateProductSql = `UPDATE product SET weight = ${sqlNumber(weightGrams, { decimals: 4 })}, status = true${scanIdClause}${categoryClause}, cm_set_name = ${sqlString(payload.cm_set_name)}, cm_variant = ${sqlString(payload.cm_variant)}, cm_market_price = ${sqlNumber(payload.cm_market_price, { decimals: 2 })}, cm_pricing_source = ${sqlString(payload.cm_pricing_source)}, cm_pricing_status = ${sqlString(payload.cm_pricing_status)}, cm_pricing_updated_at = ${sqlString(payload.cm_pricing_updated_at)}, cm_inventory_status = ${sqlString(payload.cm_inventory_status)}, updated_at = NOW() WHERE product_id = ${sqlInt(existingProductId)}`;
+        const updateProductSql = `UPDATE product SET weight = ${sqlNumber(weightGrams, { decimals: 4 })}, status = true${scanIdClause}${categoryClause}, cm_set_name = ${sqlString(payload.cm_set_name)}, cm_variant = ${sqlString(payload.cm_variant)}, cm_market_price = ${sqlNumber(payload.cm_market_price, { decimals: 2 })}, cm_pricing_source = ${sqlString(payload.cm_pricing_source)}, cm_pricing_status = ${sqlString(payload.cm_pricing_status)}, cm_pricing_updated_at = ${sqlString(payload.cm_pricing_updated_at)}, cm_inventory_status = ${sqlString(payload.cm_inventory_status)}, cm_evershop_sync_state = ${sqlString(payload.cm_evershop_sync_state)}, updated_at = NOW() WHERE product_id = ${sqlInt(existingProductId)}`;
         this.executeSshSql(updateProductSql);
 
         // Update product_description
@@ -733,7 +736,7 @@ END $$;
       const categoryColumn = payload.category_id ? ", category_id" : "";
       const categoryValue = payload.category_id ? `, ${sqlInt(payload.category_id)}` : "";
       // Return both product_id and uuid for bidirectional sync linkage
-      const insertProductSql = `INSERT INTO product (sku, price, weight, status, visibility${scanIdColumn}${categoryColumn}, cm_set_name, cm_variant, cm_market_price, cm_pricing_source, cm_pricing_status, cm_pricing_updated_at, cm_product_uid, cm_inventory_status) VALUES (${sqlString(payload.sku)}, ${sqlNumber(payload.price, { decimals: 4 })}, ${sqlNumber(weightGrams, { decimals: 4 })}, true, false${scanIdValue}${categoryValue}, ${sqlString(payload.cm_set_name)}, ${sqlString(payload.cm_variant)}, ${sqlNumber(payload.cm_market_price, { decimals: 2 })}, ${sqlString(payload.cm_pricing_source)}, ${sqlString(payload.cm_pricing_status)}, ${sqlString(payload.cm_pricing_updated_at)}, ${sqlString(payload.cm_product_uid)}, ${sqlString(payload.cm_inventory_status)}) RETURNING product_id, uuid`;
+      const insertProductSql = `INSERT INTO product (sku, price, weight, status, visibility${scanIdColumn}${categoryColumn}, cm_set_name, cm_variant, cm_market_price, cm_pricing_source, cm_pricing_status, cm_pricing_updated_at, cm_product_uid, cm_inventory_status, cm_evershop_sync_state) VALUES (${sqlString(payload.sku)}, ${sqlNumber(payload.price, { decimals: 4 })}, ${sqlNumber(weightGrams, { decimals: 4 })}, true, false${scanIdValue}${categoryValue}, ${sqlString(payload.cm_set_name)}, ${sqlString(payload.cm_variant)}, ${sqlNumber(payload.cm_market_price, { decimals: 2 })}, ${sqlString(payload.cm_pricing_source)}, ${sqlString(payload.cm_pricing_status)}, ${sqlString(payload.cm_pricing_updated_at)}, ${sqlString(payload.cm_product_uid)}, ${sqlString(payload.cm_inventory_status)}, ${sqlString(payload.cm_evershop_sync_state)}) RETURNING product_id, uuid`;
       const insertResult = this.executeSshSql(insertProductSql);
       // Parse "product_id | uuid" format from psql output
       const row = this.parseFirstRow(insertResult) ?? insertResult.trim();
@@ -1040,7 +1043,8 @@ END $$;
            collector_no, condition_bucket, hp_value, rarity,
            market_price, launch_price, total_quantity,
            staging_ready, pricing_status, cdn_image_url,
-           cdn_back_image_url, product_slug, primary_scan_id, variant_tags
+           cdn_back_image_url, product_slug, primary_scan_id, variant_tags,
+           evershop_sync_state
          FROM products
          WHERE product_uid = ?
            AND staging_ready = 1
