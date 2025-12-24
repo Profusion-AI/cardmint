@@ -690,6 +690,30 @@ export class InventoryService {
     this.logger.info({ itemUid }, "Item restored to IN_STOCK after refund");
     return true;
   }
+
+  /**
+   * Clear Stripe product/price IDs after sale archival.
+   * Ensures future checkouts (if item is refunded/reset) create fresh prices.
+   * Called after archiveProductAndPrice() in checkout webhook handler.
+   */
+  clearStripeIds(itemUid: string): boolean {
+    const now = Math.floor(Date.now() / 1000);
+
+    const result = this.db
+      .prepare(
+        `UPDATE items
+         SET stripe_product_id = NULL,
+             stripe_price_id = NULL,
+             updated_at = ?
+         WHERE item_uid = ?`
+      )
+      .run(now, itemUid);
+
+    if (result.changes > 0) {
+      this.logger.info({ itemUid }, "Cleared Stripe IDs after sale archival");
+    }
+    return result.changes > 0;
+  }
 }
 
 /**

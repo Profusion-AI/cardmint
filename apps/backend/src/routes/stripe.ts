@@ -1245,6 +1245,10 @@ async function handleCheckoutCompleted(
       }
     }
 
+    // Clear DB references to archived Stripe IDs
+    // Ensures future checkouts (if item is refunded/reset) create fresh prices
+    inventoryService.clearStripeIds(itemUid);
+
     // Create sale sync_event for staging archival
     try {
       const now = Math.floor(Date.now() / 1000);
