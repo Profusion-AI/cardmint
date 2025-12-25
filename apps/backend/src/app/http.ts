@@ -28,6 +28,12 @@ import { registerWebhookRoutes } from "../routes/webhooks";
 import { registerSubscribeRoutes } from "../routes/subscribe";
 import { registerAnalyticsRoutes } from "../routes/analytics";
 import { registerPrivacyRoutes } from "../routes/privacy";
+import { registerCartRoutes } from "../routes/cart";
+import { registerStockDisplayRoutes } from "../routes/stockDisplay";
+import { registerFulfillmentRoutes } from "../routes/fulfillment";
+import { registerCaptureSettingsRoutes } from "../routes/captureSettings";
+import { registerCalibrationRoutes } from "../routes/calibration";
+import { registerOrderRoutes } from "../routes/orders";
 
 /**
  * Create and configure the Express application.
@@ -35,6 +41,10 @@ import { registerPrivacyRoutes } from "../routes/privacy";
  */
 export function createApp(ctx: AppContext): Express {
   const app = express();
+
+  // Trust the first proxy hop (nginx) so req.ip reflects the real client IP.
+  // Avoid manually trusting X-Forwarded-For in route handlers.
+  app.set("trust proxy", 1);
 
   // Raw body parser for webhook routes (must come before json parser)
   // These endpoints require the unparsed body for signature verification
@@ -91,11 +101,17 @@ export function createApp(ctx: AppContext): Express {
   registerScanRoutes(app, ctx);
   registerStripeRoutes(app, ctx);
   registerVaultRoutes(app, ctx);
+  registerCartRoutes(app, ctx);
   registerSyncRoutes(app, ctx);
   registerWebhookRoutes(app, ctx);
   registerSubscribeRoutes(app, ctx);
   registerAnalyticsRoutes(app, ctx);
   registerPrivacyRoutes(app, ctx);
+  registerStockDisplayRoutes(app, ctx);
+  registerFulfillmentRoutes(app, ctx);
+  registerCaptureSettingsRoutes(app, ctx);
+  registerCalibrationRoutes(app, ctx);
+  registerOrderRoutes(app, ctx);
 
   return app;
 }

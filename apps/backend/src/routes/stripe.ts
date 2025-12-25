@@ -1471,6 +1471,142 @@ async function handleCheckoutCompleted(
     }
   }
 
+  // Create order record with human-readable order number
+  // Always attempt creation - use upsert pattern for idempotency on webhook retries
+  // Use metadata for totals (works even when processedItems is empty on retry)
+  try {
+    // Check if order already exists for this session (webhook retry case)
+    const existingOrder = db
+      .prepare(`SELECT order_uid, order_number FROM orders WHERE stripe_session_id = ?`)
+      .get(sessionId) as { order_uid: string; order_number: string } | undefined;
+
+    if (existingOrder) {
+      logger.debug(
+        { orderNumber: existingOrder.order_number, sessionId },
+        "checkout.session.completed: order already exists (idempotent)"
+      );
+    } else {
+      // Generate order atomically using a transaction with retry on collision
+      const { randomUUID } = await import("crypto");
+      const now = Math.floor(Date.now() / 1000);
+      const today = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+      const prefix = `CM-${today}-`;
+
+      // Get item count from metadata (works on retries) or processedItems
+      const itemCount = parseInt(metadata.item_count || "0", 10) || processedItems.length || itemUids.length;
+
+      // Get totals from metadata (set during checkout creation)
+      const calculatedSubtotal = processedItems.reduce((sum, item) => sum + (item.price_cents || 0), 0);
+      const subtotalCents = parseInt(metadata.final_subtotal_cents || "0", 10) || calculatedSubtotal;
+      const shippingCents = parseInt(metadata.shipping_cost_cents || "0", 10);
+      const totalCents = subtotalCents + shippingCents;
+
+      // Atomic order creation with transaction and retry on unique constraint violation
+      const MAX_RETRIES = 3;
+      let orderCreated = false;
+      let finalOrderNumber = "";
+      let finalOrderUid = "";
+
+      for (let attempt = 0; attempt < MAX_RETRIES && !orderCreated; attempt++) {
+        try {
+          const orderUid = randomUUID();
+
+          // Use transaction to make MAX() + INSERT atomic
+          const createOrder = db.transaction(() => {
+            const maxSeq = db
+              .prepare(
+                `SELECT MAX(CAST(SUBSTR(order_number, 13) AS INTEGER)) as seq
+                 FROM orders
+                 WHERE order_number LIKE ?`
+              )
+              .get(`${prefix}%`) as { seq: number | null } | undefined;
+
+            const nextSeq = (maxSeq?.seq ?? 0) + 1;
+            const orderNumber = `${prefix}${String(nextSeq).padStart(6, "0")}`;
+
+            const result = db.prepare(
+              `INSERT INTO orders (
+                order_uid, order_number, stripe_session_id, stripe_payment_intent_id,
+                item_count, subtotal_cents, shipping_cents, total_cents,
+                status, created_at, updated_at
+              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'confirmed', ?, ?)`
+            ).run(
+              orderUid,
+              orderNumber,
+              sessionId,
+              paymentIntentId,
+              itemCount,
+              subtotalCents,
+              shippingCents,
+              totalCents,
+              now,
+              now
+            );
+
+            return { orderNumber, orderUid, changes: result.changes };
+          });
+
+          const result = createOrder();
+
+          if (result.changes > 0) {
+            orderCreated = true;
+            finalOrderNumber = result.orderNumber;
+            finalOrderUid = result.orderUid;
+
+            // Create order_events audit record (only after confirming order exists)
+            db.prepare(
+              `INSERT INTO order_events (order_uid, event_type, new_value, actor, created_at)
+               VALUES (?, 'created', ?, 'webhook', ?)`
+            ).run(
+              finalOrderUid,
+              JSON.stringify({ order_number: finalOrderNumber, item_count: itemCount }),
+              now
+            );
+
+            logger.info(
+              { orderNumber: finalOrderNumber, orderUid: finalOrderUid, sessionId, itemCount },
+              "checkout.session.completed: order record created"
+            );
+          }
+        } catch (insertErr: unknown) {
+          // Check for unique constraint violation (order_number or stripe_session_id collision)
+          const errMsg = insertErr instanceof Error ? insertErr.message : String(insertErr);
+          if (errMsg.includes("UNIQUE constraint failed")) {
+            // Re-check if order exists now (concurrent webhook created it)
+            const nowExists = db
+              .prepare(`SELECT order_uid, order_number FROM orders WHERE stripe_session_id = ?`)
+              .get(sessionId) as { order_uid: string; order_number: string } | undefined;
+
+            if (nowExists) {
+              logger.debug(
+                { orderNumber: nowExists.order_number, sessionId, attempt },
+                "checkout.session.completed: order created by concurrent webhook"
+              );
+              orderCreated = true;
+              finalOrderNumber = nowExists.order_number;
+              break;
+            }
+            // order_number collision - retry with next sequence
+            logger.warn({ attempt, sessionId }, "Order number collision, retrying");
+            continue;
+          }
+          throw insertErr;
+        }
+      }
+
+      if (!orderCreated) {
+        logger.error({ sessionId }, "Failed to create order after max retries");
+      }
+    }
+  } catch (orderErr) {
+    // Non-fatal: order creation failure shouldn't block the webhook
+    // The fulfillment record is already created, so shipping can proceed
+    logger.error(
+      { err: orderErr, sessionId },
+      "Failed to create order record (non-fatal)"
+    );
+  }
+
   // Return first item_uid for idempotency record (or null if none processed)
   return itemUids[0] ?? null;
 }
