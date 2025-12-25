@@ -1418,51 +1418,71 @@ async function handleCheckoutCompleted(
   }
 
   // Create fulfillment record for shipping workflow
-  if (processedItems.length > 0 && metadata.shipping_method) {
+  // Use metadata for item_count/totals so this works even on webhook retries when processedItems is empty
+  if (metadata.shipping_method) {
     try {
-      // Use metadata totals if available (multi-item), fallback to calculated (single-item)
-      const calculatedSubtotal = processedItems.reduce((sum, item) => sum + (item.price_cents || 0), 0);
-      const originalSubtotalCents = parseInt(metadata.original_subtotal_cents || "0", 10) || calculatedSubtotal;
-      const finalSubtotalCents = parseInt(metadata.final_subtotal_cents || "0", 10) || calculatedSubtotal;
-      const shippingCostCents = parseInt(metadata.shipping_cost_cents || "0", 10);
-      const requiresManualReview = metadata.requires_manual_review === "1" ? 1 : 0;
+      // Check if fulfillment already exists (idempotent on retry)
+      const existingFulfillment = db
+        .prepare(`SELECT stripe_session_id FROM fulfillment WHERE stripe_session_id = ?`)
+        .get(sessionId);
 
-      db.prepare(
-        `INSERT INTO fulfillment (
-          stripe_session_id,
-          stripe_payment_intent_id,
-          item_count,
-          original_subtotal_cents,
-          final_subtotal_cents,
-          shipping_method,
-          shipping_cost_cents,
-          requires_manual_review,
-          status
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending')
-        ON CONFLICT(stripe_session_id) DO NOTHING`
-      ).run(
-        sessionId,
-        paymentIntentId,
-        processedItems.length,
-        originalSubtotalCents,
-        finalSubtotalCents,
-        metadata.shipping_method,
-        shippingCostCents,
-        requiresManualReview
-      );
+      if (existingFulfillment) {
+        logger.debug({ sessionId }, "checkout.session.completed: fulfillment already exists (idempotent)");
+      } else {
+        // Use metadata totals with Stripe session fallback (works on retries)
+        const calculatedSubtotal = processedItems.reduce((sum, item) => sum + (item.price_cents || 0), 0);
+        const originalSubtotalCents =
+          parseInt(metadata.original_subtotal_cents || "0", 10) ||
+          calculatedSubtotal ||
+          session.amount_subtotal ||
+          0;
+        const finalSubtotalCents =
+          parseInt(metadata.final_subtotal_cents || "0", 10) ||
+          calculatedSubtotal ||
+          session.amount_subtotal ||
+          0;
+        const shippingCostCents = parseInt(metadata.shipping_cost_cents || "0", 10);
+        const requiresManualReview = metadata.requires_manual_review === "1" ? 1 : 0;
 
-      logger.info(
-        {
+        // Get item_count from metadata (works on retries) or processedItems
+        const itemCount = parseInt(metadata.item_count || "0", 10) || processedItems.length || itemUids.length;
+
+        db.prepare(
+          `INSERT INTO fulfillment (
+            stripe_session_id,
+            stripe_payment_intent_id,
+            item_count,
+            original_subtotal_cents,
+            final_subtotal_cents,
+            shipping_method,
+            shipping_cost_cents,
+            requires_manual_review,
+            status
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending')`
+        ).run(
           sessionId,
-          itemCount: processedItems.length,
+          paymentIntentId,
+          itemCount,
           originalSubtotalCents,
           finalSubtotalCents,
-          shippingMethod: metadata.shipping_method,
+          metadata.shipping_method,
           shippingCostCents,
-          requiresManualReview: !!requiresManualReview,
-        },
-        "checkout.session.completed: fulfillment record created"
-      );
+          requiresManualReview
+        );
+
+        logger.info(
+          {
+            sessionId,
+            itemCount,
+            originalSubtotalCents,
+            finalSubtotalCents,
+            shippingMethod: metadata.shipping_method,
+            shippingCostCents,
+            requiresManualReview: !!requiresManualReview,
+          },
+          "checkout.session.completed: fulfillment record created"
+        );
+      }
     } catch (fulfillmentErr) {
       logger.error(
         { err: fulfillmentErr, sessionId },
@@ -1495,11 +1515,17 @@ async function handleCheckoutCompleted(
       // Get item count from metadata (works on retries) or processedItems
       const itemCount = parseInt(metadata.item_count || "0", 10) || processedItems.length || itemUids.length;
 
-      // Get totals from metadata (set during checkout creation)
+      // Get totals: prefer metadata, fallback to processedItems, ultimate fallback to Stripe session
+      // (Stripe session amounts work on retries even when metadata/processedItems are empty)
       const calculatedSubtotal = processedItems.reduce((sum, item) => sum + (item.price_cents || 0), 0);
-      const subtotalCents = parseInt(metadata.final_subtotal_cents || "0", 10) || calculatedSubtotal;
+      const subtotalCents =
+        parseInt(metadata.final_subtotal_cents || "0", 10) ||
+        calculatedSubtotal ||
+        session.amount_subtotal ||
+        0;
       const shippingCents = parseInt(metadata.shipping_cost_cents || "0", 10);
-      const totalCents = subtotalCents + shippingCents;
+      // Total: calculated from subtotal+shipping, or Stripe session total as ultimate fallback
+      const totalCents = (subtotalCents + shippingCents) || session.amount_total || 0;
 
       // Atomic order creation with transaction and retry on unique constraint violation
       const MAX_RETRIES = 3;

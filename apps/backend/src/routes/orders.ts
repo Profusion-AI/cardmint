@@ -3,6 +3,10 @@
  *
  * Dec 2025: Public endpoints for customer order lookup.
  * Returns order number and status - no PII stored or returned.
+ *
+ * Note: orders.status is currently always "confirmed" at creation.
+ * Status updates (processing → shipped → delivered) will be wired to
+ * fulfillment events in a future PR when EasyPost tracking integration ships.
  */
 
 import type { Express, Request, Response } from "express";
