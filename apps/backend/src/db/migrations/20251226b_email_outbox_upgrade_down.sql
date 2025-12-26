@@ -1,0 +1,21 @@
+-- DOWN MIGRATION: 20251226b_email_outbox_upgrade
+-- Status: FORWARD-ONLY (restore from snapshot)
+--
+-- This migration upgrades the email_outbox CHECK constraint using SQLite's temp-table pattern.
+-- Rollback via SQL is complex and risky because:
+--   1. Emails queued with new email_type values would fail CHECK on old schema
+--   2. Sent email records would be lost if temp-table swap fails
+--   3. In-flight emails (status='sending') could cause duplicates
+--
+-- ROLLBACK PROCEDURE:
+-- 1. Stop the CardMint backend: sudo systemctl stop cardmint-backend
+-- 2. Verify no emails are in 'sending' status: sqlite3 cardmint_prod.db "SELECT * FROM email_outbox WHERE status='sending'"
+-- 3. Restore the btrfs snapshot taken before deploy:
+--    sudo btrfs subvolume delete /var/www/cardmint-backend
+--    sudo btrfs subvolume snapshot /snapshots/pre-prod-2025-12-27a /var/www/cardmint-backend
+-- 4. OR restore from DB file backup:
+--    cp /backups/cardmint_prod.db.pre-2025-12-27a /var/www/cardmint-backend/cardmint_prod.db
+-- 5. Rollback code: git checkout prod-2025-12-26 (or previous tag)
+-- 6. Restart: sudo systemctl start cardmint-backend
+--
+-- This file intentionally contains no SQL. The migrate.ts runner skips _down.sql files.

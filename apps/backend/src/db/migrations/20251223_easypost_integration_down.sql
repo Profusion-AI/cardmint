@@ -1,0 +1,20 @@
+-- DOWN MIGRATION: 20251223_easypost_integration
+-- Status: FORWARD-ONLY (restore from snapshot)
+--
+-- This migration adds EasyPost columns to the fulfillment table.
+-- Rollback via SQL is not recommended because:
+--   1. Fulfillment records with EasyPost data would lose shipment tracking
+--   2. Any purchased labels would become orphaned
+--   3. Customer orders in-flight would lose tracking links
+--
+-- ROLLBACK PROCEDURE:
+-- 1. Stop the CardMint backend: sudo systemctl stop cardmint-backend
+-- 2. Restore the btrfs snapshot taken before deploy:
+--    sudo btrfs subvolume delete /var/www/cardmint-backend
+--    sudo btrfs subvolume snapshot /snapshots/pre-prod-2025-12-27a /var/www/cardmint-backend
+-- 3. OR restore from DB file backup:
+--    cp /backups/cardmint_prod.db.pre-2025-12-27a /var/www/cardmint-backend/cardmint_prod.db
+-- 4. Rollback code: git checkout prod-2025-12-26 (or previous tag)
+-- 5. Restart: sudo systemctl start cardmint-backend
+--
+-- This file intentionally contains no SQL. The migrate.ts runner skips _down.sql files.

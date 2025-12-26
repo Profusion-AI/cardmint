@@ -1,0 +1,20 @@
+-- DOWN MIGRATION: 20251227_order_events_email_resend
+-- Status: FORWARD-ONLY (restore from snapshot)
+--
+-- This migration adds 'email_resend_triggered' to order_events CHECK constraint.
+-- Rollback via SQL is complex and risky because:
+--   1. Events with new event_type would fail CHECK on old schema
+--   2. Order event history would be partially lost if swap fails
+--   3. Audit trail integrity could be compromised
+--
+-- ROLLBACK PROCEDURE:
+-- 1. Stop the CardMint backend: sudo systemctl stop cardmint-backend
+-- 2. Restore the btrfs snapshot taken before deploy:
+--    sudo btrfs subvolume delete /var/www/cardmint-backend
+--    sudo btrfs subvolume snapshot /snapshots/pre-prod-2025-12-27a /var/www/cardmint-backend
+-- 3. OR restore from DB file backup:
+--    cp /backups/cardmint_prod.db.pre-2025-12-27a /var/www/cardmint-backend/cardmint_prod.db
+-- 4. Rollback code: git checkout prod-2025-12-26 (or previous tag)
+-- 5. Restart: sudo systemctl start cardmint-backend
+--
+-- This file intentionally contains no SQL. The migrate.ts runner skips _down.sql files.

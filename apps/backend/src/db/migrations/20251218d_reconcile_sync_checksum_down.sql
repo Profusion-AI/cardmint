@@ -1,0 +1,15 @@
+-- DOWN MIGRATION: 20251218d_reconcile_sync_checksum
+-- Status: METADATA-ONLY (no schema changes)
+--
+-- This migration only corrects a checksum in schema_migrations table.
+-- Rolling back would restore the old incorrect checksum, which serves no purpose.
+--
+-- ROLLBACK PROCEDURE:
+-- This migration is safe to leave in place even after code rollback.
+-- If you must revert, run:
+--   UPDATE schema_migrations
+--   SET checksum = 'f15c7acf...' -- original incorrect checksum
+--   WHERE id = '20251204_sync_infrastructure';
+--
+-- However, this is generally not recommended as it would cause checksum mismatch
+-- warnings on every subsequent migration run.
