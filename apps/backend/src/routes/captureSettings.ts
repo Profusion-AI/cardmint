@@ -8,36 +8,10 @@
  * Reference: Pre-CDN Image Tuning Controls plan (Dec 24, 2025)
  */
 
-import type { Express, Request, Response, NextFunction } from "express";
+import type { Express, Request, Response } from "express";
 import type { AppContext } from "../app/context";
 import { CalibrationRepository, CaptureSettings, CaptureSettingsInput } from "../repositories/calibrationRepository";
-
-/**
- * Middleware to restrict access to localhost only.
- * Used for operator-only endpoints (calibration, capture settings).
- * Express "trust proxy" setting ensures req.ip reflects the real client.
- */
-function localhostOnly(req: Request, res: Response, next: NextFunction): void {
-  const clientIp = req.ip || req.socket.remoteAddress || "";
-
-  // Allow localhost (IPv4 and IPv6)
-  // Express normalizes loopback to ::1 or ::ffff:127.0.0.1 depending on config
-  const isLocalhost =
-    clientIp === "127.0.0.1" ||
-    clientIp === "::1" ||
-    clientIp === "::ffff:127.0.0.1" ||
-    clientIp === "localhost";
-
-  if (!isLocalhost) {
-    res.status(403).json({
-      error: "Forbidden",
-      message: "This endpoint is only accessible from localhost",
-    });
-    return;
-  }
-
-  next();
-}
+import { requireInternalAccess } from "../middleware/adminAuth";
 
 export interface CaptureSettingsResponse {
   camera: {
@@ -87,7 +61,7 @@ export function registerCaptureSettingsRoutes(app: Express, ctx: AppContext): vo
    * Returns current camera controls and Stage-3 processing parameters.
    * Localhost-only for security.
    */
-  app.get("/api/capture-settings", localhostOnly, (_req: Request, res: Response) => {
+  app.get("/api/capture-settings", requireInternalAccess, (_req: Request, res: Response) => {
     try {
       const settings = calibrationRepo.getSettings();
 
@@ -117,7 +91,7 @@ export function registerCaptureSettingsRoutes(app: Express, ctx: AppContext): vo
    * Changes apply to all future captures.
    * Localhost-only for security.
    */
-  app.put("/api/capture-settings", localhostOnly, (req: Request, res: Response) => {
+  app.put("/api/capture-settings", requireInternalAccess, (req: Request, res: Response) => {
     try {
       const body = req.body as Partial<CaptureSettingsResponse>;
 

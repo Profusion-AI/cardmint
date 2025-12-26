@@ -12,7 +12,7 @@
  * Reference: Pre-CDN Image Tuning Controls plan (Dec 24, 2025)
  */
 
-import type { Express, Request, Response, NextFunction } from "express";
+import type { Express, Request, Response } from "express";
 import type { AppContext } from "../app/context";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -20,37 +20,11 @@ import fs from "fs/promises";
 import { CalibrationRepository, CaptureSettings } from "../repositories/calibrationRepository";
 import { Pi5KioskDriver, CaptureControlOverrides } from "../services/capture/pi5KioskDriver";
 import { ListingImageService, Stage3Params } from "../services/listingImageService";
+import { requireInternalAccess } from "../middleware/adminAuth";
 
 // ES module __dirname equivalent
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-
-/**
- * Middleware to restrict access to localhost only.
- * Used for operator-only endpoints (calibration, capture settings).
- * Express "trust proxy" setting ensures req.ip reflects the real client.
- */
-function localhostOnly(req: Request, res: Response, next: NextFunction): void {
-  const clientIp = req.ip || req.socket.remoteAddress || "";
-
-  // Allow localhost (IPv4 and IPv6)
-  // Express normalizes loopback to ::1 or ::ffff:127.0.0.1 depending on config
-  const isLocalhost =
-    clientIp === "127.0.0.1" ||
-    clientIp === "::1" ||
-    clientIp === "::ffff:127.0.0.1" ||
-    clientIp === "localhost";
-
-  if (!isLocalhost) {
-    res.status(403).json({
-      error: "Forbidden",
-      message: "This endpoint is only accessible from localhost",
-    });
-    return;
-  }
-
-  next();
-}
 
 // Rate limiting state
 let lastTestCaptureTime = 0;
@@ -85,7 +59,7 @@ export function registerCalibrationRoutes(app: Express, ctx: AppContext): void {
    * - Creates calibration_captures record and triggers Pi5 capture
    * - Returns immediately with calibration_id (image delivered async via SFTP)
    */
-  app.post("/api/capture/test", localhostOnly, async (req: Request, res: Response) => {
+  app.post("/api/capture/test", requireInternalAccess, async (req: Request, res: Response) => {
     try {
       // Rate limiting
       const now = Date.now();
@@ -196,7 +170,7 @@ export function registerCalibrationRoutes(app: Express, ctx: AppContext): void {
    * Returns current status and image URLs when available.
    * Localhost-only for security.
    */
-  app.get("/api/calibration/:id/status", localhostOnly, (req: Request, res: Response) => {
+  app.get("/api/calibration/:id/status", requireInternalAccess, (req: Request, res: Response) => {
     try {
       const { id } = req.params;
 
@@ -245,7 +219,7 @@ export function registerCalibrationRoutes(app: Express, ctx: AppContext): void {
    * Requires status = CAPTURED (raw image available).
    * Localhost-only for security.
    */
-  app.post("/api/calibration/:id/process", localhostOnly, async (req: Request, res: Response) => {
+  app.post("/api/calibration/:id/process", requireInternalAccess, async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
 
@@ -376,7 +350,7 @@ export function registerCalibrationRoutes(app: Express, ctx: AppContext): void {
    * Serve raw capture image for calibration.
    * Security: Localhost-only + path whitelisted to calibration directory.
    */
-  app.get("/api/calibration/:id/raw", localhostOnly, async (req: Request, res: Response) => {
+  app.get("/api/calibration/:id/raw", requireInternalAccess, async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
 
@@ -428,7 +402,7 @@ export function registerCalibrationRoutes(app: Express, ctx: AppContext): void {
    * Serve Stage-3 processed image for calibration.
    * Security: Localhost-only + path whitelisted to calibration directory.
    */
-  app.get("/api/calibration/:id/processed", localhostOnly, async (req: Request, res: Response) => {
+  app.get("/api/calibration/:id/processed", requireInternalAccess, async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
 
