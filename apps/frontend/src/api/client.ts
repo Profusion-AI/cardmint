@@ -984,3 +984,185 @@ export const fetchSyncState = async (product_uid: string): Promise<SyncStateResp
 
   return response.json();
 };
+
+// ============================================================================
+// Capture Calibration API (Dec 2025 - Pre-CDN Image Tuning)
+// ============================================================================
+
+export interface CaptureSettings {
+  camera: {
+    exposure_us: number;
+    analogue_gain: number;
+    colour_gains: { red: number; blue: number };
+    ae_enable: boolean;
+    awb_enable: boolean;
+  };
+  stage3: {
+    clahe_clip_limit: number;
+    clahe_tile_size: number;
+    awb_enable: boolean;
+  };
+  updated_at: number;
+}
+
+export interface CaptureSettingsUpdate {
+  camera?: {
+    exposure_us?: number;
+    analogue_gain?: number;
+    colour_gains?: { red?: number; blue?: number };
+    ae_enable?: boolean;
+    awb_enable?: boolean;
+  };
+  stage3?: {
+    clahe_clip_limit?: number;
+    clahe_tile_size?: number;
+    awb_enable?: boolean;
+  };
+}
+
+export type CalibrationStatus = "PENDING" | "CAPTURED" | "STAGE1" | "STAGE2" | "PROCESSED" | "EXPIRED" | "FAILED";
+
+export interface CalibrationStatusResponse {
+  id: string;
+  status: CalibrationStatus;
+  created_at: number;
+  updated_at: number;
+  raw_url?: string;
+  processed_url?: string;
+  error?: string;
+}
+
+export interface TestCaptureResponse {
+  ok: boolean;
+  calibration_id: string;
+  capture_uid: string;
+  status: "PENDING";
+  message: string;
+}
+
+export interface TestCaptureOptions {
+  camera?: {
+    exposure_us?: number;
+    analogue_gain?: number;
+    colour_gains?: { red: number; blue: number };
+    ae_enable?: boolean;
+    awb_enable?: boolean;
+  };
+}
+
+export interface ProcessCalibrationOptions {
+  stage3?: {
+    clahe_clip_limit?: number;
+    clahe_tile_size?: number;
+    awb_enable?: boolean;
+  };
+}
+
+/**
+ * Fetch global capture settings
+ */
+export const fetchCaptureSettings = async (): Promise<CaptureSettings> => {
+  const response = await fetch("/api/capture-settings");
+  if (!response.ok) {
+    let data: any = null;
+    try { data = await response.json(); } catch {}
+    const message = data?.error || data?.message || `Fetch capture settings failed: ${response.status}`;
+    throw new Error(message);
+  }
+  return response.json();
+};
+
+/**
+ * Update global capture settings (partial update supported)
+ */
+export const updateCaptureSettings = async (settings: CaptureSettingsUpdate): Promise<CaptureSettings> => {
+  const response = await fetch("/api/capture-settings", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(settings),
+  });
+  if (!response.ok) {
+    let data: any = null;
+    try { data = await response.json(); } catch {}
+    const message = data?.error || data?.message || `Update capture settings failed: ${response.status}`;
+    throw new Error(message);
+  }
+  return response.json();
+};
+
+/**
+ * Trigger a test capture for calibration (bypasses session gating)
+ * Rate limited to 1 request per 5 seconds
+ */
+export const triggerTestCapture = async (options?: TestCaptureOptions): Promise<TestCaptureResponse> => {
+  const response = await fetch("/api/capture/test", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(options ?? {}),
+  });
+
+  if (!response.ok) {
+    let data: any = null;
+    try { data = await response.json(); } catch {}
+
+    // Handle rate limiting
+    if (response.status === 429) {
+      const retryAfter = data?.retry_after_ms ?? 5000;
+      const err: any = new Error(data?.message || "Rate limited");
+      err.retryAfterMs = retryAfter;
+      throw err;
+    }
+
+    const message = data?.error || data?.message || `Test capture failed: ${response.status}`;
+    throw new Error(message);
+  }
+
+  return response.json();
+};
+
+/**
+ * Poll calibration status
+ */
+export const fetchCalibrationStatus = async (calibrationId: string): Promise<CalibrationStatusResponse> => {
+  const response = await fetch(`/api/calibration/${encodeURIComponent(calibrationId)}/status`);
+  if (!response.ok) {
+    let data: any = null;
+    try { data = await response.json(); } catch {}
+    const message = data?.error || data?.message || `Fetch calibration status failed: ${response.status}`;
+    throw new Error(message);
+  }
+  return response.json();
+};
+
+/**
+ * Process a captured calibration image through Stage-3 pipeline
+ */
+export const processCalibration = async (
+  calibrationId: string,
+  options?: ProcessCalibrationOptions
+): Promise<{ ok: boolean; status: "PROCESSED"; processed_url: string }> => {
+  const response = await fetch(`/api/calibration/${encodeURIComponent(calibrationId)}/process`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(options ?? {}),
+  });
+  if (!response.ok) {
+    let data: any = null;
+    try { data = await response.json(); } catch {}
+    const message = data?.error || data?.message || `Process calibration failed: ${response.status}`;
+    throw new Error(message);
+  }
+  return response.json();
+};
+
+/**
+ * Get URL for raw calibration image
+ */
+export const calibrationRawImageUrl = (calibrationId: string): string =>
+  `/api/calibration/${encodeURIComponent(calibrationId)}/raw`;
+
+/**
+ * Get URL for processed calibration image
+ */
+export const calibrationProcessedImageUrl = (calibrationId: string): string =>
+  `/api/calibration/${encodeURIComponent(calibrationId)}/processed`;

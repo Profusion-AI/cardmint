@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import { useSession, useSessionStatus } from "../hooks/useSession";
 import { finalizeBaseline, fetchSessionSummary, fetchMetrics, type BaselineSummary } from "../api/client";
 import BaselineSummaryPanel from "./BaselineSummaryPanel";
+import CalibrationModal from "./CalibrationModal";
 
 /**
  * SessionHeader - Displays session state toggle, timer, and status pills
@@ -20,6 +21,7 @@ export const SessionHeader: React.FC<{
   const [showSummary, setShowSummary] = useState(false);
   const [summary, setSummary] = useState<BaselineSummary | null>(null);
   const [finalizePreCheck, setFinalizePreCheck] = useState<{ total: number; unmatched: number } | null>(null);
+  const [showCalibration, setShowCalibration] = useState(false);
   const [canonicalHitRate, setCanonicalHitRate] = useState<number | null>(null);
   const [baselineCount, setBaselineCount] = useState<number>(0);
   const BASELINE_TARGET = 25;
@@ -149,6 +151,39 @@ export const SessionHeader: React.FC<{
 
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "0 12px" }}>
+      {/* Capture QA Settings Button (gear icon) */}
+      <button
+        onClick={() => setShowCalibration(true)}
+        style={{
+          padding: "4px 8px",
+          fontSize: 14,
+          background: "var(--bg-secondary)",
+          border: "1px solid var(--border)",
+          borderRadius: 4,
+          cursor: "pointer",
+          color: "var(--muted)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+        title="Capture QA Settings - Adjust camera and image processing parameters"
+      >
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          width="16"
+          height="16"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <circle cx="12" cy="12" r="3" />
+          <path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42" />
+        </svg>
+      </button>
+
       {/* Session Toggle */}
       <label
         style={{
@@ -521,6 +556,12 @@ export const SessionHeader: React.FC<{
           </div>
         </div>
       )}
+
+      {/* Calibration Modal */}
+      <CalibrationModal
+        isOpen={showCalibration}
+        onClose={() => setShowCalibration(false)}
+      />
     </div>
   );
 };
