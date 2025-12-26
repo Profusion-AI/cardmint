@@ -53,6 +53,7 @@ coverage/
 !hardware/**/*NOTES*.md
 !apps/internal-debug-api/README.md
 *.txt
+!**/requirements.txt
 *.pdf
 
 # === Brand assets (proprietary) ===

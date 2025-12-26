@@ -46,7 +46,7 @@ source .venv/bin/activate
 pip install -r requirements.txt
 
 # Copy and configure environment
-cp .env.template .env
+cp .env.example .env
 # Edit .env with your values
 
 # Run locally
@@ -181,7 +181,7 @@ When running, OpenAPI docs are available at:
 | `LOG_SOURCE_POSTGRES_FILE` | No | Postgres log file path (no Docker socket) |
 | `LOG_LEVEL` | No | Logging level (default: INFO) |
 
-See `.env.template` for all configuration options.
+See `.env.example` for all configuration options.
 
 ## Security Notes
 
@@ -209,7 +209,7 @@ Use systemd to run the API directly on the host (no Docker required).
 1) Create the environment file:
 
 ```bash
-sudo cp /home/kyle/CardMint-workspace/apps/internal-debug-api/.env.template /etc/internal-debug-api.env
+sudo cp /home/kyle/CardMint-workspace/apps/internal-debug-api/.env.example /etc/internal-debug-api.env
 sudo chmod 600 /etc/internal-debug-api.env
 # Edit /etc/internal-debug-api.env with real values
 ```
