@@ -1,0 +1,25 @@
+/**
+ * CardMint Stock Display Configuration
+ *
+ * Copy this file to config.h and update with your settings.
+ * config.h is gitignored to keep credentials out of version control.
+ */
+
+#ifndef CONFIG_H
+#define CONFIG_H
+
+// WiFi credentials
+#define WIFI_SSID "YOUR_WIFI_SSID"
+#define WIFI_PASSWORD "YOUR_WIFI_PASSWORD"
+
+// CardMint backend URL
+// Local development (replace with your computer's IP):
+#define API_URL "http://192.168.1.100:4000/api/stock-summary/compact"
+
+// Production (when backend is deployed):
+// #define API_URL "https://cardmintshop.com/api/stock-summary/compact"
+
+// Refresh interval in milliseconds (default: 30 seconds)
+#define REFRESH_INTERVAL_MS 30000
+
+#endif // CONFIG_H

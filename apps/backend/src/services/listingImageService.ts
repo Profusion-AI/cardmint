@@ -14,6 +14,15 @@ export interface ListingAssetResult {
   error?: string;
 }
 
+export interface Stage3Params {
+  clahe_clip?: number;    // CLAHE clipLimit (default: 1.5)
+  clahe_tiles?: number;   // CLAHE tile grid size (default: 8)
+  awb_enable?: boolean;   // Auto white balance (default: true)
+  padding?: number;       // Padding % around card (default: 1.5)
+  max_size?: number;      // Max dimension pixels (default: 2000)
+  quality?: number;       // JPEG quality (default: 85)
+}
+
 export interface ScanForListing {
   id: string;
   corrected_image_path: string | null;
@@ -152,12 +161,46 @@ export class ListingImageService {
   }
 
   /**
+   * Load Stage-3 settings from capture_settings table.
+   * Returns defaults if table doesn't exist or is empty.
+   */
+  private loadStage3Settings(): Stage3Params {
+    try {
+      const row = this.db
+        .prepare(`SELECT clahe_clip_limit, clahe_tile_size, stage3_awb_enable FROM capture_settings WHERE id = 1`)
+        .get() as { clahe_clip_limit: number; clahe_tile_size: number; stage3_awb_enable: number } | undefined;
+
+      if (row) {
+        return {
+          clahe_clip: row.clahe_clip_limit,
+          clahe_tiles: row.clahe_tile_size,
+          awb_enable: row.stage3_awb_enable === 1,
+        };
+      }
+    } catch (err) {
+      // Table might not exist yet (migration not run) - use defaults
+      this.logger.debug({ err }, "Failed to load Stage-3 settings from DB, using defaults");
+    }
+
+    // Default values from generate_listing_asset.py
+    return {
+      clahe_clip: 1.5,
+      clahe_tiles: 8,
+      awb_enable: true,
+    };
+  }
+
+  /**
    * Run Python listing asset generator
+   * Uses persisted Stage-3 settings from capture_settings table.
    */
   private async runGenerator(
     inputPath: string,
     outputPath: string
   ): Promise<ListingAssetResult> {
+    // Load Stage-3 settings from DB (calibration workflow persists tuned values here)
+    const stage3 = this.loadStage3Settings();
+
     return new Promise((resolve) => {
       const args = [
         this.scriptPath,
@@ -165,8 +208,15 @@ export class ListingImageService {
         outputPath,
         "--padding", "1.5",
         "--max-size", "2000",
-        "--quality", "85"
+        "--quality", "85",
+        "--clahe-clip", String(stage3.clahe_clip ?? 1.5),
+        "--clahe-tiles", String(stage3.clahe_tiles ?? 8),
       ];
+
+      // Add --no-awb flag if AWB is disabled
+      if (stage3.awb_enable === false) {
+        args.push("--no-awb");
+      }
 
       const proc = spawn("python3", args, {
         stdio: ["ignore", "pipe", "pipe"]
@@ -220,5 +270,80 @@ export class ListingImageService {
     }
 
     return result.listingPath!;
+  }
+
+  /**
+   * Run Python listing asset generator with custom Stage-3 parameters.
+   * Used by calibration workflow to preview different CLAHE/AWB settings.
+   *
+   * @param inputPath - Path to input image (Stage-2 processed)
+   * @param outputPath - Path to save generated listing asset
+   * @param params - Optional Stage-3 parameters to override defaults
+   * @returns Result with local filesystem path to listing asset
+   */
+  async runGeneratorWithParams(
+    inputPath: string,
+    outputPath: string,
+    params?: Stage3Params
+  ): Promise<ListingAssetResult> {
+    return new Promise((resolve) => {
+      const args = [
+        this.scriptPath,
+        inputPath,
+        outputPath,
+        "--padding", String(params?.padding ?? 1.5),
+        "--max-size", String(params?.max_size ?? 2000),
+        "--quality", String(params?.quality ?? 85),
+        "--clahe-clip", String(params?.clahe_clip ?? 1.5),
+        "--clahe-tiles", String(params?.clahe_tiles ?? 8),
+      ];
+
+      // Add --no-awb flag if AWB is explicitly disabled
+      if (params?.awb_enable === false) {
+        args.push("--no-awb");
+      }
+
+      this.logger.debug({ inputPath, outputPath, params, args }, "Running Stage-3 generator with params");
+
+      const proc = spawn("python3", args, {
+        stdio: ["ignore", "pipe", "pipe"]
+      });
+
+      let stdout = "";
+      let stderr = "";
+
+      proc.stdout.on("data", (data) => {
+        stdout += data.toString();
+      });
+
+      proc.stderr.on("data", (data) => {
+        stderr += data.toString();
+      });
+
+      proc.on("close", (code) => {
+        if (code === 0) {
+          this.logger.debug({ outputPath }, "Stage-3 generator completed successfully");
+          resolve({
+            success: true,
+            listingPath: outputPath
+          });
+        } else {
+          const errorMsg = stderr || stdout || `Process exited with code ${code}`;
+          this.logger.error({ code, stderr, stdout }, "Stage-3 generator failed");
+          resolve({
+            success: false,
+            error: errorMsg
+          });
+        }
+      });
+
+      proc.on("error", (err) => {
+        this.logger.error({ err }, "Stage-3 generator process error");
+        resolve({
+          success: false,
+          error: err.message
+        });
+      });
+    });
   }
 }

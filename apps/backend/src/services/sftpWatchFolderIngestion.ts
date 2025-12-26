@@ -17,6 +17,7 @@ import fs from "node:fs";
 import type { Logger } from "pino";
 import { JobQueue } from "./jobQueue";
 import type { SessionService } from "./sessionService";
+import type { CalibrationRepository } from "../repositories/calibrationRepository";
 import { runtimeConfig } from "../config";
 
 interface ManifestData {
@@ -38,7 +39,8 @@ export class SftpWatchFolderIngestion {
   constructor(
     private readonly queue: JobQueue,
     private readonly logger: Logger,
-    private readonly session?: SessionService
+    private readonly session?: SessionService,
+    private readonly calibrationRepo?: CalibrationRepository
   ) {
     this.watchPath = runtimeConfig.sftpWatchPath;
   }
@@ -190,8 +192,41 @@ export class SftpWatchFolderIngestion {
       return;
     }
 
+    // Parse manifest early for UID detection
+    // Needed for both calibration detection AND session/placeholder lookup
+    let manifestData: ManifestData | null = null;
+    try {
+      manifestData = await this.parseManifest(metaPath);
+    } catch (err) {
+      this.logger.warn({ err, metaPath }, "Failed to parse manifest early");
+    }
+
+    // Extract kiosk UID for calibration/placeholder lookup (prefer manifest UID, fallback to stem)
+    const captureUid = manifestData?.uid || stem;
+
+    // Dec 24: Check if this is a calibration capture (pre-CDN tuning workflow)
+    // Calibration captures bypass session gating AND job creation entirely
+    // CRITICAL: This check MUST happen BEFORE session gating
+    if (this.calibrationRepo && captureUid) {
+      const calibration = this.calibrationRepo.findByCaptureUid(captureUid);
+      if (calibration) {
+        // Update calibration record with raw image path and mark as CAPTURED
+        this.calibrationRepo.updateRawPath(calibration.id, imgPath);
+
+        this.logger.info(
+          { calibrationId: calibration.id, captureUid, imgPath },
+          "SFTP watch-folder: calibration capture ingested (no job created, session gating bypassed)"
+        );
+
+        // Clean up pending pair and return early
+        this.pendingPairs.delete(stem);
+        return;
+      }
+    }
+
     // Gate on active RUNNING session (new Oct 21, 2025)
     // If session service exists, ensure we're in an active RUNNING session
+    // Note: Calibration captures bypass this check (handled above)
     if (this.session) {
       const activeSession = this.session.getActiveSession();
       if (!activeSession || activeSession.status !== "RUNNING") {
@@ -220,16 +255,13 @@ export class SftpWatchFolderIngestion {
     this.lastEnqueueTime = Date.now();
 
     try {
-      // Parse manifest for metadata
-      const manifestData = await this.parseManifest(metaPath);
+      // manifestData already parsed above for calibration detection
+      // No need to re-parse
 
       // Use active session UUID for proper session joins
       // Fall back to manifest UID or stem for backward compatibility
       const activeSession = this.session?.getActiveSession();
       const sessionId = activeSession?.id || manifestData?.uid || stem;
-
-      // Extract kiosk UID for placeholder lookup (prefer manifest UID, fallback to stem)
-      const captureUid = manifestData?.uid || stem;
 
       // Nov 19: Check if this is an expected back capture
       // If true, directly append to front scan and skip job creation entirely

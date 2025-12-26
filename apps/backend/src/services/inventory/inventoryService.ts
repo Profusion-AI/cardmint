@@ -458,8 +458,12 @@ export class InventoryService {
 
   /**
    * Reserve item for checkout (transactional)
-   * Sets status=RESERVED, checkout_session_id, reserved_until
-   * Returns false if item is not IN_STOCK
+   * Sets status=RESERVED, checkout_session_id, reserved_until, reservation_type='checkout'
+   * Clears cart fields (mutual exclusivity)
+   * Returns false if item is not available (IN_STOCK or expired reservation)
+   *
+   * Also claims expired RESERVED items (reserved_until < now) to maintain
+   * consistency with vault fail-safe query and prevent "ghost availability".
    */
   reserveItem(
     itemUid: string,
@@ -478,13 +482,20 @@ export class InventoryService {
              stripe_product_id = ?,
              stripe_price_id = ?,
              reserved_until = ?,
+             reservation_type = 'checkout',
+             cart_session_id = NULL,
+             cart_reserved_at = NULL,
              updated_at = ?
-         WHERE item_uid = ? AND status = 'IN_STOCK'`
+         WHERE item_uid = ?
+           AND (
+             status = 'IN_STOCK'
+             OR (status = 'RESERVED' AND reserved_until IS NOT NULL AND reserved_until < ?)
+           )`
       )
-      .run(checkoutSessionId, stripeProductId, stripePriceId, reservedUntil, now, itemUid);
+      .run(checkoutSessionId, stripeProductId, stripePriceId, reservedUntil, now, itemUid, now);
 
     if (result.changes === 0) {
-      this.logger.warn({ itemUid }, "Failed to reserve item - not IN_STOCK");
+      this.logger.warn({ itemUid }, "Failed to reserve item - not available");
       return false;
     }
 
@@ -524,6 +535,7 @@ export class InventoryService {
   /**
    * Release reservation back to IN_STOCK
    * Used when checkout session expires or is cancelled
+   * Clears all reservation fields (checkout and cart)
    * Returns false if item is not RESERVED
    */
   releaseReservation(itemUid: string): boolean {
@@ -534,7 +546,10 @@ export class InventoryService {
         `UPDATE items
          SET status = 'IN_STOCK',
              checkout_session_id = NULL,
+             cart_session_id = NULL,
+             reservation_type = NULL,
              reserved_until = NULL,
+             cart_reserved_at = NULL,
              updated_at = ?
          WHERE item_uid = ? AND status = 'RESERVED'`
       )
@@ -643,21 +658,33 @@ export class InventoryService {
   }
 
   /**
-   * Get an available IN_STOCK item for a product
-   * Used when checkout is initiated by product_uid instead of item_uid
-   * Returns null if no available items exist
+   * Get an available item for a product.
+   * Used when checkout is initiated by product_uid instead of item_uid.
+   * Returns null if no available items exist.
+   *
+   * Includes expired RESERVED items (reserved_until < now) as available
+   * to maintain consistency with vault fail-safe query and prevent
+   * "ghost availability" where items show in vault but can't be reserved.
+   * Prefers IN_STOCK items over expired reservations.
    */
   getAvailableItemForProduct(productUid: string): string | null {
+    const now = Math.floor(Date.now() / 1000);
+
     const stmt = this.db.prepare(`
       SELECT item_uid
       FROM items
       WHERE product_uid = ?
-        AND status = 'IN_STOCK'
-      ORDER BY created_at ASC
+        AND (
+          status = 'IN_STOCK'
+          OR (status = 'RESERVED' AND reserved_until IS NOT NULL AND reserved_until < ?)
+        )
+      ORDER BY
+        CASE WHEN status = 'IN_STOCK' THEN 0 ELSE 1 END,
+        created_at ASC
       LIMIT 1
     `);
 
-    const row = stmt.get(productUid) as { item_uid: string } | undefined;
+    const row = stmt.get(productUid, now) as { item_uid: string } | undefined;
     return row?.item_uid ?? null;
   }
 
@@ -714,6 +741,276 @@ export class InventoryService {
     }
     return result.changes > 0;
   }
+
+  // ============================================================================
+  // CART RESERVATION METHODS (WYSIWYG inventory - Dec 2025)
+  // ============================================================================
+
+  /**
+   * Reserve item for cart (15-min TTL by default).
+   * Atomic UPDATE: succeeds if item is IN_STOCK or has expired reservation.
+   * Sets reservation_type='cart', clears checkout_session_id (mutual exclusivity).
+   *
+   * Also claims expired RESERVED items (reserved_until < now) to maintain
+   * consistency with vault fail-safe query and prevent "ghost availability".
+   */
+  reserveItemForCart(
+    itemUid: string,
+    cartSessionId: string,
+    reservedUntil: number
+  ): boolean {
+    const now = Math.floor(Date.now() / 1000);
+
+    const result = this.db
+      .prepare(
+        `UPDATE items
+         SET status = 'RESERVED',
+             cart_session_id = ?,
+             reservation_type = 'cart',
+             reserved_until = ?,
+             cart_reserved_at = ?,
+             checkout_session_id = NULL,
+             updated_at = ?
+         WHERE item_uid = ?
+           AND (
+             status = 'IN_STOCK'
+             OR (status = 'RESERVED' AND reserved_until IS NOT NULL AND reserved_until < ?)
+           )`
+      )
+      .run(cartSessionId, reservedUntil, now, now, itemUid, now);
+
+    if (result.changes === 0) {
+      this.logger.warn({ itemUid, cartSessionId }, "Failed to reserve item for cart - not available");
+      return false;
+    }
+
+    this.logger.info({ itemUid, cartSessionId, reservedUntil }, "Item reserved for cart");
+    return true;
+  }
+
+  /**
+   * Release cart reservation. Only releases if cart_session_id matches.
+   * Returns false if item is not RESERVED or doesn't belong to this cart session.
+   */
+  releaseCartReservation(itemUid: string, cartSessionId: string): boolean {
+    const now = Math.floor(Date.now() / 1000);
+
+    const result = this.db
+      .prepare(
+        `UPDATE items
+         SET status = 'IN_STOCK',
+             cart_session_id = NULL,
+             reservation_type = NULL,
+             reserved_until = NULL,
+             cart_reserved_at = NULL,
+             updated_at = ?
+         WHERE item_uid = ? AND status = 'RESERVED' AND cart_session_id = ?`
+      )
+      .run(now, itemUid, cartSessionId);
+
+    if (result.changes === 0) {
+      this.logger.warn({ itemUid, cartSessionId }, "Failed to release cart reservation - not owned by session");
+      return false;
+    }
+
+    this.logger.info({ itemUid, cartSessionId }, "Cart reservation released");
+    return true;
+  }
+
+  /**
+   * Extend TTL for item in cart. Respects max extension window.
+   * Fails if cart_reserved_at + MAX_EXTENSION_WINDOW < newReservedUntil.
+   */
+  extendCartReservation(
+    itemUid: string,
+    cartSessionId: string,
+    newReservedUntil: number,
+    maxExtensionWindowSeconds: number
+  ): boolean {
+    const now = Math.floor(Date.now() / 1000);
+
+    // Atomic update that checks extension window constraint
+    const result = this.db
+      .prepare(
+        `UPDATE items
+         SET reserved_until = ?,
+             updated_at = ?
+         WHERE item_uid = ?
+           AND status = 'RESERVED'
+           AND cart_session_id = ?
+           AND reservation_type = 'cart'
+           AND (cart_reserved_at + ?) >= ?`
+      )
+      .run(newReservedUntil, now, itemUid, cartSessionId, maxExtensionWindowSeconds, newReservedUntil);
+
+    if (result.changes === 0) {
+      this.logger.warn({ itemUid, cartSessionId }, "Failed to extend cart reservation - not owned, expired, or max window exceeded");
+      return false;
+    }
+
+    this.logger.info({ itemUid, cartSessionId, newReservedUntil }, "Cart reservation extended");
+    return true;
+  }
+
+  /**
+   * Find overdue CART reservations (reservation_type='cart').
+   * Separate from checkout expiry - these don't need Stripe API calls.
+   */
+  findOverdueCartReservations(): OverdueCartReservation[] {
+    const now = Math.floor(Date.now() / 1000);
+
+    const stmt = this.db.prepare(`
+      SELECT item_uid, cart_session_id, reserved_until
+      FROM items
+      WHERE status = 'RESERVED'
+        AND reservation_type = 'cart'
+        AND reserved_until IS NOT NULL
+        AND reserved_until < ?
+    `);
+
+    return stmt.all(now) as OverdueCartReservation[];
+  }
+
+  /**
+   * Find overdue CHECKOUT reservations (reservation_type='checkout').
+   * Also includes legacy rows (reservation_type IS NULL with checkout_session_id) for safety.
+   * These need Stripe session expiry calls.
+   */
+  findOverdueCheckoutReservations(): OverdueReservation[] {
+    const now = Math.floor(Date.now() / 1000);
+
+    const stmt = this.db.prepare(`
+      SELECT item_uid, checkout_session_id, reserved_until
+      FROM items
+      WHERE status = 'RESERVED'
+        AND checkout_session_id IS NOT NULL
+        AND (reservation_type = 'checkout' OR reservation_type IS NULL)
+        AND reserved_until IS NOT NULL
+        AND reserved_until < ?
+    `);
+
+    return stmt.all(now) as OverdueReservation[];
+  }
+
+  /**
+   * Promote cart reservation to checkout reservation.
+   * Atomic transition: only succeeds if item belongs to cart_session_id AND is not expired.
+   * Sets reservation_type='checkout', clears cart fields.
+   *
+   * Rejects expired cart reservations - customer must re-add to cart first.
+   */
+  promoteCartToCheckout(
+    itemUid: string,
+    cartSessionId: string,
+    checkoutSessionId: string,
+    stripeProductId: string,
+    stripePriceId: string,
+    reservedUntil: number
+  ): boolean {
+    const now = Math.floor(Date.now() / 1000);
+
+    const result = this.db
+      .prepare(
+        `UPDATE items
+         SET checkout_session_id = ?,
+             stripe_product_id = ?,
+             stripe_price_id = ?,
+             reservation_type = 'checkout',
+             reserved_until = ?,
+             cart_session_id = NULL,
+             cart_reserved_at = NULL,
+             updated_at = ?
+         WHERE item_uid = ?
+           AND status = 'RESERVED'
+           AND cart_session_id = ?
+           AND reservation_type = 'cart'
+           AND reserved_until >= ?`
+      )
+      .run(checkoutSessionId, stripeProductId, stripePriceId, reservedUntil, now, itemUid, cartSessionId, now);
+
+    if (result.changes === 0) {
+      this.logger.warn({ itemUid, cartSessionId, checkoutSessionId }, "Failed to promote cart to checkout - not owned, expired, or wrong type");
+      return false;
+    }
+
+    this.logger.info({ itemUid, cartSessionId, checkoutSessionId }, "Cart reservation promoted to checkout");
+    return true;
+  }
+
+  /**
+   * Get reserved item by product_uid + cart_session_id.
+   * Used by cart routes to map product_uid -> item_uid for release/promote.
+   */
+  getReservedItemForProduct(
+    productUid: string,
+    cartSessionId: string
+  ): { item_uid: string; reserved_until: number; cart_reserved_at: number } | null {
+    const stmt = this.db.prepare(`
+      SELECT item_uid, reserved_until, cart_reserved_at
+      FROM items
+      WHERE product_uid = ?
+        AND cart_session_id = ?
+        AND status = 'RESERVED'
+        AND reservation_type = 'cart'
+      LIMIT 1
+    `);
+
+    return (stmt.get(productUid, cartSessionId) as { item_uid: string; reserved_until: number; cart_reserved_at: number } | undefined) ?? null;
+  }
+
+  /**
+   * Release ALL items for a cart session (cart clear).
+   * Returns count of items released.
+   */
+  releaseCartSession(cartSessionId: string): number {
+    const now = Math.floor(Date.now() / 1000);
+
+    const result = this.db
+      .prepare(
+        `UPDATE items
+         SET status = 'IN_STOCK',
+             cart_session_id = NULL,
+             reservation_type = NULL,
+             reserved_until = NULL,
+             cart_reserved_at = NULL,
+             updated_at = ?
+         WHERE cart_session_id = ? AND status = 'RESERVED' AND reservation_type = 'cart'`
+      )
+      .run(now, cartSessionId);
+
+    this.logger.info({ cartSessionId, releasedCount: result.changes }, "Cart session released");
+    return result.changes;
+  }
+
+  /**
+   * Get all items reserved for a cart session.
+   */
+  getItemsByCartSession(cartSessionId: string): { item_uid: string; product_uid: string; reserved_until: number }[] {
+    const stmt = this.db.prepare(`
+      SELECT item_uid, product_uid, reserved_until
+      FROM items
+      WHERE cart_session_id = ?
+        AND status = 'RESERVED'
+        AND reservation_type = 'cart'
+    `);
+    return stmt.all(cartSessionId) as { item_uid: string; product_uid: string; reserved_until: number }[];
+  }
+
+  /**
+   * Count items currently reserved for a cart session.
+   * Used for CART_MAX_ITEMS_PER_SESSION enforcement.
+   */
+  countCartSessionItems(cartSessionId: string): number {
+    const stmt = this.db.prepare(`
+      SELECT COUNT(*) as count
+      FROM items
+      WHERE cart_session_id = ?
+        AND status = 'RESERVED'
+        AND reservation_type = 'cart'
+    `);
+    const row = stmt.get(cartSessionId) as { count: number };
+    return row.count;
+  }
 }
 
 /**
@@ -769,6 +1066,12 @@ interface ItemCheckoutRow {
 export interface OverdueReservation {
   item_uid: string;
   checkout_session_id: string;
+  reserved_until: number;
+}
+
+export interface OverdueCartReservation {
+  item_uid: string;
+  cart_session_id: string;
   reserved_until: number;
 }
 

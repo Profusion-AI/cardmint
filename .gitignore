@@ -17,12 +17,15 @@
 **/dist-ssr/
 **/.venv/
 **/__pycache__/
+**/.pytest_cache/
+.tmp_evershop/
 coverage/
 
 # === Large binaries ===
 *.AppImage
 *.zip
 *.tar.gz
+*.tgz
 *.so
 *.dylib
 
@@ -45,6 +48,10 @@ coverage/
 !CLAUDE.md
 !apps/*/README.md
 !external/*/README.md
+!docs/releases/*.md
+!hardware/**/README.md
+!hardware/**/*NOTES*.md
+!apps/internal-debug-api/README.md
 *.txt
 *.pdf
 
@@ -53,6 +60,7 @@ coverage/
 
 # === Large data/SDK files ===
 /docs/
+!/docs/releases/
 /pokemoncards/
 /data/
 

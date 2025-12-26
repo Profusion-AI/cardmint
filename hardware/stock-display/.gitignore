@@ -1,0 +1,16 @@
+# PlatformIO build artifacts
+.pio/
+.pioenvs/
+.piolibdeps/
+
+# IDE settings
+.vscode/
+*.code-workspace
+
+# Compiled binaries
+*.bin
+*.elf
+*.hex
+
+# Local config (may contain WiFi credentials)
+src/config.h

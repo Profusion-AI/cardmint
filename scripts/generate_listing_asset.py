@@ -18,7 +18,8 @@ Requirements:
   - card_detection module
 
 Usage:
-  python generate_listing_asset.py INPUT OUTPUT [--padding 1.5] [--max-size 2000] [--quality 85] [--debug]
+  python generate_listing_asset.py INPUT OUTPUT [--padding 1.5] [--max-size 2000] [--quality 85] \
+    [--clahe-clip 1.5] [--clahe-tiles 8] [--no-awb] [--debug]
 """
 
 import cv2
@@ -40,6 +41,9 @@ class ListingAssetGenerator:
         max_size: int = 2000,
         padding_pct: float = 1.5,
         jpeg_quality: int = 85,
+        clahe_clip: float = 1.5,
+        clahe_tiles: int = 8,
+        awb_enable: bool = True,
         debug: bool = False
     ):
         """
@@ -49,11 +53,17 @@ class ListingAssetGenerator:
             max_size: Maximum dimension (width or height) in pixels
             padding_pct: Padding percentage around detected card
             jpeg_quality: JPEG compression quality (0-100)
+            clahe_clip: CLAHE clipLimit for contrast enhancement (default: 1.5)
+            clahe_tiles: CLAHE tile grid size NxN (default: 8)
+            awb_enable: Enable auto white balance (gray world assumption)
             debug: Enable verbose logging
         """
         self.max_size = max_size
         self.padding_pct = padding_pct
         self.jpeg_quality = jpeg_quality
+        self.clahe_clip = clahe_clip
+        self.clahe_tiles = clahe_tiles
+        self.awb_enable = awb_enable
         self.debug = debug
         self.detector = card_detection.CardDetector(debug=debug)
 
@@ -176,7 +186,7 @@ class ListingAssetGenerator:
 
     def _apply_color_correction(self, img: np.ndarray) -> np.ndarray:
         """
-        Apply auto white balance and mild contrast enhancement.
+        Apply CLAHE contrast enhancement and optional auto white balance.
 
         Args:
             img: Input image (BGR)
@@ -184,14 +194,21 @@ class ListingAssetGenerator:
         Returns:
             Color-corrected image (BGR)
         """
-        # Convert to LAB color space for better white balance
+        # Convert to LAB color space for better processing
         lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
         l_channel, a_channel, b_channel = cv2.split(lab)
 
         # Apply CLAHE (Contrast Limited Adaptive Histogram Equalization) to L channel
         # This provides mild contrast enhancement without over-amplifying noise
-        clahe = cv2.createCLAHE(clipLimit=1.5, tileGridSize=(8, 8))
+        # Uses operator-tunable clipLimit and tileGridSize
+        clahe = cv2.createCLAHE(
+            clipLimit=self.clahe_clip,
+            tileGridSize=(self.clahe_tiles, self.clahe_tiles)
+        )
         l_enhanced = clahe.apply(l_channel)
+
+        if self.debug:
+            print(f"  CLAHE: clipLimit={self.clahe_clip}, tiles={self.clahe_tiles}x{self.clahe_tiles}")
 
         # Merge channels back
         lab_enhanced = cv2.merge([l_enhanced, a_channel, b_channel])
@@ -199,7 +216,12 @@ class ListingAssetGenerator:
         # Convert back to BGR
         enhanced = cv2.cvtColor(lab_enhanced, cv2.COLOR_LAB2BGR)
 
-        # Auto white balance using gray world assumption
+        # Auto white balance using gray world assumption (if enabled)
+        if not self.awb_enable:
+            if self.debug:
+                print(f"  Auto white balance: disabled")
+            return enhanced
+
         # Calculate mean of each channel
         b_mean = np.mean(enhanced[:, :, 0])
         g_mean = np.mean(enhanced[:, :, 1])
@@ -212,6 +234,9 @@ class ListingAssetGenerator:
         b_factor = gray / b_mean if b_mean > 0 else 1.0
         g_factor = gray / g_mean if g_mean > 0 else 1.0
         r_factor = gray / r_mean if r_mean > 0 else 1.0
+
+        if self.debug:
+            print(f"  Auto white balance: R={r_factor:.3f}, G={g_factor:.3f}, B={b_factor:.3f}")
 
         # Apply white balance (clamped to avoid overflow)
         balanced = enhanced.copy().astype(np.float32)
@@ -249,6 +274,23 @@ def main():
         help="JPEG quality 0-100 (default: 85)"
     )
     parser.add_argument("--debug", action="store_true", help="Enable debug output")
+    parser.add_argument(
+        "--clahe-clip",
+        type=float,
+        default=1.5,
+        help="CLAHE clip limit for contrast enhancement (default: 1.5)"
+    )
+    parser.add_argument(
+        "--clahe-tiles",
+        type=int,
+        default=8,
+        help="CLAHE tile grid size NxN (default: 8)"
+    )
+    parser.add_argument(
+        "--no-awb",
+        action="store_true",
+        help="Disable auto white balance (gray world assumption)"
+    )
 
     args = parser.parse_args()
 
@@ -266,6 +308,9 @@ def main():
         max_size=args.max_size,
         padding_pct=args.padding,
         jpeg_quality=args.quality,
+        clahe_clip=args.clahe_clip,
+        clahe_tiles=args.clahe_tiles,
+        awb_enable=not args.no_awb,
         debug=args.debug
     )
 
