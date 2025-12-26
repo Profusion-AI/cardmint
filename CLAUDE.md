@@ -101,6 +101,7 @@ Retrieve these only when the specific task requires them:
 | Stock display (ESP32) | `hardware/stock-display/` — operator dashboard hardware |
 | **EverShop extension gotchas** | `apps/evershop-extensions/cardmint_admin_theme/docs/COLUMN_EXTENSION_PATTERN.md` |
 | Fulfillment & EasyPost | `apps/backend/src/routes/fulfillment.ts`, `apps/backend/src/services/easyPostService.ts` |
+| **Security middleware** | `apps/backend/src/middleware/adminAuth.ts` — Bearer auth, internal access, display token |
 | **First sale milestone** | `docs/milestones/2025-12-23-first-production-sale.md` |
 
 > **Deployment rule:** Before any `ssh`, `rsync`, or prod file edit, re-read `docs/DO-verified-access.md` for current SSH credentials, paths, and safety protocols.
@@ -117,11 +118,17 @@ Retrieve these only when the specific task requires them:
 
 <!-- Update this section as work progresses. Claude: write notes here to maintain state across turns. -->
 
-**Active focus:** Commerce MVP QA + CI/CD hardening
+**Active focus:** Fulfillment E2E testing + ESP32 firmware update
 
 **Blockers:** _None identified_
 
 **Recent completions:**
+- [25 Dec] **prod-2025-12-27a deployed** - Major release with security hardening
+  - Fulfillment pipeline (orders, email outbox, EasyPost)
+  - Capture/calibration system
+  - Security: Admin Bearer auth, localhost hardening, display token
+  - Release notes: `docs/releases/prod-2025-12-27a.md`
+  - **Action needed:** Rotate OpenAI API key (was exposed in env file)
 - [23 Dec] **FIRST PRODUCTION SALE** - Dark Gyarados (Team Rocket, LP) $8.86
   - Customer: James Greenwell, Fremont CA
   - Full E2E: Stripe checkout → webhook → SOLD → fulfillment record
@@ -156,6 +163,8 @@ Retrieve these only when the specific task requires them:
   - Discount calculation, Stripe Coupon integration, Klaviyo events
 
 **Next up:**
+- **[SECURITY]** Rotate OpenAI API key (exposed in prod env file)
+- ESP32 firmware update: Add `X-CardMint-Display-Token` header
 - Fulfillment E2E: Test EasyPost label purchase for first sale
 - Frontend discount preview UI
 - Cart abandonment Klaviyo events
