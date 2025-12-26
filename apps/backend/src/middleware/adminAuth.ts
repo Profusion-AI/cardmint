@@ -6,7 +6,7 @@
  *
  * Usage:
  *   import { requireAdminAuth } from "../middleware/adminAuth";
- *   app.post("/api/admin/...", requireAdminAuth, handler);
+ *   app.post("/api/cm-admin/...", requireAdminAuth, handler);
  */
 
 import type { Request, Response, NextFunction } from "express";
