@@ -1212,8 +1212,15 @@ async function handleCheckoutCompleted(
   const queuedHideProducts = new Set<string>();
 
   for (const itemUid of itemUids) {
-    // Mark item as sold
-    const marked = inventoryService.markItemSold(itemUid, paymentIntentId);
+    // Get item data first (for price before marking sold)
+    const itemData = inventoryService.getItemForCheckout(itemUid);
+    if (!itemData) {
+      logger.warn({ itemUid, sessionId }, "checkout.session.completed: item data not found");
+      continue;
+    }
+
+    // Mark item as sold with price for dashboard reporting
+    const marked = inventoryService.markItemSold(itemUid, paymentIntentId, itemData.price_cents);
 
     if (!marked) {
       logger.warn(
@@ -1221,13 +1228,6 @@ async function handleCheckoutCompleted(
         "checkout.session.completed: failed to mark sold (may already be processed)"
       );
       // Continue processing other items - this one may have been processed already
-      continue;
-    }
-
-    // Get full item data
-    const itemData = inventoryService.getItemForCheckout(itemUid);
-    if (!itemData) {
-      logger.warn({ itemUid }, "checkout.session.completed: item data not found after marking sold");
       continue;
     }
 

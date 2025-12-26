@@ -505,10 +505,13 @@ export class InventoryService {
 
   /**
    * Mark item as sold after successful payment
-   * Sets status=SOLD, payment_intent_id, sold_at
+   * Sets status=SOLD, payment_intent_id, sold_at, sold_price
    * Returns false if item is not RESERVED
+   * @param itemUid - Item unique identifier
+   * @param paymentIntentId - Stripe payment intent ID
+   * @param soldPriceCents - Optional: actual sold price in cents (for dashboard reporting)
    */
-  markItemSold(itemUid: string, paymentIntentId: string): boolean {
+  markItemSold(itemUid: string, paymentIntentId: string, soldPriceCents?: number): boolean {
     const now = Math.floor(Date.now() / 1000);
 
     const result = this.db
@@ -517,18 +520,19 @@ export class InventoryService {
          SET status = 'SOLD',
              payment_intent_id = ?,
              sold_at = ?,
+             sold_price = ?,
              reserved_until = NULL,
              updated_at = ?
          WHERE item_uid = ? AND status = 'RESERVED'`
       )
-      .run(paymentIntentId, now, now, itemUid);
+      .run(paymentIntentId, now, soldPriceCents ?? null, now, itemUid);
 
     if (result.changes === 0) {
       this.logger.warn({ itemUid }, "Failed to mark item sold - not RESERVED");
       return false;
     }
 
-    this.logger.info({ itemUid, paymentIntentId }, "Item marked as sold");
+    this.logger.info({ itemUid, paymentIntentId, soldPriceCents }, "Item marked as sold");
     return true;
   }
 
