@@ -186,6 +186,19 @@ const envSchema = z.object({
   EASYPOST_PARCEL_LENGTH_IN: z.coerce.number().default(6.0),
   EASYPOST_PARCEL_WIDTH_IN: z.coerce.number().default(4.0),
   EASYPOST_PARCEL_HEIGHT_IN: z.coerce.number().default(0.5),
+  // Resend transactional email (Dec 2025 - PR2)
+  RESEND_API_KEY: z.string().optional(),
+  RESEND_FROM_EMAIL: z.string().default("CardMint <noreply@cardmintshop.com>"),
+  RESEND_FROM_NAME: z.string().default("CardMint"),
+  // Auto-fulfillment worker (auto-purchase labels for non-manual-review orders)
+  AUTO_FULFILLMENT_ENABLED: boolFromEnv(false), // Default off until tested
+  AUTO_FULFILLMENT_INTERVAL_MS: z.coerce.number().default(120000), // 2 minutes
+  // Email outbox worker (drain and send transactional emails)
+  EMAIL_OUTBOX_ENABLED: boolFromEnv(false), // Default off until tested
+  EMAIL_OUTBOX_INTERVAL_MS: z.coerce.number().default(60000), // 1 minute
+  EMAIL_OUTBOX_MAX_RETRIES: z.coerce.number().default(3),
+  EMAIL_OUTBOX_RETRY_DELAY_MS: z.coerce.number().default(300000), // 5 minutes backoff
+  EMAIL_OUTBOX_STUCK_THRESHOLD_MS: z.coerce.number().default(300000), // 5 min before recovering stuck 'sending' rows
 });
 
 const parsed = envSchema.parse(process.env);
@@ -355,6 +368,19 @@ export const runtimeConfig = {
     widthIn: parsed.EASYPOST_PARCEL_WIDTH_IN,
     heightIn: parsed.EASYPOST_PARCEL_HEIGHT_IN,
   },
+  // Resend transactional email (Dec 2025 - PR2)
+  resendApiKey: parsed.RESEND_API_KEY ?? "",
+  resendFromEmail: parsed.RESEND_FROM_EMAIL,
+  resendFromName: parsed.RESEND_FROM_NAME,
+  // Auto-fulfillment worker (auto-purchase labels for non-manual-review orders)
+  autoFulfillmentEnabled: parsed.AUTO_FULFILLMENT_ENABLED,
+  autoFulfillmentIntervalMs: parsed.AUTO_FULFILLMENT_INTERVAL_MS,
+  // Email outbox worker (drain and send transactional emails)
+  emailOutboxEnabled: parsed.EMAIL_OUTBOX_ENABLED,
+  emailOutboxIntervalMs: parsed.EMAIL_OUTBOX_INTERVAL_MS,
+  emailOutboxMaxRetries: parsed.EMAIL_OUTBOX_MAX_RETRIES,
+  emailOutboxRetryDelayMs: parsed.EMAIL_OUTBOX_RETRY_DELAY_MS,
+  emailOutboxStuckThresholdMs: parsed.EMAIL_OUTBOX_STUCK_THRESHOLD_MS,
 };
 
 // Log API key detection status

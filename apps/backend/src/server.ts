@@ -21,6 +21,8 @@ const {
   jobWorker,
   sftpWatcher,
   priceChartingRepo,
+  emailOutboxWorker,
+  autoFulfillmentWorker,
 } = ctx;
 
 // Create Express app with core middleware and extracted routes
@@ -68,8 +70,11 @@ app.get("/health", async (_req: Request, res: Response) => {
   logger.info("PriceCharting CSV corpus loaded successfully");
 
   const port = runtimeConfig.port;
-  const server = app.listen(port, () => {
-    logger.info({ port }, "CardMint backend listening");
+  // Bind to all interfaces for local dev (ESP32 stock display needs network access)
+  // TODO: Revert to 127.0.0.1 for prod or use BIND_HOST env var
+  const bindHost = process.env.BIND_HOST || "0.0.0.0";
+  const server = app.listen(port, bindHost, () => {
+    logger.info({ port, host: bindHost }, `CardMint backend listening`);
   });
 
   const shutdown = async () => {
@@ -105,6 +110,22 @@ app.get("/health", async (_req: Request, res: Response) => {
       } catch (error) {
         logger.error({ err: error }, "Error stopping SFTP watcher");
       }
+    }
+
+    // Stop email outbox worker
+    try {
+      emailOutboxWorker.stop();
+      logger.info("Email outbox worker stopped");
+    } catch (error) {
+      logger.error({ err: error }, "Error stopping email outbox worker");
+    }
+
+    // Stop auto-fulfillment worker
+    try {
+      autoFulfillmentWorker.stop();
+      logger.info("Auto-fulfillment worker stopped");
+    } catch (error) {
+      logger.error({ err: error }, "Error stopping auto-fulfillment worker");
     }
 
     // Close HTTP server

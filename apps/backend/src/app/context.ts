@@ -44,10 +44,17 @@ import type { PPTConfig } from "../services/pricing/types";
 import { CanonicalGateService } from "../services/canonical/canonicalGate";
 import { Stage3PromotionService } from "../services/stage3Promotion";
 import { StripeService } from "../services/stripeService";
-import { StripeExpiryJob } from "../services/stripeExpiryJob";
+import { ReservationExpiryJob } from "../services/reservationExpiryJob";
 import { ImportSafeguardsService } from "../services/importer/importSafeguards";
 import { SetTriangulator } from "../services/setTriangulator";
 import { KlaviyoService } from "../services/klaviyoService";
+import { EasyPostService, createEasyPostService } from "../services/easyPostService";
+import { CalibrationRepository } from "../repositories/calibrationRepository";
+import { CalibrationCleanupJob } from "../services/calibrationCleanupJob";
+import { EmailOutboxRepository } from "../repositories/emailOutboxRepository";
+import { createResendService, ResendService } from "../services/resendService";
+import { createEmailOutboxWorker, EmailOutboxWorker } from "../services/emailOutboxWorker";
+import { createAutoFulfillmentWorker, AutoFulfillmentWorker } from "../services/autoFulfillmentWorker";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MASTER_SETLIST_PATH = path.resolve(__dirname, "../../../../data/mastersetlist.csv");
@@ -80,9 +87,15 @@ export interface AppContext {
   pptAdapter: PokePriceTrackerAdapter;
   stage3Promotion: Stage3PromotionService;
   stripeService: StripeService;
-  stripeExpiryJob: StripeExpiryJob;
+  stripeExpiryJob: ReservationExpiryJob;
   importSafeguards: ImportSafeguardsService;
   klaviyoService: KlaviyoService;
+  easyPostService: EasyPostService;
+  calibrationCleanupJob: CalibrationCleanupJob;
+  emailOutboxRepo: EmailOutboxRepository;
+  resendService: ResendService;
+  emailOutboxWorker: EmailOutboxWorker;
+  autoFulfillmentWorker: AutoFulfillmentWorker;
 
   // Shutdown state and helpers
   isShuttingDown: () => boolean;
@@ -94,7 +107,23 @@ export interface AppContext {
 // -----------------------------------------------------------------------------
 
 export function createLogger(): Logger {
-  const destination = pino.destination({ sync: process.env.NODE_ENV !== "production" });
+  // In development, use pino-pretty for readable output
+  if (process.env.NODE_ENV !== "production") {
+    return pino({
+      level: runtimeConfig.logLevel ?? "info",
+      transport: {
+        target: "pino-pretty",
+        options: {
+          colorize: true,
+          translateTime: "HH:MM:ss",
+          ignore: "pid,hostname",
+        },
+      },
+    });
+  }
+
+  // Production: JSON output for log aggregation
+  const destination = pino.destination({ sync: false });
   destination.on("error", (err: NodeJS.ErrnoException) => {
     if (err?.code === "EINTR") return;
     console.error("pino destination error", err);
@@ -665,8 +694,8 @@ export async function createContext(): Promise<AppContext> {
   // This ensures a clean slate on every backend restart
   performStartupCleanup(db, logger);
 
-  // Capture adapter
-  const captureAdapter = new CaptureAdapter(jobRepo, logger);
+  // Capture adapter (with DB access for loading capture settings)
+  const captureAdapter = new CaptureAdapter(jobRepo, logger, db);
 
   // Retrieval
   const retrievalService = new RetrievalService(db, runtimeConfig.priceChartingCsvPath, logger);
@@ -751,10 +780,13 @@ export async function createContext(): Promise<AppContext> {
     setTriangulator
   );
 
+  // Calibration repository (created early for SFTP watcher)
+  const calibrationRepo = new CalibrationRepository(db);
+
   // SFTP watch-folder ingestion (pi-hq driver only)
   const sftpWatcher =
     runtimeConfig.captureDriver === "pi-hq"
-      ? new SftpWatchFolderIngestion(queue, logger, sessionService)
+      ? new SftpWatchFolderIngestion(queue, logger, sessionService, calibrationRepo)
       : null;
   if (sftpWatcher) {
     sftpWatcher.start();
@@ -845,18 +877,52 @@ export async function createContext(): Promise<AppContext> {
 
   // Stripe payment service (Dec 2025)
   const stripeService = new StripeService(db, logger);
-  const stripeExpiryJob = new StripeExpiryJob(stripeService, inventoryService, logger);
 
-  // Start Stripe expiry job if Stripe is configured
-  if (stripeService.isConfigured()) {
-    stripeExpiryJob.start();
-  }
+  // Reservation expiry job - runs unconditionally (cart reservations need cleanup even without Stripe)
+  // Pass stripeService as nullable - it will only call Stripe API for checkout reservations when configured
+  const stripeExpiryJob = new ReservationExpiryJob(stripeService, inventoryService, logger);
+  stripeExpiryJob.start(); // Always start - handles both cart and checkout expirations
 
   // EverShop import safeguards (Dec 2025)
   const importSafeguards = new ImportSafeguardsService(db, logger);
 
   // Klaviyo email tracking (Dec 2025)
   const klaviyoService = new KlaviyoService(db, logger);
+
+  // EasyPost shipping labels (Dec 2025)
+  const easyPostService = createEasyPostService(logger);
+  if (easyPostService.isConfigured()) {
+    logger.info({ testMode: runtimeConfig.easypostTestMode }, "EasyPost service configured");
+  } else {
+    const status = easyPostService.getConfigStatus();
+    logger.warn({ missing: status.missing }, "EasyPost not fully configured (label purchase disabled)");
+  }
+
+  // Calibration cleanup job - cleans up expired calibration captures (Dec 2025)
+  const calibrationCleanupJob = new CalibrationCleanupJob(calibrationRepo, logger);
+  calibrationCleanupJob.start();
+
+  // Email outbox (PR2.1: transactional email service)
+  const emailOutboxRepo = new EmailOutboxRepository(db);
+  const resendService = createResendService(logger);
+  const emailOutboxWorker = createEmailOutboxWorker(
+    db,
+    emailOutboxRepo,
+    resendService,
+    stripeService,
+    logger
+  );
+  emailOutboxWorker.start();
+
+  // Auto-fulfillment worker (PR2: automatic label purchase for non-review orders)
+  const autoFulfillmentWorker = createAutoFulfillmentWorker(
+    db,
+    easyPostService,
+    stripeService,
+    emailOutboxRepo,
+    logger
+  );
+  autoFulfillmentWorker.start();
 
   // Cleanup expired/aborted idempotency keys on startup
   const cleanup = importSafeguards.cleanupExpiredKeys();
@@ -897,6 +963,12 @@ export async function createContext(): Promise<AppContext> {
     stripeExpiryJob,
     importSafeguards,
     klaviyoService,
+    easyPostService,
+    calibrationCleanupJob,
+    emailOutboxRepo,
+    resendService,
+    emailOutboxWorker,
+    autoFulfillmentWorker,
 
     isShuttingDown: () => shuttingDown,
     setShuttingDown: (value: boolean) => {

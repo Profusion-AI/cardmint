@@ -1142,7 +1142,7 @@ async function handleCheckoutCompleted(
   ctx: AppContext,
   stripeEventId: string
 ): Promise<string | null> {
-  const { logger, stripeService, inventoryService, klaviyoService, db } = ctx;
+  const { logger, stripeService, inventoryService, klaviyoService, db, emailOutboxRepo } = ctx;
   const sessionId = session.id;
 
   // Check if this is a multi-item checkout (Lot Builder)
@@ -1622,6 +1622,63 @@ async function handleCheckoutCompleted(
 
       if (!orderCreated) {
         logger.error({ sessionId }, "Failed to create order after max retries");
+      }
+
+      // PR2.1: Enqueue order confirmation email (sent at checkout - no tracking)
+      // This is the first touchpoint - customer knows their order was received
+      if (orderCreated && finalOrderNumber) {
+        try {
+          // Build items list for email template
+          // Prefer processedItems, but on webhook retry they may be empty
+          // (items already marked SOLD don't get added to processedItems)
+          // Fallback: look up item data from inventory by itemUid
+          let emailItems: Array<{ name: string; priceCents: number; imageUrl: string | null }>;
+
+          if (processedItems.length > 0) {
+            emailItems = processedItems.map((item) => ({
+              name: item.name ?? "Pokemon Card",
+              priceCents: item.price_cents ?? 0,
+              imageUrl: item.image_url,
+            }));
+          } else {
+            // Webhook retry: items already processed, look up from inventory
+            emailItems = itemUids
+              .map((uid) => inventoryService.getItemForCheckout(uid))
+              .filter((item): item is NonNullable<typeof item> => item !== null)
+              .map((item) => ({
+                name: item.name ?? "Pokemon Card",
+                priceCents: item.price_cents ?? 0,
+                imageUrl: item.image_url,
+              }));
+          }
+
+          const emailUid = emailOutboxRepo.enqueue({
+            stripeSessionId: sessionId,
+            emailType: "order_confirmation",
+            templateData: {
+              orderNumber: finalOrderNumber,
+              items: emailItems,
+              subtotalCents,
+              shippingCents,
+              totalCents,
+            },
+          });
+
+          if (emailUid) {
+            logger.info(
+              { emailUid, orderNumber: finalOrderNumber, sessionId },
+              "checkout.session.completed: order confirmation email enqueued"
+            );
+          } else {
+            logger.debug({ sessionId }, "checkout.session.completed: order confirmation email already enqueued (idempotent)");
+          }
+        } catch (emailErr) {
+          // Non-fatal: email queueing failure shouldn't block the webhook
+          logger.error(
+            { err: emailErr, sessionId },
+            "checkout.session.completed: failed to enqueue order confirmation email (non-fatal)"
+          );
+        }
       }
     }
   } catch (orderErr) {
