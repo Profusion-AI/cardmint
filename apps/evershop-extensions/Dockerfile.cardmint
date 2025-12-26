@@ -12,11 +12,11 @@ COPY package.json /app/extensions/package.json
 COPY config/default.json /app/config/default.json
 COPY config/production.json /app/config/production.json
 
-# Set up npm workspaces and install dependencies
+# Install extension dependencies and build dist outputs
+WORKDIR /app/extensions
+RUN npm install && npm run build
+
 WORKDIR /app
-RUN npm pkg set workspaces='["extensions/*"]' && \
-    npm install && \
-    cd extensions && npm install && npm run build
 
 # Expose ports (3000 for storefront, 9000 for admin)
 EXPOSE 3000 9000

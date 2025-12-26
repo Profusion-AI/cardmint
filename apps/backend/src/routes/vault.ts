@@ -84,13 +84,24 @@ export function registerVaultRoutes(app: Express, ctx: AppContext): void {
       // EverShop Admin is the final authority for customer-facing visibility.
       // Products must be published in EverShop (evershop_sync_state='evershop_live')
       // to appear in the public vault. See docs/KNOWN_ISSUE_EVERSHOP_ADMIN_PRICE_VISIBILITY.md
+      //
+      // Fail-safe: Also count expired reservations as available. If the expiry job
+      // is delayed, customers can still see and attempt to buy these items. The
+      // reserve/checkout flow will handle the race condition atomically.
       const whereClauses: string[] = [
         "staging_ready = 1",
         "pricing_status = 'fresh'",
         "market_price IS NOT NULL",
         "launch_price IS NOT NULL",
         "cdn_image_url IS NOT NULL",
-        "EXISTS (SELECT 1 FROM items i WHERE i.product_uid = p.product_uid AND i.status = 'IN_STOCK')",
+        `EXISTS (
+          SELECT 1 FROM items i
+          WHERE i.product_uid = p.product_uid
+          AND (
+            i.status = 'IN_STOCK'
+            OR (i.status = 'RESERVED' AND i.reserved_until IS NOT NULL AND i.reserved_until < strftime('%s', 'now'))
+          )
+        )`,
         "(accepted_without_canonical IS NULL OR accepted_without_canonical = 0)",
         "evershop_sync_state = 'evershop_live'",
       ];
@@ -161,7 +172,8 @@ export function registerVaultRoutes(app: Express, ctx: AppContext): void {
       const total = countResult?.total ?? 0;
 
       // Main query
-      // Note: available_quantity subquery counts only IN_STOCK items (excludes RESERVED/SOLD)
+      // Note: available_quantity subquery counts IN_STOCK items plus expired reservations
+      // (fail-safe for delayed expiry job)
       const sql = `
         SELECT
           p.product_uid,
@@ -177,7 +189,7 @@ export function registerVaultRoutes(app: Express, ctx: AppContext): void {
           p.cdn_back_image_url,
           p.product_slug,
           p.variant_tags,
-          (SELECT COALESCE(SUM(i.quantity), 0) FROM items i WHERE i.product_uid = p.product_uid AND i.status = 'IN_STOCK') as available_quantity
+          (SELECT COALESCE(SUM(i.quantity), 0) FROM items i WHERE i.product_uid = p.product_uid AND (i.status = 'IN_STOCK' OR (i.status = 'RESERVED' AND i.reserved_until IS NOT NULL AND i.reserved_until < strftime('%s', 'now')))) as available_quantity
         FROM products p
         WHERE ${whereClauses.join(" AND ")}
         ORDER BY ${orderBy}
