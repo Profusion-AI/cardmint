@@ -7,6 +7,7 @@
 
 import type { Express, Request, Response } from "express";
 import type { AppContext } from "../app/context";
+import { requireDisplayToken } from "../middleware/adminAuth";
 
 interface StockCounts {
   in_stock: number;
@@ -43,9 +44,9 @@ export function registerStockDisplayRoutes(app: Express, ctx: AppContext): void 
    *
    * Lightweight endpoint for ESP32 stock display.
    * Returns inventory counts, values, and today's activity.
-   * No auth required - data is non-sensitive aggregate stats.
+   * Auth: X-CardMint-Display-Token header (DISPLAY_TOKEN env var)
    */
-  app.get("/api/stock-summary", (_req: Request, res: Response) => {
+  app.get("/api/stock-summary", requireDisplayToken, (_req: Request, res: Response) => {
     try {
       const now = Math.floor(Date.now() / 1000);
       const todayStart = new Date();
@@ -179,7 +180,7 @@ export function registerStockDisplayRoutes(app: Express, ctx: AppContext): void 
    *   ls - last sale timestamp (unix epoch, 0 if none)
    *   t  - current server timestamp
    */
-  app.get("/api/stock-summary/compact", (_req: Request, res: Response) => {
+  app.get("/api/stock-summary/compact", requireDisplayToken, (_req: Request, res: Response) => {
     try {
       // Calculate Central time "today" start (CST/CDT aware)
       // Uses Intl API to reliably get Central timezone offset
