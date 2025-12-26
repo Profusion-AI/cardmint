@@ -7,6 +7,7 @@
 import type { Express, Request, Response } from "express";
 import type { AppContext } from "../app/context";
 import { runtimeConfig } from "../config";
+import { requireAdminAuth } from "../middleware/adminAuth";
 import Stripe from "stripe";
 import { lotBuilderService } from "../services/lotBuilder/lotBuilderService";
 import { getLotPreview, clearLotPreviewCache, getLotPreviewCacheStats } from "../services/lotBuilder/llmDiscountService";
@@ -983,7 +984,7 @@ export function registerStripeRoutes(app: Express, ctx: AppContext): void {
    * GET /api/admin/items/:itemUid/stripe
    * Get Stripe status for an item
    */
-  app.get("/api/admin/items/:itemUid/stripe", (req: Request, res: Response) => {
+  app.get("/api/admin/items/:itemUid/stripe", requireAdminAuth, (req: Request, res: Response) => {
     const { itemUid } = req.params;
 
     const item = inventoryService.getItemForCheckout(itemUid);
@@ -1010,7 +1011,7 @@ export function registerStripeRoutes(app: Express, ctx: AppContext): void {
    * POST /api/admin/items/:itemUid/stripe/sync
    * Create or regenerate Stripe product/price for an item
    */
-  app.post("/api/admin/items/:itemUid/stripe/sync", async (req: Request, res: Response) => {
+  app.post("/api/admin/items/:itemUid/stripe/sync", requireAdminAuth, async (req: Request, res: Response) => {
     const { itemUid } = req.params;
 
     if (!stripeService.isConfigured()) {
@@ -1076,7 +1077,7 @@ export function registerStripeRoutes(app: Express, ctx: AppContext): void {
    * POST /api/admin/stripe/expire-reservations
    * Manually trigger expiry job for overdue reservations
    */
-  app.post("/api/admin/stripe/expire-reservations", async (req: Request, res: Response) => {
+  app.post("/api/admin/stripe/expire-reservations", requireAdminAuth, async (req: Request, res: Response) => {
     const { dry_run } = req.body;
 
     if (!stripeService.isConfigured()) {

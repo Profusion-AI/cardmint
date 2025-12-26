@@ -199,6 +199,12 @@ const envSchema = z.object({
   EMAIL_OUTBOX_MAX_RETRIES: z.coerce.number().default(3),
   EMAIL_OUTBOX_RETRY_DELAY_MS: z.coerce.number().default(300000), // 5 minutes backoff
   EMAIL_OUTBOX_STUCK_THRESHOLD_MS: z.coerce.number().default(300000), // 5 min before recovering stuck 'sending' rows
+  // Admin API auth (Dec 2025 - Codex review security fix)
+  CARDMINT_ADMIN_API_KEY: z.string().optional(),
+  // Internal endpoint auth (capture/calibration)
+  CAPTURE_INTERNAL_KEY: z.string().optional(),
+  // Stock display auth (ESP32 devices)
+  DISPLAY_TOKEN: z.string().optional(),
 });
 
 const parsed = envSchema.parse(process.env);
@@ -381,6 +387,10 @@ export const runtimeConfig = {
   emailOutboxMaxRetries: parsed.EMAIL_OUTBOX_MAX_RETRIES,
   emailOutboxRetryDelayMs: parsed.EMAIL_OUTBOX_RETRY_DELAY_MS,
   emailOutboxStuckThresholdMs: parsed.EMAIL_OUTBOX_STUCK_THRESHOLD_MS,
+  // Admin API auth (Dec 2025 - Codex review security fix)
+  cardmintAdminApiKey: parsed.CARDMINT_ADMIN_API_KEY ?? "",
+  captureInternalKey: parsed.CAPTURE_INTERNAL_KEY ?? "",
+  displayToken: parsed.DISPLAY_TOKEN ?? "",
 };
 
 // Log API key detection status
