@@ -1,7 +1,25 @@
 import axios, { type AxiosInstance, AxiosError } from "axios";
 import type { Logger } from "pino";
+import type Database from "better-sqlite3";
 import type { CaptureDriver, CaptureResult, HealthStatus } from "./captureDriver";
 import { runtimeConfig } from "../../config";
+
+export interface CaptureControlOverrides {
+  ExposureTime?: number;
+  AnalogueGain?: number;
+  ColourGains?: [number, number];
+  AeEnable?: boolean;
+  AwbEnable?: boolean;
+}
+
+interface CaptureSettingsRow {
+  exposure_us: number;
+  analogue_gain: number;
+  colour_gains_red: number;
+  colour_gains_blue: number;
+  ae_enable: number;
+  awb_enable: number;
+}
 
 interface KioskCaptureResponse {
   ok: boolean;
@@ -35,9 +53,11 @@ export class Pi5KioskDriver implements CaptureDriver {
   private readonly client: AxiosInstance;
   private readonly baseUrl: string;
   private readonly queueWarnThreshold = 11; // Per assumptions doc line 21
+  private readonly db?: Database.Database;
 
-  constructor(private readonly logger: Logger) {
+  constructor(private readonly logger: Logger, db?: Database.Database) {
     this.baseUrl = runtimeConfig.capturePiBaseUrl;
+    this.db = db;
 
     this.client = axios.create({
       baseURL: this.baseUrl,
@@ -142,38 +162,13 @@ export class Pi5KioskDriver implements CaptureDriver {
           backoffMs = Math.min(backoffMs * 2, 8000); // Cap at 8s
         }
 
-        // Build camera controls payload from env vars
-        const controls: Record<string, unknown> = {};
-
-        if (runtimeConfig.capturePiAeEnable !== undefined) {
-          controls.AeEnable = runtimeConfig.capturePiAeEnable;
-        }
-        if (runtimeConfig.capturePiAwbEnable !== undefined) {
-          controls.AwbEnable = runtimeConfig.capturePiAwbEnable;
-        }
-        if (runtimeConfig.capturePiExposureUs !== undefined) {
-          controls.ExposureTime = runtimeConfig.capturePiExposureUs;
-        }
-        if (runtimeConfig.capturePiAnalogueGain !== undefined) {
-          controls.AnalogueGain = runtimeConfig.capturePiAnalogueGain;
-        }
-        if (runtimeConfig.capturePiColourGains !== undefined) {
-          // Parse "red_gain,blue_gain" format into [red_gain, blue_gain]
-          const parts = runtimeConfig.capturePiColourGains.split(",").map(s => parseFloat(s.trim()));
-          if (parts.length === 2 && parts.every(n => !isNaN(n))) {
-            controls.ColourGains = parts;
-          } else {
-            this.logger.warn(
-              { raw: runtimeConfig.capturePiColourGains },
-              "Invalid CAPTURE_PI_COLOUR_GAINS format, expected 'red_gain,blue_gain' (2 values)"
-            );
-          }
-        }
+        // Build camera controls payload from DB settings (fallback to env vars)
+        const controls = this.loadCaptureSettings();
 
         const payload = Object.keys(controls).length > 0 ? { controls } : {};
 
         if (Object.keys(controls).length > 0) {
-          this.logger.info({ controls }, "Kiosk capture request with manual controls");
+          this.logger.info({ controls }, "Kiosk capture request with camera controls");
         }
 
         const { data } = await this.client.post<KioskCaptureResponse>("/capture", payload);
@@ -235,5 +230,143 @@ export class Pi5KioskDriver implements CaptureDriver {
 
   private sleep(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  /**
+   * Load capture settings from DB (if available) with env var fallback.
+   * Returns a camera controls object suitable for the kiosk /capture endpoint.
+   */
+  private loadCaptureSettings(): Record<string, unknown> {
+    const controls: Record<string, unknown> = {};
+
+    // Try to load from DB first
+    if (this.db) {
+      try {
+        const row = this.db
+          .prepare(`SELECT * FROM capture_settings WHERE id = 1`)
+          .get() as CaptureSettingsRow | undefined;
+
+        if (row) {
+          controls.ExposureTime = row.exposure_us;
+          controls.AnalogueGain = row.analogue_gain;
+          controls.ColourGains = [row.colour_gains_red, row.colour_gains_blue];
+          controls.AeEnable = row.ae_enable === 1;
+          controls.AwbEnable = row.awb_enable === 1;
+
+          this.logger.debug({ source: "db", controls }, "Loaded capture settings from database");
+          return controls;
+        }
+      } catch (err) {
+        this.logger.warn({ err }, "Failed to load capture settings from DB, falling back to env vars");
+      }
+    }
+
+    // Fallback to env vars
+    if (runtimeConfig.capturePiAeEnable !== undefined) {
+      controls.AeEnable = runtimeConfig.capturePiAeEnable;
+    }
+    if (runtimeConfig.capturePiAwbEnable !== undefined) {
+      controls.AwbEnable = runtimeConfig.capturePiAwbEnable;
+    }
+    if (runtimeConfig.capturePiExposureUs !== undefined) {
+      controls.ExposureTime = runtimeConfig.capturePiExposureUs;
+    }
+    if (runtimeConfig.capturePiAnalogueGain !== undefined) {
+      controls.AnalogueGain = runtimeConfig.capturePiAnalogueGain;
+    }
+    if (runtimeConfig.capturePiColourGains !== undefined) {
+      // Parse "red_gain,blue_gain" format into [red_gain, blue_gain]
+      const parts = runtimeConfig.capturePiColourGains.split(",").map(s => parseFloat(s.trim()));
+      if (parts.length === 2 && parts.every(n => !isNaN(n))) {
+        controls.ColourGains = parts;
+      } else {
+        this.logger.warn(
+          { raw: runtimeConfig.capturePiColourGains },
+          "Invalid CAPTURE_PI_COLOUR_GAINS format, expected 'red_gain,blue_gain' (2 values)"
+        );
+      }
+    }
+
+    this.logger.debug({ source: "env", controls }, "Loaded capture settings from env vars");
+    return controls;
+  }
+
+  /**
+   * Capture with explicit control overrides.
+   * Used by calibration workflow to test different camera settings.
+   *
+   * @param overrides - Camera control overrides (merged with defaults)
+   * @returns Capture result with kiosk response
+   */
+  async captureWithOverrides(overrides?: CaptureControlOverrides): Promise<CaptureResult> {
+    try {
+      // Start with default settings
+      const controls = this.loadCaptureSettings();
+
+      // Apply overrides
+      if (overrides) {
+        if (overrides.ExposureTime !== undefined) {
+          controls.ExposureTime = overrides.ExposureTime;
+        }
+        if (overrides.AnalogueGain !== undefined) {
+          controls.AnalogueGain = overrides.AnalogueGain;
+        }
+        if (overrides.ColourGains !== undefined) {
+          controls.ColourGains = overrides.ColourGains;
+        }
+        if (overrides.AeEnable !== undefined) {
+          controls.AeEnable = overrides.AeEnable;
+        }
+        if (overrides.AwbEnable !== undefined) {
+          controls.AwbEnable = overrides.AwbEnable;
+        }
+      }
+
+      const payload = Object.keys(controls).length > 0 ? { controls } : {};
+
+      this.logger.info({ controls, hasOverrides: !!overrides }, "Calibration capture request");
+
+      const { data } = await this.client.post<KioskCaptureResponse>("/capture", payload);
+
+      this.logger.info({ uid: data.uid }, "Calibration capture successful");
+
+      return {
+        job: undefined, // Calibration captures don't create jobs
+        output: JSON.stringify(data),
+        exitCode: 0,
+        timedOut: false,
+      };
+    } catch (err: unknown) {
+      const error = err as Error | AxiosError;
+
+      if (axios.isAxiosError(error)) {
+        this.logger.error({ err: error }, "Calibration capture failed");
+        return {
+          output: error.message,
+          exitCode: error.response?.status ?? -1,
+          timedOut: error.code === "ECONNABORTED",
+        };
+      }
+
+      this.logger.error({ err: error }, "Calibration capture encountered unexpected error");
+      return {
+        output: error instanceof Error ? error.message : String(error),
+        exitCode: -1,
+        timedOut: false,
+      };
+    }
+  }
+
+  /**
+   * Get the capture_uid from a capture result.
+   * Used by calibration workflow to track the capture.
+   */
+  static extractCaptureUid(result: CaptureResult): string | undefined {
+    try {
+      const data = JSON.parse(result.output);
+      return data.uid;
+    } catch {
+      return undefined;
+    }
   }
 }

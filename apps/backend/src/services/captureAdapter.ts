@@ -1,4 +1,5 @@
 import type { Logger } from "pino";
+import type Database from "better-sqlite3";
 import { runtimeConfig } from "../config";
 import { JobRepository } from "../repositories/jobRepository";
 import type { CaptureDriver, CaptureResult, HealthStatus } from "./capture/captureDriver";
@@ -12,12 +13,13 @@ import { Pi5KioskDriver } from "./capture/pi5KioskDriver";
 export class CaptureAdapter {
   private readonly driver: CaptureDriver;
 
-  constructor(repository: JobRepository, logger: Logger) {
+  constructor(repository: JobRepository, logger: Logger, db?: Database.Database) {
     const driverType = runtimeConfig.captureDriver;
 
     switch (driverType) {
       case "pi-hq":
-        this.driver = new Pi5KioskDriver(logger);
+        // Pass DB to enable loading capture settings from database
+        this.driver = new Pi5KioskDriver(logger, db);
         break;
       case "sony":
         throw new Error("Sony capture driver has been deprecated. Use CAPTURE_DRIVER=pi-hq");
