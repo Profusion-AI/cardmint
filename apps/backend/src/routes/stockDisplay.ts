@@ -140,8 +140,10 @@ export function registerStockDisplayRoutes(app: Express, ctx: AppContext): void 
         ok: true,
         counts,
         value: {
+          // launch_price is stored in dollars, convert to cents
           in_stock_cents: Math.round((inStockValue.total_cents || 0) * 100),
-          sold_today_cents: Math.round((soldTodayValue.total_cents || 0) * 100),
+          // sold_price is stored in cents (as of Dec 2025 fix)
+          sold_today_cents: Math.round(soldTodayValue.total_cents || 0),
         },
         today: {
           added: addedToday.count,
