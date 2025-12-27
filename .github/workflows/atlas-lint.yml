@@ -1,0 +1,208 @@
+# Atlas Migration Lint & Drift Detection
+# Owner: Claude Code | Created: 2025-12-26
+#
+# Purpose: Validate migrations before merge, applying EverShop lessons:
+# - Catch destructive changes early
+# - Protect sync pipeline columns
+# - Require justification for protected column modifications
+#
+# Note: EverShop Postgres contract (db/atlas/contracts/evershop.sql) is NOT
+# validated in CI because it requires prod database access. Run manually:
+#   ssh cardmint@157.245.213.233 "docker compose exec -T database psql -U postgres -d evershop -f -" < db/atlas/contracts/evershop.sql
+
+name: Atlas Lint
+
+on:
+  pull_request:
+    paths:
+      - 'apps/backend/src/db/migrations/**'
+      - 'apps/backend/db/atlas/**'
+      - 'apps/backend/atlas.hcl'
+
+jobs:
+  atlas-lint:
+    name: Migration Lint
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/backend
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Need full history for diff
+
+      - name: Setup Atlas
+        uses: ariga/setup-atlas@v0
+        with:
+          cloud-token: ${{ secrets.ATLAS_CLOUD_TOKEN }}
+
+      - name: Lint migrations
+        run: |
+          # List migrations changed in this PR
+          CHANGED_MIGRATIONS=$(git diff --name-only origin/main...HEAD -- src/db/migrations/*.sql 2>/dev/null | grep -v "_down" || true)
+
+          if [ -z "$CHANGED_MIGRATIONS" ]; then
+            echo "No migration files changed in this PR"
+            exit 0
+          fi
+
+          echo "Changed migrations:"
+          echo "$CHANGED_MIGRATIONS"
+          echo ""
+
+          # Use --git-base to let Atlas detect changes, without --latest
+          # This ensures Atlas lints the actual changed files, not just newest N
+          atlas migrate lint \
+            --env cardmint \
+            --git-base origin/main \
+            --log '{{ range .Files }}{{ .Name }}: {{ range .Reports }}{{ .Text }}{{ end }}{{ end }}'
+
+      - name: Check for protected column modifications
+        run: |
+          # Protected columns critical to sync pipeline
+          PROTECTED_COLS="evershop_sync_state sync_version evershop_uuid sync_events sync_leader"
+          TOUCHED=""
+
+          # Find migrations changed in this PR
+          CHANGED_MIGRATIONS=$(git diff --name-only origin/main...HEAD -- src/db/migrations/*.sql 2>/dev/null | grep -v "_down" || true)
+
+          if [ -z "$CHANGED_MIGRATIONS" ]; then
+            echo "No migration files changed"
+            exit 0
+          fi
+
+          echo "Changed migrations:"
+          echo "$CHANGED_MIGRATIONS"
+          echo ""
+
+          for col in $PROTECTED_COLS; do
+            if echo "$CHANGED_MIGRATIONS" | xargs grep -l "$col" 2>/dev/null; then
+              TOUCHED="$TOUCHED $col"
+            fi
+          done
+
+          if [ -n "$TOUCHED" ]; then
+            echo ""
+            echo "::warning::Migration touches protected columns:$TOUCHED"
+            echo ""
+
+            # Check for justification in PR body
+            PR_BODY="${{ github.event.pull_request.body }}"
+            if echo "$PR_BODY" | grep -qi "SYNC-COLUMN-JUSTIFICATION:"; then
+              echo "::notice::Justification found in PR description"
+              echo "Proceeding with protected column modification..."
+              exit 0
+            else
+              echo "::error::BLOCKED: Migration modifies sync-critical columns"
+              echo ""
+              echo "To proceed, add to your PR description:"
+              echo "  SYNC-COLUMN-JUSTIFICATION: <reason why this change is safe>"
+              echo ""
+              echo "Protected columns and their impact:"
+              echo "  - evershop_sync_state: Breaks EverShop bidirectional sync"
+              echo "  - sync_version: Breaks conflict detection"
+              echo "  - evershop_uuid: Breaks webhook lookups"
+              echo "  - sync_events: Breaks audit trail, deduplication"
+              echo "  - sync_leader: Breaks daemon lease coordination"
+              exit 1
+            fi
+          fi
+
+          echo "No protected columns modified"
+
+      - name: Verify schema consistency
+        run: |
+          # Ensure schema.sql can create a valid database
+          sqlite3 :memory: < db/atlas/schema.sql
+          echo "Schema baseline is valid SQLite"
+
+      - name: Check protected columns exist in baseline
+        run: |
+          # EverShop lesson: Silent failures are deadly
+          # Verify protected columns are still in the baseline
+          REQUIRED_COLS="evershop_sync_state sync_version evershop_uuid public_sku evershop_product_id"
+
+          for col in $REQUIRED_COLS; do
+            if ! grep -q "$col" db/atlas/schema.sql; then
+              echo "::error::Protected column '$col' missing from schema baseline!"
+              echo "This could break the sync pipeline. Investigate immediately."
+              exit 1
+            fi
+          done
+
+          echo "All protected columns present in baseline"
+
+  drift-check:
+    name: Drift Detection
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.base.ref == 'main'
+    defaults:
+      run:
+        working-directory: apps/backend
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Atlas
+        uses: ariga/setup-atlas@v0
+
+      - name: Check for schema drift
+        run: |
+          # Apply migrations to fresh DB and compare to baseline
+          # This catches when migrations don't match the declared schema
+          # BLOCKING GATE: Drift = CI failure
+
+          # Create temp database and apply all migrations
+          TEMP_DB=$(mktemp)
+          FAILED=0
+
+          for migration in $(ls src/db/migrations/*.sql 2>/dev/null | grep -v "_down" | sort); do
+            echo "Applying: $migration"
+            if ! sqlite3 "$TEMP_DB" < "$migration" 2>&1; then
+              echo "::error::Migration failed: $migration"
+              FAILED=1
+            fi
+          done
+
+          if [ "$FAILED" -eq 1 ]; then
+            echo "::error::One or more migrations failed to apply"
+            rm -f "$TEMP_DB"
+            exit 1
+          fi
+
+          # Extract schema from migrated DB using awk state machine filter
+          # This properly handles multi-line FTS triggers and virtual tables
+          MIGRATED_SCHEMA=$(mktemp)
+          sqlite3 "$TEMP_DB" ".schema" | awk '
+            BEGIN { in_trigger = 0; in_fts_virtual = 0; buffer = "" }
+            /^CREATE TRIGGER/ { buffer = $0; in_trigger = 1; next }
+            in_trigger { buffer = buffer "\n" $0; if (/^END;/) { in_trigger = 0; if (buffer !~ /_fts/) print buffer; buffer = "" }; next }
+            /^CREATE VIRTUAL TABLE.*_fts/ { in_fts_virtual = 1; next }
+            in_fts_virtual { if (/;[[:space:]]*$/) in_fts_virtual = 0; next }
+            /^CREATE TABLE schema_migrations/ { while ((getline line) > 0) { if (line ~ /\);[[:space:]]*$/) break }; next }
+            /^CREATE TABLE sqlite_/ { next }
+            !/_fts/ { print }
+          ' > "$MIGRATED_SCHEMA"
+
+          # Compare to baseline (BLOCKING: drift fails CI)
+          BASELINE_FILTERED=$(mktemp)
+          grep -v "^--" db/atlas/schema.sql > "$BASELINE_FILTERED"
+
+          if ! diff <(sort "$MIGRATED_SCHEMA") <(sort "$BASELINE_FILTERED") > /dev/null 2>&1; then
+            echo "::error::DRIFT DETECTED - Migrations do not match baseline"
+            echo ""
+            echo "This blocks CI. Either:"
+            echo "  1. Regenerate baseline: cd apps/backend && ./scripts/regenerate-baseline.sh"
+            echo "  2. Fix migration to produce expected schema"
+            echo ""
+            echo "Diff (baseline vs migrations):"
+            diff <(sort "$MIGRATED_SCHEMA") <(sort "$BASELINE_FILTERED") | head -100
+            rm -f "$TEMP_DB" "$MIGRATED_SCHEMA" "$BASELINE_FILTERED"
+            exit 1
+          fi
+
+          echo "✅ Migrations and baseline are in sync"
+          rm -f "$TEMP_DB" "$MIGRATED_SCHEMA" "$BASELINE_FILTERED"
