@@ -22,4 +22,8 @@
 // Refresh interval in milliseconds (default: 30 seconds)
 #define REFRESH_INTERVAL_MS 30000
 
+// Display authentication token (get from prod DISPLAY_TOKEN env var)
+// Required for production API access
+#define DISPLAY_TOKEN "your-display-token-here"
+
 #endif // CONFIG_H

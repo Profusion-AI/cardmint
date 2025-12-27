@@ -41,12 +41,16 @@
   #ifndef REFRESH_INTERVAL_MS
     #define REFRESH_INTERVAL_MS 60000
   #endif
+  #ifndef DISPLAY_TOKEN
+    #define DISPLAY_TOKEN ""
+  #endif
 #endif
 
 // Convert defines to const char* for compatibility
 const char* wifi_ssid = WIFI_SSID;
 const char* wifi_password = WIFI_PASSWORD;
 const char* api_url = API_URL;
+const char* display_token = DISPLAY_TOKEN;
 const unsigned long refresh_interval_ms = REFRESH_INTERVAL_MS;
 
 // NTP time configuration (Central Time with automatic DST)
@@ -419,6 +423,11 @@ bool fetchStockData() {
 
     http.begin(client, api_url);
     http.setTimeout(10000);  // 10 second timeout
+
+    // Add display token header if configured (required for prod)
+    if (strlen(display_token) > 0) {
+        http.addHeader("X-CardMint-Display-Token", display_token);
+    }
 
     int httpCode = http.GET();
 

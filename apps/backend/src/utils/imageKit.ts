@@ -1,6 +1,6 @@
 const IMAGEKIT_HOST_TOKEN = "imagekit.io";
 
-export const FRONT_IMAGE_TRANSFORM_SEGMENT = "tr:e-usm-2-2.4-1.8-0.015,e-retouch";
+export const FRONT_IMAGE_TRANSFORM_SEGMENT = "tr:e-usm-2-2.4-1.8-0.015,e-sharpen";
 
 export function applyImageKitTransform(url: string, transformSegment?: string): string;
 export function applyImageKitTransform(url: null, transformSegment?: string): null;
