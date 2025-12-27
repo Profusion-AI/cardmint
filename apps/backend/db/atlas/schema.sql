@@ -1,10 +1,13 @@
 -- CardMint SQLite Schema Baseline
--- Owner: Claude Code | Generated: 2025-12-26 | Updated: 2025-12-26
+-- Owner: Claude Code | Generated: 2025-12-26 | Updated: 2025-12-27
 --
 -- This is the source of truth for Atlas drift detection.
 --
--- REGENERATION COMMAND (saves this awk script to a file first):
---   See scripts/regenerate-baseline.sh
+-- REGENERATION COMMAND:
+--   cd apps/backend && ./scripts/regenerate-baseline.sh
+--
+-- DRIFT CHECK:
+--   cd apps/backend && ./scripts/regenerate-baseline.sh --check
 --
 -- EXCLUDED from baseline (intentionally):
 --   - schema_migrations: Created dynamically by migrate.ts
@@ -32,7 +35,7 @@ CREATE TABLE scans (
   session_id TEXT,
   timings_json TEXT DEFAULT '{}'
 , processor_id TEXT, locked_at INTEGER, market_price REAL, launch_price REAL, condition TEXT, sku TEXT, raw_image_path TEXT, processed_image_path TEXT, capture_uid TEXT, inference_path TEXT, item_uid TEXT, scan_fingerprint TEXT, phash TEXT, dhash TEXT, whash TEXT, orb_sig TEXT, capture_session_id TEXT, pose TEXT DEFAULT 'unknown', blur_score REAL, product_sku TEXT, listing_sku TEXT, cm_card_id TEXT, ppt_failure_count INTEGER DEFAULT 0, manifest_hash TEXT, manifest_version TEXT, accepted_name TEXT, accepted_hp INTEGER, accepted_collector_no TEXT, accepted_set_name TEXT, accepted_set_size INTEGER, accepted_variant_tags TEXT, listing_image_path TEXT, cdn_image_url TEXT, cdn_published_at INTEGER, scan_orientation TEXT CHECK(scan_orientation IS NULL OR scan_orientation IN ('front', 'back')), product_uid TEXT, camera_applied_controls_json TEXT, front_locked INTEGER DEFAULT 0, back_ready INTEGER DEFAULT 0, canonical_locked INTEGER DEFAULT 0, reconciliation_status TEXT
-  CHECK(reconciliation_status IN ('pending', 'resolved', 'abandoned', NULL)), reconciliation_attempts INTEGER DEFAULT 0, reconciliation_last_attempt_at INTEGER, ppt_set_id TEXT, ppt_card_id TEXT, canonical_source TEXT NOT NULL DEFAULT 'pricecharting', corrected_image_path TEXT, back_image_path TEXT, master_image_path TEXT, master_cdn_url TEXT);
+  CHECK(reconciliation_status IN ('pending', 'resolved', 'abandoned', NULL)), reconciliation_attempts INTEGER DEFAULT 0, reconciliation_last_attempt_at INTEGER, ppt_set_id TEXT, ppt_card_id TEXT, canonical_source TEXT NOT NULL DEFAULT 'pricecharting', back_image_path TEXT, master_image_path TEXT, master_cdn_url TEXT, corrected_image_path TEXT);
 CREATE TABLE scan_events (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   scan_id TEXT NOT NULL,
@@ -67,8 +70,10 @@ CREATE TABLE pricecharting_cards (
   release_year INTEGER,
   sales_volume INTEGER DEFAULT 0,
   card_number TEXT,
-  total_set_size TEXT
-, loose_price REAL, graded_price REAL);
+  total_set_size TEXT,
+  loose_price REAL,
+  graded_price REAL
+);
 CREATE INDEX idx_pricecharting_cards_release_year
   ON pricecharting_cards(release_year);
 CREATE INDEX idx_pricecharting_cards_card_number
@@ -472,10 +477,10 @@ CREATE TABLE IF NOT EXISTS "products" (
   ppt_enriched_at INTEGER,
   cdn_back_image_url TEXT,
   -- Columns from 20251118_canonical_sku_product_identity
-  canonical_sku TEXT, ppt_set_id TEXT, ppt_card_id TEXT, canonical_source TEXT NOT NULL DEFAULT 'pricecharting', cdn_published_at INTEGER, sync_version INTEGER DEFAULT 1, last_synced_at INTEGER, promoted_at INTEGER, evershop_product_id INTEGER, evershop_published_at INTEGER, evershop_sync_state TEXT
+  canonical_sku TEXT, ppt_set_id TEXT, ppt_card_id TEXT, canonical_source TEXT NOT NULL DEFAULT 'pricecharting', sync_version INTEGER DEFAULT 1, last_synced_at INTEGER, promoted_at INTEGER, evershop_product_id INTEGER, evershop_published_at INTEGER, evershop_sync_state TEXT
   CHECK (evershop_sync_state IN (
     'not_synced', 'vault_only', 'evershop_hidden', 'evershop_live', 'sync_error'
-  )) DEFAULT 'not_synced', public_sku TEXT, evershop_uuid TEXT, variant_tags TEXT, master_back_cdn_url TEXT,
+  )) DEFAULT 'not_synced', public_sku TEXT, variant_tags TEXT, evershop_uuid TEXT, master_back_cdn_url TEXT, cdn_published_at INTEGER,
   CHECK (condition_bucket IN ('NM', 'LP', 'MP', 'HP', 'UNKNOWN', 'NO_CONDITION'))
 );
 CREATE INDEX idx_products_sku ON products(product_sku);
@@ -716,6 +721,17 @@ CREATE INDEX idx_products_sync_version ON products(sync_version);
 CREATE INDEX idx_products_evershop_state ON products(evershop_sync_state);
 CREATE UNIQUE INDEX idx_products_public_sku ON products(public_sku)
   WHERE public_sku IS NOT NULL;
+CREATE INDEX idx_products_variant_tags ON products(variant_tags) WHERE variant_tags IS NOT NULL;
+CREATE TABLE email_subscribers (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  email TEXT NOT NULL UNIQUE,
+  subscribed_at TEXT NOT NULL DEFAULT (datetime('now')),
+  source TEXT DEFAULT 'vault_landing',
+  ip_address TEXT,
+  unsubscribed_at TEXT
+, deleted_at INTEGER, deletion_reason TEXT);
+CREATE INDEX idx_email_subscribers_email ON email_subscribers(email);
+CREATE INDEX idx_email_subscribers_subscribed_at ON email_subscribers(subscribed_at);
 CREATE UNIQUE INDEX idx_products_evershop_uuid ON products(evershop_uuid)
   WHERE evershop_uuid IS NOT NULL;
 CREATE TABLE webhook_events (
@@ -742,17 +758,6 @@ CREATE INDEX idx_webhook_events_status ON webhook_events(status);
 CREATE INDEX idx_webhook_events_source ON webhook_events(source);
 CREATE INDEX idx_webhook_events_product ON webhook_events(product_uid);
 CREATE INDEX idx_webhook_events_created ON webhook_events(created_at);
-CREATE INDEX idx_products_variant_tags ON products(variant_tags) WHERE variant_tags IS NOT NULL;
-CREATE TABLE email_subscribers (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  email TEXT NOT NULL UNIQUE,
-  subscribed_at TEXT NOT NULL DEFAULT (datetime('now')),
-  source TEXT DEFAULT 'vault_landing',
-  ip_address TEXT,
-  unsubscribed_at TEXT
-, deleted_at INTEGER, deletion_reason TEXT);
-CREATE INDEX idx_email_subscribers_email ON email_subscribers(email);
-CREATE INDEX idx_email_subscribers_subscribed_at ON email_subscribers(subscribed_at);
 CREATE TABLE klaviyo_event_log (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   stripe_event_id TEXT NOT NULL,       -- Link to stripe_webhook_events for audit trail
@@ -794,6 +799,60 @@ CREATE TABLE cart_rate_limits (
   PRIMARY KEY (ip_address, window_start)
 );
 CREATE INDEX idx_cart_rate_limits_window ON cart_rate_limits(window_start);
+CREATE TABLE capture_settings (
+  id INTEGER PRIMARY KEY CHECK (id = 1),  -- Enforce single row
+
+  -- Camera controls (Pi5 HQ camera via kiosk)
+  exposure_us INTEGER DEFAULT 10101,           -- ExposureTime in microseconds
+  analogue_gain REAL DEFAULT 1.115,            -- AnalogueGain
+  colour_gains_red REAL DEFAULT 2.38,          -- ColourGains[0] (red)
+  colour_gains_blue REAL DEFAULT 1.98,         -- ColourGains[1] (blue)
+  ae_enable INTEGER DEFAULT 0,                 -- AeEnable (0=false, 1=true)
+  awb_enable INTEGER DEFAULT 0,                -- AwbEnable (0=false, 1=true)
+
+  -- Stage-3 processing parameters (listing asset generation)
+  clahe_clip_limit REAL DEFAULT 1.5,           -- CLAHE clipLimit
+  clahe_tile_size INTEGER DEFAULT 8,           -- CLAHE tileGridSize (NxN)
+  stage3_awb_enable INTEGER DEFAULT 1,         -- Auto white balance (gray world)
+
+  -- Metadata
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE TABLE calibration_captures (
+  id TEXT PRIMARY KEY,                         -- UUID
+  capture_uid TEXT NOT NULL UNIQUE,            -- Pi5 kiosk UID (for SFTP detection)
+
+  -- Image paths (populated as pipeline progresses)
+  raw_image_path TEXT,                         -- Raw capture from Pi5
+  stage1_image_path TEXT,                      -- After distortion correction
+  stage2_image_path TEXT,                      -- After resize/compress
+  processed_image_path TEXT,                   -- After Stage-3 (listing asset)
+
+  -- Settings snapshots
+  settings_snapshot_json TEXT,                 -- Camera settings at capture time
+  stage3_params_json TEXT,                     -- Stage-3 params used for processing
+
+  -- Status tracking
+  status TEXT DEFAULT 'PENDING' CHECK(status IN (
+    'PENDING',      -- Capture requested, waiting for SFTP
+    'CAPTURED',     -- Raw image received from SFTP
+    'STAGE1',       -- Distortion correction complete
+    'STAGE2',       -- Resize/compress complete
+    'PROCESSED',    -- Stage-3 complete, ready for preview
+    'EXPIRED',      -- TTL exceeded, pending cleanup
+    'FAILED'        -- Processing error
+  )),
+  error_message TEXT,                          -- Error details if FAILED
+
+  -- Timestamps
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL                  -- TTL for auto-cleanup (1h default)
+);
+CREATE INDEX idx_calibration_captures_uid ON calibration_captures(capture_uid);
+CREATE INDEX idx_calibration_captures_status ON calibration_captures(status);
+CREATE INDEX idx_calibration_captures_expires ON calibration_captures(expires_at);
 CREATE TABLE sync_events (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   event_uid TEXT NOT NULL UNIQUE,
@@ -831,6 +890,38 @@ CREATE UNIQUE INDEX idx_sync_events_evershop_hide_dedupe
   WHERE event_type = 'evershop_hide_listing'
     AND stripe_session_id IS NOT NULL
     AND product_sku IS NOT NULL;
+CREATE TABLE orders (
+  order_uid TEXT PRIMARY KEY,  -- UUID v4
+  order_number TEXT NOT NULL UNIQUE,  -- Format: CM-YYYYMMDD-######
+  stripe_session_id TEXT NOT NULL UNIQUE,
+  stripe_payment_intent_id TEXT,
+
+  -- Order totals (denormalized for quick lookup)
+  item_count INTEGER NOT NULL,
+  subtotal_cents INTEGER NOT NULL,
+  shipping_cents INTEGER NOT NULL,
+  total_cents INTEGER NOT NULL,
+
+  -- Status mirrors fulfillment for customer-facing display
+  -- Mapping: confirmed=pending, processing=label_purchased, shipped, delivered, exception
+  status TEXT NOT NULL DEFAULT 'confirmed' CHECK(status IN (
+    'confirmed',      -- Order placed, awaiting fulfillment
+    'processing',     -- Label purchased, being prepared
+    'shipped',        -- In transit
+    'delivered',      -- Carrier confirmed delivery
+    'exception'       -- Delivery issue
+  )),
+
+  -- Timestamps
+  created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
+  updated_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
+);
+CREATE INDEX idx_orders_created_at ON orders(created_at);
+CREATE INDEX idx_orders_status ON orders(status);
+CREATE TRIGGER orders_updated_at AFTER UPDATE ON orders
+BEGIN
+  UPDATE orders SET updated_at = strftime('%s', 'now') WHERE order_uid = NEW.order_uid;
+END;
 CREATE TABLE IF NOT EXISTS "fulfillment" (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
 
@@ -853,15 +944,16 @@ CREATE TABLE IF NOT EXISTS "fulfillment" (
   manual_review_notes TEXT,
   manual_review_by TEXT,
 
-  -- Fulfillment status (REVERTED: removed 'processing')
+  -- Fulfillment status (UPDATED: added 'processing' for atomic claim)
   -- pending: awaiting operator action
+  -- processing: claimed by auto-fulfillment worker (prevents race)
   -- reviewed: manual review complete (if required)
   -- label_purchased: EasyPost label created
   -- shipped: handed to carrier
   -- delivered: carrier confirmed delivery
   -- exception: delivery issue or cost guardrail triggered
   status TEXT NOT NULL DEFAULT 'pending'
-    CHECK(status IN ('pending', 'reviewed', 'label_purchased',
+    CHECK(status IN ('pending', 'processing', 'reviewed', 'label_purchased',
                      'shipped', 'delivered', 'exception')),
 
   -- Carrier & tracking (populated after label purchase)
@@ -908,37 +1000,6 @@ CREATE TRIGGER fulfillment_updated_at AFTER UPDATE ON fulfillment
 BEGIN
   UPDATE fulfillment SET updated_at = strftime('%s', 'now') WHERE id = NEW.id;
 END;
-CREATE TABLE email_outbox_new (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  email_uid TEXT NOT NULL UNIQUE,
-
-  stripe_session_id TEXT NOT NULL,
-
-  -- Email type: expanded to support two-email model
-  email_type TEXT NOT NULL CHECK(email_type IN (
-    'order_confirmation',       -- Sent at checkout (no tracking)
-    'order_confirmed_tracking'  -- Sent after label purchase (with tracking)
-  )),
-
-  status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN (
-    'pending',
-    'sending',
-    'sent',
-    'failed'
-  )),
-
-  retry_count INTEGER NOT NULL DEFAULT 0,
-  max_retries INTEGER NOT NULL DEFAULT 3,
-  next_retry_at INTEGER,
-  last_error TEXT,
-  sending_started_at INTEGER,
-  template_data TEXT NOT NULL,
-  created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
-  sent_at INTEGER,
-  updated_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
-
-  UNIQUE(stripe_session_id, email_type)
-);
 CREATE TABLE IF NOT EXISTS "email_outbox" (
   id INTEGER PRIMARY KEY,
   email_uid TEXT NOT NULL UNIQUE,
@@ -977,38 +1038,6 @@ CREATE TRIGGER email_outbox_updated_at
   FOR EACH ROW
 BEGIN
   UPDATE email_outbox SET updated_at = strftime('%s', 'now') WHERE id = NEW.id;
-END;
-CREATE TABLE orders (
-  order_uid TEXT PRIMARY KEY,  -- UUID v4
-  order_number TEXT NOT NULL UNIQUE,  -- Format: CM-YYYYMMDD-######
-  stripe_session_id TEXT NOT NULL UNIQUE,
-  stripe_payment_intent_id TEXT,
-
-  -- Order totals (denormalized for quick lookup)
-  item_count INTEGER NOT NULL,
-  subtotal_cents INTEGER NOT NULL,
-  shipping_cents INTEGER NOT NULL,
-  total_cents INTEGER NOT NULL,
-
-  -- Status mirrors fulfillment for customer-facing display
-  -- Mapping: confirmed=pending, processing=label_purchased, shipped, delivered, exception
-  status TEXT NOT NULL DEFAULT 'confirmed' CHECK(status IN (
-    'confirmed',      -- Order placed, awaiting fulfillment
-    'processing',     -- Label purchased, being prepared
-    'shipped',        -- In transit
-    'delivered',      -- Carrier confirmed delivery
-    'exception'       -- Delivery issue
-  )),
-
-  -- Timestamps
-  created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
-  updated_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
-);
-CREATE INDEX idx_orders_created_at ON orders(created_at);
-CREATE INDEX idx_orders_status ON orders(status);
-CREATE TRIGGER orders_updated_at AFTER UPDATE ON orders
-BEGIN
-  UPDATE orders SET updated_at = strftime('%s', 'now') WHERE order_uid = NEW.order_uid;
 END;
 CREATE TABLE IF NOT EXISTS "order_events" (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
