@@ -50,6 +50,19 @@ function checkRateLimit(ip: string, limitRpm: number): { allowed: boolean; retry
 const REDIRECT_ALLOWLIST = ["cardmintshop.com", "www.cardmintshop.com", "localhost", "127.0.0.1"];
 
 /**
+ * Generate a short reference code for support escalation.
+ * Format: CHK-XXXXXX (6 alphanumeric chars)
+ */
+function generateRefCode(): string {
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // Exclude ambiguous: 0,O,1,I
+  let code = "";
+  for (let i = 0; i < 6; i++) {
+    code += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return `CHK-${code}`;
+}
+
+/**
  * Validate redirect URL against domain allowlist.
  * Prevents open redirect attacks via checkout success/cancel URLs.
  * Returns null if URL is invalid or not in allowlist.
@@ -80,7 +93,33 @@ function validateRedirectUrl(url: string | undefined, allowedDomains: string[]):
 }
 
 export function registerStripeRoutes(app: Express, ctx: AppContext): void {
-  const { logger, stripeService, inventoryService } = ctx;
+  const { db, logger, stripeService, inventoryService } = ctx;
+  const log = logger.child({ module: "stripe-routes" });
+
+  /**
+   * Authority boundary check: Verify product is published in EverShop.
+   * Returns { live: true } if product can be purchased.
+   * Returns { live: false, reason, syncState } for logging/debugging.
+   */
+  function checkProductLive(productUid: string): {
+    live: boolean;
+    reason?: "NOT_FOUND" | "NOT_LIVE";
+    syncState?: string | null;
+  } {
+    const row = db
+      .prepare("SELECT evershop_sync_state FROM products WHERE product_uid = ?")
+      .get(productUid) as { evershop_sync_state: string | null } | undefined;
+
+    if (!row) {
+      return { live: false, reason: "NOT_FOUND", syncState: null };
+    }
+
+    if (row.evershop_sync_state !== "evershop_live") {
+      return { live: false, reason: "NOT_LIVE", syncState: row.evershop_sync_state };
+    }
+
+    return { live: true };
+  }
 
   // ==========================================================================
   // Checkout Session Creation
@@ -131,6 +170,28 @@ export function registerStripeRoutes(app: Express, ctx: AppContext): void {
         return res.status(404).json({
           error: "NOT_FOUND",
           message: `Item ${item_uid} not found`,
+        });
+      }
+
+      // Authority boundary: Only evershop_live products can be purchased
+      const liveCheck = checkProductLive(item.product_uid);
+      if (!liveCheck.live) {
+        const ref = generateRefCode();
+        log.warn(
+          {
+            itemUid: item_uid,
+            productUid: item.product_uid,
+            ref,
+            internalReason: liveCheck.reason,
+            syncState: liveCheck.syncState,
+          },
+          "Checkout blocked: product not available for purchase"
+        );
+        // Return 404 to not leak existence; include ref for support escalation
+        return res.status(404).json({
+          error: "NOT_FOUND",
+          message: "Item not found or not available for purchase",
+          ref,
         });
       }
 
@@ -313,6 +374,27 @@ export function registerStripeRoutes(app: Express, ctx: AppContext): void {
       }> = [];
 
       for (const product_uid of product_uids) {
+        // Authority boundary: Only evershop_live products can be purchased
+        const liveCheck = checkProductLive(product_uid);
+        if (!liveCheck.live) {
+          const ref = generateRefCode();
+          log.warn(
+            {
+              productUid: product_uid,
+              ref,
+              internalReason: liveCheck.reason,
+              syncState: liveCheck.syncState,
+            },
+            "Multi-checkout blocked: product not available for purchase"
+          );
+          return res.status(404).json({
+            error: "NOT_FOUND",
+            message: "One or more items not found or not available for purchase",
+            product_uid,
+            ref,
+          });
+        }
+
         let item_uid: string | null = null;
         let wasCartReserved = false;
 
@@ -634,6 +716,27 @@ export function registerStripeRoutes(app: Express, ctx: AppContext): void {
       const previewItems: LotPreviewItem[] = [];
 
       for (const product_uid of product_uids) {
+        // Authority boundary: Only evershop_live products can be previewed
+        const liveCheck = checkProductLive(product_uid);
+        if (!liveCheck.live) {
+          const ref = generateRefCode();
+          log.warn(
+            {
+              productUid: product_uid,
+              ref,
+              internalReason: liveCheck.reason,
+              syncState: liveCheck.syncState,
+            },
+            "Lot preview blocked: product not available"
+          );
+          return res.status(404).json({
+            error: "NOT_FOUND",
+            message: "One or more items not found",
+            product_uid,
+            ref,
+          });
+        }
+
         const item_uid = inventoryService.getAvailableItemForProduct(product_uid);
         if (!item_uid) {
           return res.status(409).json({
