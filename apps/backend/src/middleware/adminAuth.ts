@@ -17,6 +17,8 @@ const logger = {
   info: (data: object, msg: string) => console.log(`[adminAuth] ${msg}`, JSON.stringify(data)),
 };
 
+let didWarnMissingDisplayToken = false;
+
 /**
  * Extract Bearer token from Authorization header.
  * Returns null if header is missing or malformed.
@@ -166,6 +168,13 @@ export function requireDisplayToken(req: Request, res: Response, next: NextFunct
 
   // If no display token is configured, allow access (for dev/backward compat)
   if (!configuredToken) {
+    if (!didWarnMissingDisplayToken && runtimeConfig.cardmintEnv === "production") {
+      didWarnMissingDisplayToken = true;
+      logger.warn(
+        { env: runtimeConfig.cardmintEnv },
+        "DISPLAY_TOKEN not configured; stock display endpoints are unprotected",
+      );
+    }
     next();
     return;
   }
