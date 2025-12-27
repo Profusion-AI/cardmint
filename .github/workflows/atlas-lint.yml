@@ -15,9 +15,11 @@ name: Atlas Lint
 on:
   pull_request:
     paths:
+      - '.github/workflows/atlas-lint.yml'
       - 'apps/backend/src/db/migrations/**'
       - 'apps/backend/db/atlas/**'
       - 'apps/backend/atlas.hcl'
+      - 'apps/backend/scripts/regenerate-baseline.sh'
 
 jobs:
   atlas-lint:
@@ -41,7 +43,7 @@ jobs:
       - name: Lint migrations
         run: |
           # List migrations changed in this PR
-          CHANGED_MIGRATIONS=$(git diff --name-only origin/main...HEAD -- src/db/migrations/*.sql 2>/dev/null | grep -v "_down" || true)
+          CHANGED_MIGRATIONS=$(git diff --name-only origin/main...HEAD -- src/db/migrations/*.sql 2>/dev/null | grep -v -E "(_down\\.sql|\\.down\\.sql)$" || true)
 
           if [ -z "$CHANGED_MIGRATIONS" ]; then
             echo "No migration files changed in this PR"
@@ -66,7 +68,7 @@ jobs:
           TOUCHED=""
 
           # Find migrations changed in this PR
-          CHANGED_MIGRATIONS=$(git diff --name-only origin/main...HEAD -- src/db/migrations/*.sql 2>/dev/null | grep -v "_down" || true)
+          CHANGED_MIGRATIONS=$(git diff --name-only origin/main...HEAD -- src/db/migrations/*.sql 2>/dev/null | grep -v -E "(_down\\.sql|\\.down\\.sql)$" || true)
 
           if [ -z "$CHANGED_MIGRATIONS" ]; then
             echo "No migration files changed"
@@ -146,63 +148,17 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Setup Atlas
-        uses: ariga/setup-atlas@v0
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: apps/backend/package-lock.json
 
       - name: Check for schema drift
         run: |
-          # Apply migrations to fresh DB and compare to baseline
-          # This catches when migrations don't match the declared schema
-          # BLOCKING GATE: Drift = CI failure
-
-          # Create temp database and apply all migrations
-          TEMP_DB=$(mktemp)
-          FAILED=0
-
-          for migration in $(ls src/db/migrations/*.sql 2>/dev/null | grep -v "_down" | sort); do
-            echo "Applying: $migration"
-            if ! sqlite3 "$TEMP_DB" < "$migration" 2>&1; then
-              echo "::error::Migration failed: $migration"
-              FAILED=1
-            fi
-          done
-
-          if [ "$FAILED" -eq 1 ]; then
-            echo "::error::One or more migrations failed to apply"
-            rm -f "$TEMP_DB"
-            exit 1
-          fi
-
-          # Extract schema from migrated DB using awk state machine filter
-          # This properly handles multi-line FTS triggers and virtual tables
-          MIGRATED_SCHEMA=$(mktemp)
-          sqlite3 "$TEMP_DB" ".schema" | awk '
-            BEGIN { in_trigger = 0; in_fts_virtual = 0; buffer = "" }
-            /^CREATE TRIGGER/ { buffer = $0; in_trigger = 1; next }
-            in_trigger { buffer = buffer "\n" $0; if (/^END;/) { in_trigger = 0; if (buffer !~ /_fts/) print buffer; buffer = "" }; next }
-            /^CREATE VIRTUAL TABLE.*_fts/ { in_fts_virtual = 1; next }
-            in_fts_virtual { if (/;[[:space:]]*$/) in_fts_virtual = 0; next }
-            /^CREATE TABLE schema_migrations/ { while ((getline line) > 0) { if (line ~ /\);[[:space:]]*$/) break }; next }
-            /^CREATE TABLE sqlite_/ { next }
-            !/_fts/ { print }
-          ' > "$MIGRATED_SCHEMA"
-
-          # Compare to baseline (BLOCKING: drift fails CI)
-          BASELINE_FILTERED=$(mktemp)
-          grep -v "^--" db/atlas/schema.sql > "$BASELINE_FILTERED"
-
-          if ! diff <(sort "$MIGRATED_SCHEMA") <(sort "$BASELINE_FILTERED") > /dev/null 2>&1; then
-            echo "::error::DRIFT DETECTED - Migrations do not match baseline"
-            echo ""
-            echo "This blocks CI. Either:"
-            echo "  1. Regenerate baseline: cd apps/backend && ./scripts/regenerate-baseline.sh"
-            echo "  2. Fix migration to produce expected schema"
-            echo ""
-            echo "Diff (baseline vs migrations):"
-            diff <(sort "$MIGRATED_SCHEMA") <(sort "$BASELINE_FILTERED") | head -100
-            rm -f "$TEMP_DB" "$MIGRATED_SCHEMA" "$BASELINE_FILTERED"
-            exit 1
-          fi
-
-          echo "✅ Migrations and baseline are in sync"
-          rm -f "$TEMP_DB" "$MIGRATED_SCHEMA" "$BASELINE_FILTERED"
+          # Drift gate (BLOCKING):
+          # - Build a fresh DB using migrate.ts semantics (same as production)
+          # - Verify the committed baseline matches what migrations produce
+          npm ci
+          ./scripts/regenerate-baseline.sh --check

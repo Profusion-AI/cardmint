@@ -1,10 +1,15 @@
 #!/bin/bash
-# Regenerate Atlas schema baseline from current dev database
+# Regenerate Atlas schema baseline from migrations (deterministic)
 # Owner: Claude Code | Created: 2025-12-26
 #
-# Usage: ./scripts/regenerate-baseline.sh
+# Usage:
+#   ./scripts/regenerate-baseline.sh         # write db/atlas/schema.sql
+#   ./scripts/regenerate-baseline.sh --check # verify db/atlas/schema.sql matches migrations
 #
-# This script extracts the schema from cardmint_dev.db and filters out:
+# This script:
+# 1) Creates a fresh SQLite database
+# 2) Applies ALL migrations via migrate.ts semantics (same as production)
+# 3) Extracts the schema and filters out:
 # - FTS virtual tables and related triggers
 # - schema_migrations table (created by migrate.ts)
 # - SQLite internal tables
@@ -13,13 +18,20 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BACKEND_DIR="$(dirname "$SCRIPT_DIR")"
-DB_PATH="${BACKEND_DIR}/cardmint_dev.db"
 OUTPUT_PATH="${BACKEND_DIR}/db/atlas/schema.sql"
+MODE="write"
 
-if [ ! -f "$DB_PATH" ]; then
-  echo "Error: Database not found at $DB_PATH"
-  exit 1
+if [ "${1:-}" = "--check" ]; then
+  MODE="check"
 fi
+
+TEMP_DB="$(mktemp /tmp/cardmint-atlas-XXXXXX.db)"
+TEMP_SCHEMA="$(mktemp /tmp/cardmint-atlas-schema-XXXXXX.sql)"
+
+cleanup() {
+  rm -f "$TEMP_DB" "$TEMP_SCHEMA"
+}
+trap cleanup EXIT
 
 # Create awk filter script
 AWK_FILTER=$(cat << 'AWKSCRIPT'
@@ -81,10 +93,11 @@ in_fts_virtual {
 AWKSCRIPT
 )
 
-echo "Extracting schema from $DB_PATH..."
+echo "Applying migrations to fresh DB..."
+(cd "$BACKEND_DIR" && SQLITE_DB="$TEMP_DB" CARDMINT_ENV=development npm run -s migrate >/dev/null)
 
 # Generate header
-cat > "$OUTPUT_PATH" << HEADER
+cat > "$TEMP_SCHEMA" << HEADER
 -- CardMint SQLite Schema Baseline
 -- Owner: Claude Code | Generated: 2025-12-26 | Updated: $(date +%Y-%m-%d)
 --
@@ -92,6 +105,9 @@ cat > "$OUTPUT_PATH" << HEADER
 --
 -- REGENERATION COMMAND:
 --   cd apps/backend && ./scripts/regenerate-baseline.sh
+--
+-- DRIFT CHECK:
+--   cd apps/backend && ./scripts/regenerate-baseline.sh --check
 --
 -- EXCLUDED from baseline (intentionally):
 --   - schema_migrations: Created dynamically by migrate.ts
@@ -107,16 +123,12 @@ cat > "$OUTPUT_PATH" << HEADER
 HEADER
 
 # Extract and filter schema
-sqlite3 "$DB_PATH" ".schema" | awk "$AWK_FILTER" >> "$OUTPUT_PATH"
+sqlite3 "$TEMP_DB" ".schema" | awk "$AWK_FILTER" >> "$TEMP_SCHEMA"
 
 # Validate output
 echo "Validating schema..."
-if sqlite3 :memory: < "$OUTPUT_PATH" 2>&1; then
-  echo "✅ Schema baseline updated: $OUTPUT_PATH"
-  echo "   Lines: $(wc -l < "$OUTPUT_PATH")"
-  echo "   Tables: $(grep -c "CREATE TABLE" "$OUTPUT_PATH")"
-  echo "   Indexes: $(grep -c "CREATE INDEX" "$OUTPUT_PATH")"
-  echo "   Triggers: $(grep -c "CREATE TRIGGER" "$OUTPUT_PATH")"
+if sqlite3 :memory: < "$TEMP_SCHEMA" 2>&1; then
+  echo "✅ Schema is valid SQLite"
 else
   echo "❌ Schema validation failed!"
   exit 1
@@ -126,7 +138,7 @@ fi
 echo ""
 echo "Verifying protected columns..."
 for col in evershop_sync_state sync_version evershop_uuid public_sku evershop_product_id; do
-  if grep -q "$col" "$OUTPUT_PATH"; then
+  if grep -q "$col" "$TEMP_SCHEMA"; then
     echo "  ✅ $col"
   else
     echo "  ❌ $col MISSING - CRITICAL ERROR"
@@ -134,5 +146,38 @@ for col in evershop_sync_state sync_version evershop_uuid public_sku evershop_pr
   fi
 done
 
+echo ""
+
+if [ "$MODE" = "check" ]; then
+  if [ ! -f "$OUTPUT_PATH" ]; then
+    echo "❌ Baseline file not found: $OUTPUT_PATH"
+    exit 1
+  fi
+
+  BASELINE_FILTERED="$(mktemp /tmp/cardmint-atlas-baseline-filtered-XXXXXX.sql)"
+  MIGRATED_FILTERED="$(mktemp /tmp/cardmint-atlas-migrated-filtered-XXXXXX.sql)"
+  trap 'rm -f "$TEMP_DB" "$TEMP_SCHEMA" "$BASELINE_FILTERED" "$MIGRATED_FILTERED"' EXIT
+
+  grep -v '^--' "$OUTPUT_PATH" | sed '/^[[:space:]]*$/d' > "$BASELINE_FILTERED"
+  grep -v '^--' "$TEMP_SCHEMA" | sed '/^[[:space:]]*$/d' > "$MIGRATED_FILTERED"
+
+  if diff -u "$MIGRATED_FILTERED" "$BASELINE_FILTERED" >/dev/null 2>&1; then
+    echo "✅ Atlas baseline matches migrations (no drift)"
+    exit 0
+  fi
+
+  echo "❌ DRIFT DETECTED: baseline does not match migrations"
+  echo ""
+  echo "To fix:"
+  echo "  cd apps/backend && ./scripts/regenerate-baseline.sh"
+  exit 1
+fi
+
+mv "$TEMP_SCHEMA" "$OUTPUT_PATH"
+echo "✅ Schema baseline updated: $OUTPUT_PATH"
+echo "   Lines: $(wc -l < "$OUTPUT_PATH")"
+echo "   Tables: $(grep -c 'CREATE TABLE' "$OUTPUT_PATH")"
+echo "   Indexes: $(grep -c 'CREATE INDEX' "$OUTPUT_PATH")"
+echo "   Triggers: $(grep -c 'CREATE TRIGGER' "$OUTPUT_PATH")"
 echo ""
 echo "Done! Commit the updated schema.sql with your migration."
