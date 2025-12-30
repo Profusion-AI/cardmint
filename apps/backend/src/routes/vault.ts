@@ -227,7 +227,7 @@ export function registerVaultRoutes(app: Express, ctx: AppContext): void {
         stock: row.total_quantity,
         availableStock: row.available_quantity,
         frontImage: applyImageKitTransform(row.cdn_image_url),
-        backImage: row.cdn_back_image_url,
+        backImage: row.cdn_back_image_url ? applyImageKitTransform(row.cdn_back_image_url) : null,
         slug: row.product_slug ?? row.product_uid,
         variantTags: row.variant_tags ? (() => {
           try {
