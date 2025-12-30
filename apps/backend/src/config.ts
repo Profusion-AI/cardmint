@@ -1,5 +1,7 @@
 import { config as loadEnv } from "dotenv";
 import { z } from "zod";
+import Database from "better-sqlite3";
+import fs from "node:fs";
 import path from "path";
 import { fileURLToPath } from "url";
 
@@ -208,6 +210,40 @@ const envSchema = z.object({
 });
 
 const parsed = envSchema.parse(process.env);
+
+// Production guardrail: SQLITE_DB must be explicitly set (no silent defaults),
+// and must point at a non-empty, initialized schema.
+if (parsed.CARDMINT_ENV === "production") {
+  const sqliteFromEnv = process.env.SQLITE_DB?.trim() ?? "";
+  if (!sqliteFromEnv) {
+    throw new Error("[config] SQLITE_DB must be explicitly set when CARDMINT_ENV=production");
+  }
+
+  const resolvedPath = path.resolve(process.cwd(), sqliteFromEnv);
+  if (!fs.existsSync(resolvedPath)) {
+    throw new Error(`[config] SQLITE_DB points to missing file: ${resolvedPath}`);
+  }
+
+  const stat = fs.statSync(resolvedPath);
+  if (!stat.isFile()) {
+    throw new Error(`[config] SQLITE_DB must point to a file: ${resolvedPath}`);
+  }
+
+  const db = new Database(resolvedPath, { readonly: true, fileMustExist: true });
+  try {
+    const row = db
+      .prepare(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('products','scans') LIMIT 1",
+      )
+      .get() as { name: string } | undefined;
+
+    if (!row) {
+      throw new Error(`[config] SQLITE_DB exists but appears empty/uninitialized: ${resolvedPath}`);
+    }
+  } finally {
+    db.close();
+  }
+}
 
 const capturePiBaseUrl =
   parsed.CAPTURE_PI_BASEURL?.trim() ||

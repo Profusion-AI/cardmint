@@ -91,7 +91,7 @@ const runMigrations = () => {
   const files = fs
     .readdirSync(migrationsDir)
     .filter((file) => file.endsWith(".sql"))
-    .filter((file) => !file.includes("_down") && !file.includes(".down"))
+    .filter((file) => !file.endsWith("_down.sql") && !file.endsWith(".down.sql"))
     .sort();
 
   for (const file of files) {

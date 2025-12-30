@@ -2,15 +2,15 @@
  * Fulfillment Routes - Operator endpoints for shipping label generation
  *
  * **SECURITY:** All endpoints require Basic Auth (operator-only).
- * Mounted at /api/admin/fulfillment/* (not /api/fulfillment).
+ * Mounted at /api/cm-admin/fulfillment/* (not /api/fulfillment).
  *
- * POST /api/admin/fulfillment/:sessionId/rates           - Get EasyPost rates for an order
- * POST /api/admin/fulfillment/:sessionId/label           - Purchase shipping label
- * PATCH /api/admin/fulfillment/:sessionId/status         - Update fulfillment status
- * POST /api/admin/fulfillment/:sessionId/review          - Complete manual review
- * POST /api/admin/fulfillment/:sessionId/resend-tracking - Resend tracking email (PR3)
- * GET /api/admin/fulfillment/:sessionId                  - Get fulfillment details
- * GET /api/admin/fulfillment                             - List pending fulfillments
+ * POST /api/cm-admin/fulfillment/:sessionId/rates           - Get EasyPost rates for an order
+ * POST /api/cm-admin/fulfillment/:sessionId/label           - Purchase shipping label
+ * PATCH /api/cm-admin/fulfillment/:sessionId/status         - Update fulfillment status
+ * POST /api/cm-admin/fulfillment/:sessionId/review          - Complete manual review
+ * POST /api/cm-admin/fulfillment/:sessionId/resend-tracking - Resend tracking email (PR3)
+ * GET /api/cm-admin/fulfillment/:sessionId                  - Get fulfillment details
+ * GET /api/cm-admin/fulfillment                             - List pending fulfillments
  *
  * Guardrails (per Kyle's requirements):
  * - Auth required: All handlers require Basic Auth (operator identity)
@@ -103,14 +103,14 @@ function extractClientIp(
 
 /**
  * Register fulfillment routes on the Express app
- * All routes mounted under /api/admin/fulfillment (operator-only)
+ * All routes mounted under /api/cm-admin/fulfillment (operator-only)
  */
 export function registerFulfillmentRoutes(app: Express, ctx: AppContext): void {
   const router = Router();
   const { db, logger, stripeService, easyPostService, emailOutboxRepo } = ctx;
 
-  // Mount at /api/admin/fulfillment/* (NOT /api/fulfillment - that would be public)
-  app.use("/api/admin/fulfillment", router);
+  // Mount at /api/cm-admin/fulfillment/* (NOT /api/fulfillment - that would be public)
+  app.use("/api/cm-admin/fulfillment", router);
 
   /**
    * Auth middleware applied to all routes
@@ -146,7 +146,7 @@ export function registerFulfillmentRoutes(app: Express, ctx: AppContext): void {
   });
 
   /**
-   * GET /api/admin/fulfillment
+   * GET /api/cm-admin/fulfillment
    * List fulfillments with optional status filter
    */
   router.get("/", (req: Request, res: Response) => {
@@ -198,7 +198,7 @@ export function registerFulfillmentRoutes(app: Express, ctx: AppContext): void {
   });
 
   /**
-   * GET /api/admin/fulfillment/:sessionId
+   * GET /api/cm-admin/fulfillment/:sessionId
    * Get fulfillment details (without shipping address - PII protection)
    */
   router.get("/:sessionId", (req: Request, res: Response) => {
@@ -233,7 +233,7 @@ export function registerFulfillmentRoutes(app: Express, ctx: AppContext): void {
   });
 
   /**
-   * POST /api/admin/fulfillment/:sessionId/rates
+   * POST /api/cm-admin/fulfillment/:sessionId/rates
    * Get EasyPost shipping rates for an order
    *
    * Fetches shipping address from Stripe (not persisted).
@@ -364,7 +364,7 @@ export function registerFulfillmentRoutes(app: Express, ctx: AppContext): void {
   });
 
   /**
-   * POST /api/admin/fulfillment/:sessionId/label
+   * POST /api/cm-admin/fulfillment/:sessionId/label
    * Purchase a shipping label
    *
    * Guardrails:
@@ -563,7 +563,7 @@ export function registerFulfillmentRoutes(app: Express, ctx: AppContext): void {
   });
 
   /**
-   * PATCH /api/admin/fulfillment/:sessionId/status
+   * PATCH /api/cm-admin/fulfillment/:sessionId/status
    * Update fulfillment status (for operator workflow)
    */
   router.patch("/:sessionId/status", (req: Request, res: Response) => {
@@ -647,7 +647,7 @@ export function registerFulfillmentRoutes(app: Express, ctx: AppContext): void {
   });
 
   /**
-   * POST /api/admin/fulfillment/:sessionId/review
+   * POST /api/cm-admin/fulfillment/:sessionId/review
    * Complete manual review for high-value orders
    */
   router.post("/:sessionId/review", (req: Request, res: Response) => {
@@ -715,7 +715,7 @@ export function registerFulfillmentRoutes(app: Express, ctx: AppContext): void {
   });
 
   /**
-   * POST /api/admin/fulfillment/:sessionId/resend-tracking
+   * POST /api/cm-admin/fulfillment/:sessionId/resend-tracking
    * Manually resend or enqueue tracking email
    *
    * PR3: Status-based behavior:

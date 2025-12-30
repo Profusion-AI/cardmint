@@ -6,7 +6,8 @@ import { Filter } from '@components/admin/grid/Filter';
 import { DummyColumnHeader } from '@components/admin/grid/header/Dummy';
 import { SortableHeader } from '@components/admin/grid/header/Sortable';
 import { Pagination } from '@components/admin/grid/Pagination';
-import { Thumbnail } from '@components/admin/grid/Thumbnail.js';
+// NOTE: We don't import Thumbnail - EverShop's Image component proxies external URLs
+// through /images endpoint which can't handle ImageKit CDN URLs
 import { Status } from '@components/admin/Status.js';
 import Area from '@components/common/Area';
 import { Form } from '@components/common/form/Form.js';
@@ -16,6 +17,79 @@ import axios from 'axios';
 import PropTypes from 'prop-types';
 import React, { useState } from 'react';
 import { ProductNameRow } from './rows/ProductName.js';
+
+/**
+ * Apply ImageKit thumbnail transform for admin grid thumbnails.
+ * Uses tr:w-80,h-80,fo-auto for 80x80 thumbnails with smart cropping.
+ * Bypasses EverShop's /images proxy which can't handle external CDN URLs.
+ */
+function applyImageKitThumbnailTransform(url) {
+    if (!url || !url.includes('imagekit.io')) {
+        return url;
+    }
+    try {
+        const parsed = new URL(url);
+        const segments = parsed.pathname.split('/');
+        const firstSegmentIndex = segments.findIndex((s) => s.length > 0);
+        if (firstSegmentIndex === -1) return url;
+
+        const transformSegment = 'tr:w-80,h-80,fo-auto';
+        const insertIndex = firstSegmentIndex + 1;
+        const existing = segments[insertIndex];
+
+        if (existing?.startsWith('tr:')) {
+            segments[insertIndex] = transformSegment;
+        } else {
+            segments.splice(insertIndex, 0, transformSegment);
+        }
+
+        parsed.pathname = segments.join('/');
+        return parsed.toString();
+    } catch {
+        return url;
+    }
+}
+
+/**
+ * CardMint Thumbnail - renders ImageKit CDN images directly without EverShop proxy.
+ * Uses native ImageKit URL transforms for efficient 80x80 thumbnails.
+ */
+function CardMintThumbnail({ src, name }) {
+    const thumbnailUrl = applyImageKitThumbnailTransform(src);
+    return (
+        React.createElement("td", null,
+            React.createElement("div", {
+                className: "grid-thumbnail text-border border border-divider p-2 rounded flex justify-center",
+                style: { width: '4rem', height: '4rem' }
+            },
+                thumbnailUrl ? (
+                    React.createElement("img", {
+                        className: "self-center",
+                        src: thumbnailUrl,
+                        alt: name || '',
+                        style: { maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }
+                    })
+                ) : (
+                    React.createElement("svg", {
+                        className: "self-center",
+                        xmlns: "http://www.w3.org/2000/svg",
+                        width: "2rem",
+                        fill: "none",
+                        viewBox: "0 0 24 24",
+                        stroke: "currentColor"
+                    },
+                        React.createElement("path", {
+                            strokeLinecap: "round",
+                            strokeLinejoin: "round",
+                            strokeWidth: 2,
+                            d: "M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"
+                        })
+                    )
+                )
+            )
+        )
+    );
+}
 
 function Actions({ products = [], selectedIds = [] }) {
     const { openAlert, closeAlert } = useAlertContext();
@@ -308,7 +382,7 @@ export default function ProductGrid({ products: { items: products, total, curren
                                 component: {
                                     default: () => {
                                         var _a;
-                                        return (React.createElement(Thumbnail, { src: (_a = p.image) === null || _a === void 0 ? void 0 : _a.url, name: p.name }));
+                                        return (React.createElement(CardMintThumbnail, { src: (_a = p.image) === null || _a === void 0 ? void 0 : _a.url, name: p.name }));
                                     }
                                 },
                                 sortOrder: 5

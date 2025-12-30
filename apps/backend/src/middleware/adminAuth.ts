@@ -6,7 +6,7 @@
  *
  * Usage:
  *   import { requireAdminAuth } from "../middleware/adminAuth";
- *   app.post("/api/admin/...", requireAdminAuth, handler);
+ *   app.post("/api/cm-admin/...", requireAdminAuth, handler);
  */
 
 import type { Request, Response, NextFunction } from "express";
@@ -16,6 +16,8 @@ const logger = {
   warn: (data: object, msg: string) => console.warn(`[adminAuth] ${msg}`, JSON.stringify(data)),
   info: (data: object, msg: string) => console.log(`[adminAuth] ${msg}`, JSON.stringify(data)),
 };
+
+let didWarnMissingDisplayToken = false;
 
 /**
  * Extract Bearer token from Authorization header.
@@ -166,6 +168,13 @@ export function requireDisplayToken(req: Request, res: Response, next: NextFunct
 
   // If no display token is configured, allow access (for dev/backward compat)
   if (!configuredToken) {
+    if (!didWarnMissingDisplayToken && runtimeConfig.cardmintEnv === "production") {
+      didWarnMissingDisplayToken = true;
+      logger.warn(
+        { env: runtimeConfig.cardmintEnv },
+        "DISPLAY_TOKEN not configured; stock display endpoints are unprotected",
+      );
+    }
     next();
     return;
   }

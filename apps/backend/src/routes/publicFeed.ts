@@ -45,7 +45,8 @@ export function registerPublicFeedRoutes(app: Express, ctx: AppContext): void {
     }
 
     try {
-      // Select products that are currently in stock
+      // Select products that are currently in stock AND published in EverShop
+      // Authority boundary: Only evershop_live products appear in public feeds
       const rows = db
         .prepare(
           `SELECT product_uid, listing_sku, product_sku, card_name, set_name, collector_no,
@@ -54,7 +55,8 @@ export function registerPublicFeedRoutes(app: Express, ctx: AppContext): void {
                   /* pricing fields may not exist in older DBs; guard with COALESCE */
                   COALESCE(pricing_status, 'missing') AS pricing_status
            FROM products
-           WHERE total_quantity > 0`
+           WHERE total_quantity > 0
+             AND evershop_sync_state = 'evershop_live'`
         )
         .all() as Array<{
           product_uid: string;

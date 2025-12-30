@@ -7,6 +7,7 @@
 
 import express, { type Express, type Request, type Response } from "express";
 import type { AppContext } from "./context";
+import { runtimeConfig } from "../config";
 
 // Route registrars
 import { registerMasterSetRoutes } from "../routes/masterSets";
@@ -57,28 +58,31 @@ export function createApp(ctx: AppContext): Express {
     return express.json({ limit: "5mb" })(req, res, next);
   });
 
-  // CORS middleware for dev environment (allow frontend on 5173)
-  app.use((req: Request, res: Response, next) => {
-    const allowedOrigins = new Set([
-      "http://127.0.0.1:5173",
-      "http://localhost:5173",
-    ]);
-    const origin = req.headers.origin as string | undefined;
-    if (origin && allowedOrigins.has(origin)) {
-      res.header("Access-Control-Allow-Origin", origin);
-    } else {
-      res.header("Access-Control-Allow-Origin", "http://127.0.0.1:5173");
-    }
-    res.header("Access-Control-Allow-Methods", "GET, POST, PATCH, PUT, DELETE, OPTIONS");
-    res.header("Access-Control-Allow-Headers", "Content-Type, Authorization");
-    res.header("Access-Control-Allow-Credentials", "true");
+  // CORS middleware for dev environment only (nginx handles CORS in production)
+  // In production, skip this middleware to avoid duplicate Access-Control-Allow-Origin headers
+  if (runtimeConfig.cardmintEnv !== "production") {
+    app.use((req: Request, res: Response, next) => {
+      const allowedOrigins = new Set([
+        "http://127.0.0.1:5173",
+        "http://localhost:5173",
+      ]);
+      const origin = req.headers.origin as string | undefined;
+      if (origin && allowedOrigins.has(origin)) {
+        res.header("Access-Control-Allow-Origin", origin);
+      } else {
+        res.header("Access-Control-Allow-Origin", "http://127.0.0.1:5173");
+      }
+      res.header("Access-Control-Allow-Methods", "GET, POST, PATCH, PUT, DELETE, OPTIONS");
+      res.header("Access-Control-Allow-Headers", "Content-Type, Authorization");
+      res.header("Access-Control-Allow-Credentials", "true");
 
-    if (req.method === "OPTIONS") {
-      return res.sendStatus(200);
-    }
+      if (req.method === "OPTIONS") {
+        return res.sendStatus(200);
+      }
 
-    next();
-  });
+      next();
+    });
+  }
 
   // Robots guardrails: keep /api/* dark to crawlers
   app.use("/api", (_req: Request, res: Response, next) => {

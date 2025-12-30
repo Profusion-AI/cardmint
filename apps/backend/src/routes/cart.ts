@@ -43,6 +43,24 @@ interface CartValidateRequest {
 interface ReserveFailure {
   product_uid: string;
   reason: "UNAVAILABLE" | "MAX_ITEMS_EXCEEDED" | "RATE_LIMITED" | "ALREADY_RESERVED";
+  /** Short reference code for support escalation (e.g., "CRT-ABC123") */
+  ref?: string;
+}
+
+/** Internal reason codes for unavailability (not exposed to user) */
+type UnavailableReason = "NOT_FOUND" | "NOT_LIVE" | "NO_STOCK" | "RACE_CONDITION";
+
+/**
+ * Generate a short reference code for support escalation.
+ * Format: CRT-XXXXXX (6 alphanumeric chars)
+ */
+function generateRefCode(): string {
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // Exclude ambiguous: 0,O,1,I
+  let code = "";
+  for (let i = 0; i < 6; i++) {
+    code += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return `CRT-${code}`;
 }
 
 /**
@@ -93,6 +111,31 @@ export function registerCartRoutes(app: Express, ctx: AppContext): void {
   const maxItemsPerSession = runtimeConfig.cartMaxItemsPerSession;
   const maxExtensionWindowSeconds = runtimeConfig.cartMaxExtensionWindowMinutes * 60;
   const rateLimitRpm = runtimeConfig.cartReserveRateLimitRpm;
+
+  /**
+   * Authority boundary check: Verify product exists and is published in EverShop.
+   * Returns { live: true } if product can be added to cart.
+   * Returns { live: false, reason, syncState } for logging/debugging.
+   */
+  function checkProductLive(productUid: string): {
+    live: boolean;
+    reason?: UnavailableReason;
+    syncState?: string | null;
+  } {
+    const row = db
+      .prepare("SELECT evershop_sync_state FROM products WHERE product_uid = ?")
+      .get(productUid) as { evershop_sync_state: string | null } | undefined;
+
+    if (!row) {
+      return { live: false, reason: "NOT_FOUND", syncState: null };
+    }
+
+    if (row.evershop_sync_state !== "evershop_live") {
+      return { live: false, reason: "NOT_LIVE", syncState: row.evershop_sync_state };
+    }
+
+    return { live: true };
+  }
 
   /**
    * POST /api/cart/reserve
@@ -154,6 +197,25 @@ export function registerCartRoutes(app: Express, ctx: AppContext): void {
       for (const productUid of productUids) {
         if (reserved.length >= availableSlots) {
           failed.push({ product_uid: productUid, reason: "MAX_ITEMS_EXCEEDED" });
+          continue;
+        }
+
+        // Authority boundary: Only evershop_live products can be added to cart
+        // Non-live products appear as UNAVAILABLE (don't leak existence)
+        const liveCheck = checkProductLive(productUid);
+        if (!liveCheck.live) {
+          const ref = generateRefCode();
+          log.warn(
+            {
+              productUid,
+              cartSessionId,
+              ref,
+              internalReason: liveCheck.reason,
+              syncState: liveCheck.syncState,
+            },
+            "Cart reserve blocked: product not available for purchase"
+          );
+          failed.push({ product_uid: productUid, reason: "UNAVAILABLE", ref });
           continue;
         }
 
@@ -283,6 +345,22 @@ export function registerCartRoutes(app: Express, ctx: AppContext): void {
       const unavailable: string[] = [];
 
       for (const productUid of productUids) {
+        // Authority boundary: Non-live products are unavailable
+        const liveCheck = checkProductLive(productUid);
+        if (!liveCheck.live) {
+          log.debug(
+            {
+              productUid,
+              cartSessionId,
+              internalReason: liveCheck.reason,
+              syncState: liveCheck.syncState,
+            },
+            "Cart validate: product no longer available"
+          );
+          unavailable.push(productUid);
+          continue;
+        }
+
         const item = inventoryService.getReservedItemForProduct(productUid, cartSessionId);
 
         if (!item) {
