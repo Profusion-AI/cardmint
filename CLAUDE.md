@@ -103,6 +103,7 @@ Retrieve these only when the specific task requires them:
 | Fulfillment & EasyPost | `apps/backend/src/routes/fulfillment.ts`, `apps/backend/src/services/easyPostService.ts` |
 | **Security middleware** | `apps/backend/src/middleware/adminAuth.ts` — Bearer auth, internal access, display token |
 | **First sale milestone** | `docs/milestones/2025-12-23-first-production-sale.md` |
+| **iPhone pipeline (isolated)** | `iPhone/readme/README.md` — TCGPlayer-only, no CardMint imports |
 
 > **Deployment rule:** Before any `ssh`, `rsync`, or prod file edit, re-read `docs/DO-verified-access.md` for current SSH credentials, paths, and safety protocols.
 
@@ -118,7 +119,24 @@ Retrieve these only when the specific task requires them:
 
 <!-- Update this section as work progresses. Claude: write notes here to maintain state across turns. -->
 
-**Active focus:** Fulfillment E2E testing + ESP32 firmware update
+**Active focus:** iPhone TCGPlayer listing pipeline (isolated)
+
+**Isolation Notice (2025-12-29):** Working with isolated processes/scripts in `/iPhone/` directory. This pipeline is **completely separate** from the primary CardMint workflow:
+- **Purpose:** TCGPlayer.com listings only (NOT CardMintShop.com)
+- **No imports** from `apps/backend/` or main `scripts/`
+- **No database interaction** (SQLite, Postgres, or any external APIs)
+- **No Operator Workbench** or Pi5 camera lane processing
+- Architecture patterns may be copied from CardMint, but executions must remain isolated
+
+**iPhone Scripts:**
+| Script | Purpose |
+|--------|---------|
+| `create_master_crop.py` | Corner detection, perspective transform → 1432×2048 master |
+| `card_detection.py` | Yellow border HSV detection (dependency) |
+| `iphone_listing_asset.py` | Resize + CLAHE + AWB (simplified) |
+| `iphone_batch_crop.py` | Batch processor with subprocess isolation |
+
+**Front/Back Convention:** Odd IMG# = Front, Even IMG# = Back
 
 **Blockers:** _None identified_
 

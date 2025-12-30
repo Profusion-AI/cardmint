@@ -1,0 +1,34 @@
+# CardMint CODEOWNERS
+# These owners will be requested for review when changes touch these paths
+# Docs: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+# Default owner for everything
+* @Profusion-AI
+
+# Production-critical paths require explicit review
+# Stripe/checkout/payment handling
+apps/backend/src/routes/stripe.ts @Profusion-AI
+apps/backend/src/routes/checkout.ts @Profusion-AI
+
+# Fulfillment and order processing
+apps/backend/src/routes/fulfillment.ts @Profusion-AI
+apps/backend/src/services/emailOutboxWorker.ts @Profusion-AI
+apps/backend/src/services/easyPostService.ts @Profusion-AI
+
+# Database migrations (schema changes)
+apps/backend/src/db/migrations/ @Profusion-AI
+
+# Authentication and security middleware
+apps/backend/src/middleware/adminAuth.ts @Profusion-AI
+apps/backend/src/middleware/ @Profusion-AI
+
+# Inventory and sync services
+apps/backend/src/services/inventory/ @Profusion-AI
+apps/backend/src/services/pricing/ @Profusion-AI
+
+# CI/CD workflows
+.github/workflows/ @Profusion-AI
+
+# Atlas configuration
+apps/backend/atlas.hcl @Profusion-AI
+apps/backend/db/atlas/ @Profusion-AI
