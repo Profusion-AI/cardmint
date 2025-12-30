@@ -11,6 +11,7 @@ import { applyImageKitTransform } from "../utils/imageKit";
 
 type ProductRow = {
   cdn_image_url: string | null;
+  cdn_back_image_url: string | null;
   evershop_sync_state?: string | null;
   [key: string]: unknown;
 };
@@ -131,6 +132,9 @@ export function registerProductRoutes(app: Express, ctx: AppContext): void {
       // Apply standard ImageKit sharpen/retouch transform for front image
       if (product.cdn_image_url) {
         product.cdn_image_url = applyImageKitTransform(product.cdn_image_url);
+      }
+      if (product.cdn_back_image_url) {
+        product.cdn_back_image_url = applyImageKitTransform(product.cdn_back_image_url);
       }
 
       // Return product data
