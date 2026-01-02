@@ -1,10 +1,5 @@
 import { posthogProxy } from "../../services/PostHogProxyService.js";
-
-function getDistinctId(data) {
-  if (data.customer_email) return `customer:${data.customer_email}`;
-  if (data.visitor_id) return `visitor:${data.visitor_id}`;
-  return null;
-}
+import { getDistinctId } from "../../services/hashDistinctId.js";
 
 export default async function trackCartEvent(data) {
   const distinctId = getDistinctId(data);
