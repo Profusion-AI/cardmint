@@ -7,7 +7,8 @@
   "workspaces": [
     "cardmint_admin_theme",
     "cardmint_sync",
-    "cardmint_analytics"
+    "cardmint_analytics",
+    "cardmint_fulfillment"
   ],
   "scripts": {
     "build": "npm run build --workspaces --if-present",

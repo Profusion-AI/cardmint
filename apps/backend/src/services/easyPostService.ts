@@ -111,6 +111,17 @@ export interface CreateShipmentResult {
   errorCode?: string;
 }
 
+/**
+ * Result from marketplace shipment creation (Phase 4)
+ */
+export interface CreateMarketplaceShipmentResult {
+  success: boolean;
+  shipment?: EasyPostShipment;
+  rates?: EasyPostRate[]; // All USPS + UPS rates for operator selection
+  error?: string;
+  errorCode?: string;
+}
+
 export interface PurchaseLabelResult {
   success: boolean;
   shipment?: EasyPostShipment;
@@ -308,7 +319,7 @@ export class EasyPostService {
         success: true,
         shipment: existingShipment,
         trackingNumber: existingShipment.tracking_code,
-        labelUrl: existingShipment.postage_label.label_url,
+        labelUrl: existingShipment.postage_label.label_pdf_url || existingShipment.postage_label.label_url,
         carrier: existingShipment.selected_rate?.carrier,
         service: existingShipment.selected_rate?.service,
         alreadyPurchased: true,
@@ -374,13 +385,192 @@ export class EasyPostService {
         success: true,
         shipment,
         trackingNumber: shipment.tracking_code ?? undefined,
-        labelUrl: shipment.postage_label?.label_url,
+        labelUrl: shipment.postage_label?.label_pdf_url || shipment.postage_label?.label_url,
         carrier: shipment.selected_rate?.carrier,
         service: shipment.selected_rate?.service,
         alreadyPurchased: false,
       };
     } catch (err) {
       this.logger.error({ err, shipmentId, rateId }, "EasyPost purchaseLabel exception");
+      return {
+        success: false,
+        error: err instanceof Error ? err.message : "Unknown error",
+        errorCode: "EASYPOST_REQUEST_FAILED",
+      };
+    }
+  }
+
+  /**
+   * Create a marketplace shipment and get rates (Phase 4).
+   *
+   * Unlike createShipment(), this:
+   * - Uses CardMint parcel presets (from config.ts) instead of per-card calculation
+   * - Returns ALL USPS + UPS rates (operator chooses, not system)
+   * - Supports insurance for orders >= $50
+   *
+   * @param toAddress - Customer shipping address (decrypted at call time)
+   * @param parcel - Parcel dimensions and weight (from preset or custom)
+   * @param insuranceAmount - Insurance coverage in dollars (0 for no insurance)
+   */
+  async createMarketplaceShipment(
+    toAddress: EasyPostAddress,
+    parcel: EasyPostParcel,
+    insuranceAmount: number = 0
+  ): Promise<CreateMarketplaceShipmentResult> {
+    if (!this.isConfigured()) {
+      const status = this.getConfigStatus();
+      return {
+        success: false,
+        error: `EasyPost not configured. Missing: ${status.missing.join(", ")}`,
+        errorCode: "EASYPOST_NOT_CONFIGURED",
+      };
+    }
+
+    try {
+      // Build shipment options with insurance if needed
+      const shipmentOptions: Record<string, unknown> = {};
+      if (insuranceAmount > 0) {
+        shipmentOptions.insurance = insuranceAmount;
+      }
+
+      const requestBody: Record<string, unknown> = {
+        shipment: {
+          to_address: toAddress,
+          from_address: this.fromAddress,
+          parcel,
+          ...(Object.keys(shipmentOptions).length > 0 && { options: shipmentOptions }),
+        },
+      };
+
+      const response = await this.apiRequest<EasyPostShipment>("POST", "/shipments", requestBody);
+
+      if ("error" in response) {
+        const err = response as EasyPostError;
+        this.logger.error({ err: err.error }, "EasyPost createMarketplaceShipment failed");
+        return {
+          success: false,
+          error: err.error.message,
+          errorCode: err.error.code,
+        };
+      }
+
+      const shipment = response as EasyPostShipment;
+
+      // Filter to USPS + UPS rates only (per spec: "USPS first, UPS fallback")
+      const allowedCarriers = ["USPS", "UPS"];
+      const rates = shipment.rates
+        .filter((rate) => allowedCarriers.includes(rate.carrier))
+        .sort((a, b) => {
+          // Sort: USPS first, then by price
+          if (a.carrier !== b.carrier) {
+            return a.carrier === "USPS" ? -1 : 1;
+          }
+          return parseFloat(a.rate) - parseFloat(b.rate);
+        });
+
+      this.logger.info(
+        {
+          shipmentId: shipment.id,
+          mode: shipment.mode,
+          totalRates: shipment.rates.length,
+          filteredRates: rates.length,
+          hasInsurance: insuranceAmount > 0,
+          insuranceAmount,
+        },
+        "EasyPost marketplace shipment created"
+      );
+
+      return {
+        success: true,
+        shipment,
+        rates,
+      };
+    } catch (err) {
+      this.logger.error({ err }, "EasyPost createMarketplaceShipment exception");
+      return {
+        success: false,
+        error: err instanceof Error ? err.message : "Unknown error",
+        errorCode: "EASYPOST_REQUEST_FAILED",
+      };
+    }
+  }
+
+  /**
+   * Purchase a label for a marketplace shipment (Phase 4).
+   * This is a simpler version of purchaseLabel() without method validation.
+   * The operator has already chosen the rate, so we just buy it.
+   *
+   * @param shipmentId - EasyPost shipment ID
+   * @param rateId - EasyPost rate ID chosen by operator
+   */
+  async purchaseMarketplaceLabel(
+    shipmentId: string,
+    rateId: string
+  ): Promise<PurchaseLabelResult> {
+    // Idempotency check: get current shipment status
+    const existingShipment = await this.getShipment(shipmentId);
+
+    if (existingShipment?.postage_label && existingShipment.tracking_code) {
+      this.logger.info(
+        {
+          shipmentId,
+          trackingNumber: existingShipment.tracking_code,
+        },
+        "Marketplace label already purchased (idempotent return)"
+      );
+
+      return {
+        success: true,
+        shipment: existingShipment,
+        trackingNumber: existingShipment.tracking_code,
+        labelUrl: existingShipment.postage_label.label_pdf_url || existingShipment.postage_label.label_url,
+        carrier: existingShipment.selected_rate?.carrier,
+        service: existingShipment.selected_rate?.service,
+        alreadyPurchased: true,
+      };
+    }
+
+    try {
+      const response = await this.apiRequest<EasyPostShipment>(
+        "POST",
+        `/shipments/${shipmentId}/buy`,
+        { rate: { id: rateId } }
+      );
+
+      if ("error" in response) {
+        const err = response as EasyPostError;
+        this.logger.error({ err: err.error, shipmentId, rateId }, "EasyPost purchaseMarketplaceLabel failed");
+        return {
+          success: false,
+          error: err.error.message,
+          errorCode: err.error.code,
+        };
+      }
+
+      const shipment = response as EasyPostShipment;
+
+      this.logger.info(
+        {
+          shipmentId: shipment.id,
+          trackingNumber: shipment.tracking_code,
+          carrier: shipment.selected_rate?.carrier,
+          service: shipment.selected_rate?.service,
+          rate: shipment.selected_rate?.rate,
+        },
+        "EasyPost marketplace label purchased"
+      );
+
+      return {
+        success: true,
+        shipment,
+        trackingNumber: shipment.tracking_code ?? undefined,
+        labelUrl: shipment.postage_label?.label_pdf_url || shipment.postage_label?.label_url,
+        carrier: shipment.selected_rate?.carrier,
+        service: shipment.selected_rate?.service,
+        alreadyPurchased: false,
+      };
+    } catch (err) {
+      this.logger.error({ err, shipmentId, rateId }, "EasyPost purchaseMarketplaceLabel exception");
       return {
         success: false,
         error: err instanceof Error ? err.message : "Unknown error",

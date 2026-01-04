@@ -12,6 +12,11 @@ services:
       - DB_USER=${EVERSHOP_DB_USER:-evershop}
       - DB_PASSWORD=${EVERSHOP_DB_PASSWORD:?EVERSHOP_DB_PASSWORD required}
       - DB_NAME=${EVERSHOP_DB_NAME:-evershop}
+      # CardMint backend proxy (for cardmint_fulfillment extension)
+      # CARDMINT_ADMIN_API_KEY must match the same key set in CardMint backend
+      - CARDMINT_BACKEND_URL=${CARDMINT_BACKEND_URL:?CARDMINT_BACKEND_URL required}
+      - CARDMINT_ADMIN_API_KEY=${CARDMINT_ADMIN_API_KEY:?CARDMINT_ADMIN_API_KEY required}
+      - CARDMINT_PROXY_OPERATOR=${CARDMINT_PROXY_OPERATOR:-evershop}
     restart: unless-stopped
     networks:
       - myevershop

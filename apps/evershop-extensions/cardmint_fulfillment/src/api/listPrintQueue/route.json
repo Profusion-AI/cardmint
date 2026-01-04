@@ -1,0 +1,6 @@
+{
+  "methods": ["GET"],
+  "path": "/admin/api/fulfillment/print-queue",
+  "access": "private"
+}
+

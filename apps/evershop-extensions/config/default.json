@@ -18,6 +18,11 @@
         "name": "cardmint_analytics",
         "resolve": "extensions/cardmint_analytics",
         "enabled": true
+      },
+      {
+        "name": "cardmint_fulfillment",
+        "resolve": "extensions/cardmint_fulfillment",
+        "enabled": true
       }
     ]
   }

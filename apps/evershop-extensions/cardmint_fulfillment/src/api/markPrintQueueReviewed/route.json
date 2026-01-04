@@ -1,0 +1,6 @@
+{
+  "methods": ["POST"],
+  "path": "/admin/api/fulfillment/print-queue/:id/mark-reviewed",
+  "access": "private"
+}
+

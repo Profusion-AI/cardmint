@@ -35,6 +35,8 @@ import { registerFulfillmentRoutes } from "../routes/fulfillment";
 import { registerCaptureSettingsRoutes } from "../routes/captureSettings";
 import { registerCalibrationRoutes } from "../routes/calibration";
 import { registerOrderRoutes } from "../routes/orders";
+import { registerMarketplaceRoutes } from "../routes/marketplace";
+import { registerPrintQueueRoutes } from "../routes/printQueue";
 
 /**
  * Create and configure the Express application.
@@ -116,6 +118,8 @@ export function createApp(ctx: AppContext): Express {
   registerCaptureSettingsRoutes(app, ctx);
   registerCalibrationRoutes(app, ctx);
   registerOrderRoutes(app, ctx);
+  registerMarketplaceRoutes(app, ctx);
+  registerPrintQueueRoutes(app, ctx);
 
   return app;
 }

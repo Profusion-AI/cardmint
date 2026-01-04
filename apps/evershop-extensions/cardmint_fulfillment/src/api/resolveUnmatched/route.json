@@ -1,0 +1,5 @@
+{
+  "methods": ["POST"],
+  "path": "/admin/api/fulfillment/marketplace/unmatched-tracking/:id/resolve",
+  "access": "private"
+}

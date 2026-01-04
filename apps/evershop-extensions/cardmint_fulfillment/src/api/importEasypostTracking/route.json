@@ -1,0 +1,5 @@
+{
+  "methods": ["POST"],
+  "path": "/admin/api/fulfillment/import/easypost-tracking",
+  "access": "private"
+}

@@ -21,6 +21,7 @@ import type { Database } from "better-sqlite3";
 import type { EasyPostService, EasyPostAddress } from "./easyPostService.js";
 import type { StripeService } from "./stripeService.js";
 import type { EmailOutboxRepository, OrderConfirmedTrackingData } from "../repositories/emailOutboxRepository.js";
+import { PrintQueueRepository } from "../repositories/printQueueRepository.js";
 import { runtimeConfig } from "../config.js";
 import type { ShippingMethod } from "../domain/shipping.js";
 
@@ -60,6 +61,7 @@ export class AutoFulfillmentWorker {
   private intervalHandle: ReturnType<typeof setInterval> | null = null;
   private isRunning = false;
   private logger: Logger;
+  private printQueueRepo: PrintQueueRepository;
 
   constructor(
     private readonly db: Database,
@@ -70,6 +72,7 @@ export class AutoFulfillmentWorker {
     private readonly intervalMs: number = runtimeConfig.autoFulfillmentIntervalMs
   ) {
     this.logger = parentLogger.child({ worker: "auto-fulfillment" });
+    this.printQueueRepo = new PrintQueueRepository(this.db, this.logger);
   }
 
   /**
@@ -213,6 +216,12 @@ export class AutoFulfillmentWorker {
       this.db
         .prepare(`UPDATE fulfillment SET status = 'label_purchased', updated_at = strftime('%s', 'now') WHERE stripe_session_id = ?`)
         .run(sessionId);
+      // Phase 5: ensure print queue row exists (idempotent retries should not re-enqueue)
+      this.printQueueRepo.upsertForShipment({
+        shipmentType: "stripe",
+        shipmentId: fulfillment.id,
+        labelUrl: fulfillment.label_url,
+      });
       return { labelPurchased: false, emailEnqueued: false };
     }
 
@@ -225,11 +234,20 @@ export class AutoFulfillmentWorker {
         this.updateFulfillmentWithLabel(
           sessionId,
           existing.tracking_code,
-          existing.postage_label?.label_url ?? null,
+          existing.postage_label?.label_pdf_url || existing.postage_label?.label_url || null,
           existing.selected_rate?.carrier ?? "USPS",
           existing.selected_rate?.service ?? null,
           existing.selected_rate ? Math.round(parseFloat(existing.selected_rate.rate) * 100) : null
         );
+        // Phase 5: enqueue for immediate archival/print
+        const labelUrl = existing.postage_label?.label_pdf_url || existing.postage_label?.label_url || null;
+        if (labelUrl) {
+          this.printQueueRepo.upsertForShipment({
+            shipmentType: "stripe",
+            shipmentId: fulfillment.id,
+            labelUrl,
+          });
+        }
         // Enqueue email for this already-purchased label
         const emailEnqueued = await this.enqueueConfirmationEmail(sessionId, existing.tracking_code);
         return { labelPurchased: false, emailEnqueued }; // Label was already purchased externally
@@ -336,6 +354,15 @@ export class AutoFulfillmentWorker {
       actualLabelCostCents
     );
 
+    // Phase 5: enqueue for immediate archival/print
+    if (labelResult.labelUrl) {
+      this.printQueueRepo.upsertForShipment({
+        shipmentType: "stripe",
+        shipmentId: fulfillment.id,
+        labelUrl: labelResult.labelUrl,
+      });
+    }
+
     this.logger.info(
       {
         sessionId,
@@ -384,6 +411,8 @@ export class AutoFulfillmentWorker {
         label_url = ?,
         label_cost_cents = ?,
         label_purchased_at = ?,
+        label_purchase_in_progress = 0,
+        label_purchase_locked_at = NULL,
         updated_at = ?
       WHERE stripe_session_id = ?
     `

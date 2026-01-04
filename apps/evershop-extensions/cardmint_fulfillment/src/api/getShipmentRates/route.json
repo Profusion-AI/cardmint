@@ -1,0 +1,5 @@
+{
+  "methods": ["POST"],
+  "path": "/admin/api/fulfillment/marketplace/shipments/:id/rates",
+  "access": "private"
+}

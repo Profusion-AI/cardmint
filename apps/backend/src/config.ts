@@ -195,6 +195,9 @@ const envSchema = z.object({
   // Auto-fulfillment worker (auto-purchase labels for non-manual-review orders)
   AUTO_FULFILLMENT_ENABLED: boolFromEnv(false), // Default off until tested
   AUTO_FULFILLMENT_INTERVAL_MS: z.coerce.number().default(120000), // 2 minutes
+  // Marketplace auto-fulfillment worker (Phase 5 - eligible marketplace orders)
+  MARKETPLACE_AUTO_FULFILLMENT_ENABLED: boolFromEnv(false), // Default off until tested
+  MARKETPLACE_AUTO_FULFILLMENT_INTERVAL_MS: z.coerce.number().default(120000), // 2 minutes
   // Email outbox worker (drain and send transactional emails)
   EMAIL_OUTBOX_ENABLED: boolFromEnv(false), // Default off until tested
   EMAIL_OUTBOX_INTERVAL_MS: z.coerce.number().default(60000), // 1 minute
@@ -203,6 +206,8 @@ const envSchema = z.object({
   EMAIL_OUTBOX_STUCK_THRESHOLD_MS: z.coerce.number().default(300000), // 5 min before recovering stuck 'sending' rows
   // Admin API auth (Dec 2025 - Codex review security fix)
   CARDMINT_ADMIN_API_KEY: z.string().optional(),
+  // Print agent auth (Phase 5 - local Fedora label pipeline)
+  PRINT_AGENT_TOKEN: z.string().optional(),
   // Internal endpoint auth (capture/calibration)
   CAPTURE_INTERNAL_KEY: z.string().optional(),
   // Stock display auth (ESP32 devices)
@@ -410,6 +415,30 @@ export const runtimeConfig = {
     widthIn: parsed.EASYPOST_PARCEL_WIDTH_IN,
     heightIn: parsed.EASYPOST_PARCEL_HEIGHT_IN,
   },
+  // Marketplace parcel presets (Phase 4 - SSoT for package selection)
+  parcelPresets: {
+    singlecard: {
+      lengthIn: 6.5,
+      widthIn: 4.5,
+      heightIn: 0.1,
+      baseWeightOz: 3.0, // Weight floor for all CardMint shipments (cardboard mailer + cards)
+      maxCards: 3,
+    },
+    'multicard-bubble': {
+      lengthIn: 8.0,
+      widthIn: 6.0,
+      heightIn: 1.0,
+      baseWeightOz: 4.0,
+      maxCards: 15,
+    },
+    'multicard-box': {
+      lengthIn: 10.0,
+      widthIn: 8.0,
+      heightIn: 2.0,
+      baseWeightOz: 8.0,
+      maxCards: 100,
+    },
+  } as const,
   // Resend transactional email (Dec 2025 - PR2)
   resendApiKey: parsed.RESEND_API_KEY ?? "",
   resendFromEmail: parsed.RESEND_FROM_EMAIL,
@@ -417,6 +446,9 @@ export const runtimeConfig = {
   // Auto-fulfillment worker (auto-purchase labels for non-manual-review orders)
   autoFulfillmentEnabled: parsed.AUTO_FULFILLMENT_ENABLED,
   autoFulfillmentIntervalMs: parsed.AUTO_FULFILLMENT_INTERVAL_MS,
+  // Marketplace auto-fulfillment worker (Phase 5)
+  marketplaceAutoFulfillmentEnabled: parsed.MARKETPLACE_AUTO_FULFILLMENT_ENABLED,
+  marketplaceAutoFulfillmentIntervalMs: parsed.MARKETPLACE_AUTO_FULFILLMENT_INTERVAL_MS,
   // Email outbox worker (drain and send transactional emails)
   emailOutboxEnabled: parsed.EMAIL_OUTBOX_ENABLED,
   emailOutboxIntervalMs: parsed.EMAIL_OUTBOX_INTERVAL_MS,
@@ -425,6 +457,8 @@ export const runtimeConfig = {
   emailOutboxStuckThresholdMs: parsed.EMAIL_OUTBOX_STUCK_THRESHOLD_MS,
   // Admin API auth (Dec 2025 - Codex review security fix)
   cardmintAdminApiKey: parsed.CARDMINT_ADMIN_API_KEY ?? "",
+  // Print agent auth (Phase 5 - local Fedora label pipeline)
+  printAgentToken: parsed.PRINT_AGENT_TOKEN ?? "",
   captureInternalKey: parsed.CAPTURE_INTERNAL_KEY ?? "",
   displayToken: parsed.DISPLAY_TOKEN ?? "",
 };

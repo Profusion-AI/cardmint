@@ -23,6 +23,7 @@ const {
   priceChartingRepo,
   emailOutboxWorker,
   autoFulfillmentWorker,
+  marketplaceAutoFulfillmentWorker,
 } = ctx;
 
 // Create Express app with core middleware and extracted routes
@@ -126,6 +127,14 @@ app.get("/health", async (_req: Request, res: Response) => {
       logger.info("Auto-fulfillment worker stopped");
     } catch (error) {
       logger.error({ err: error }, "Error stopping auto-fulfillment worker");
+    }
+
+    // Stop marketplace auto-fulfillment worker
+    try {
+      marketplaceAutoFulfillmentWorker.stop();
+      logger.info("Marketplace auto-fulfillment worker stopped");
+    } catch (error) {
+      logger.error({ err: error }, "Error stopping marketplace auto-fulfillment worker");
     }
 
     // Close HTTP server

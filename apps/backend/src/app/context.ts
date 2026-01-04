@@ -55,6 +55,7 @@ import { EmailOutboxRepository } from "../repositories/emailOutboxRepository";
 import { createResendService, ResendService } from "../services/resendService";
 import { createEmailOutboxWorker, EmailOutboxWorker } from "../services/emailOutboxWorker";
 import { createAutoFulfillmentWorker, AutoFulfillmentWorker } from "../services/autoFulfillmentWorker";
+import { createMarketplaceAutoFulfillmentWorker, MarketplaceAutoFulfillmentWorker } from "../services/marketplace/marketplaceAutoFulfillmentWorker";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MASTER_SETLIST_PATH = path.resolve(__dirname, "../../../../data/mastersetlist.csv");
@@ -96,6 +97,7 @@ export interface AppContext {
   resendService: ResendService;
   emailOutboxWorker: EmailOutboxWorker;
   autoFulfillmentWorker: AutoFulfillmentWorker;
+  marketplaceAutoFulfillmentWorker: MarketplaceAutoFulfillmentWorker;
 
   // Shutdown state and helpers
   isShuttingDown: () => boolean;
@@ -924,6 +926,14 @@ export async function createContext(): Promise<AppContext> {
   );
   autoFulfillmentWorker.start();
 
+  // Marketplace auto-fulfillment worker (Phase 5: eligible marketplace orders)
+  const marketplaceAutoFulfillmentWorker = createMarketplaceAutoFulfillmentWorker(
+    db,
+    easyPostService,
+    logger
+  );
+  marketplaceAutoFulfillmentWorker.start();
+
   // Cleanup expired/aborted idempotency keys on startup
   const cleanup = importSafeguards.cleanupExpiredKeys();
   if (cleanup.deleted > 0 || cleanup.aborted > 0) {
@@ -969,6 +979,7 @@ export async function createContext(): Promise<AppContext> {
     resendService,
     emailOutboxWorker,
     autoFulfillmentWorker,
+    marketplaceAutoFulfillmentWorker,
 
     isShuttingDown: () => shuttingDown,
     setShuttingDown: (value: boolean) => {

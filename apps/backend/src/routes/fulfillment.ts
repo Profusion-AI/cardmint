@@ -1,7 +1,7 @@
 /**
  * Fulfillment Routes - Operator endpoints for shipping label generation
  *
- * **SECURITY:** All endpoints require Basic Auth (operator-only).
+ * **SECURITY:** All endpoints require Bearer auth (CARDMINT_ADMIN_API_KEY).
  * Mounted at /api/cm-admin/fulfillment/* (not /api/fulfillment).
  *
  * POST /api/cm-admin/fulfillment/:sessionId/rates           - Get EasyPost rates for an order
@@ -13,7 +13,8 @@
  * GET /api/cm-admin/fulfillment                             - List pending fulfillments
  *
  * Guardrails (per Kyle's requirements):
- * - Auth required: All handlers require Basic Auth (operator identity)
+ * - Auth required: Bearer token validated via requireAdminAuth middleware
+ * - Operator ID: X-CardMint-Operator header (or Basic Auth username for backward compat)
  * - Audit logging: Every action logged with operatorId, clientIp, userAgent
  * - Method matching: Only allow rates compatible with checkout shipping method
  * - Manual review gate: Block label purchase if requires_manual_review=1 unless override
@@ -25,7 +26,9 @@
 import { Router, type Express, type Request, type Response } from "express";
 import type { AppContext } from "../app/context.js";
 import type { ShippingMethod } from "../domain/shipping.js";
+import { requireAdminAuth } from "../middleware/adminAuth.js";
 import type { EasyPostAddress } from "../services/easyPostService.js";
+import { PrintQueueRepository } from "../repositories/printQueueRepository.js";
 
 interface FulfillmentRow {
   id: number;
@@ -58,11 +61,87 @@ interface FulfillmentRow {
   exception_type: string | null;
   exception_notes: string | null;
   exception_at: number | null;
+  // Phase 5: Concurrency lock for label purchase (prevents double-spend)
+  label_purchase_in_progress: number;
+  label_purchase_locked_at: number | null;
   created_at: number;
   updated_at: number;
   // PR3: Added from LEFT JOIN with orders table
   order_number: string | null;
   order_uid: string | null;
+}
+
+/**
+ * Unified fulfillment row from marketplace_shipments + marketplace_orders JOIN
+ */
+interface MarketplaceShipmentRow {
+  // From marketplace_shipments
+  shipment_id: number;
+  shipment_sequence: number;
+  carrier: string | null;
+  service: string | null;
+  tracking_number: string | null;
+  tracking_url: string | null;
+  label_url: string | null;
+  label_cost_cents: number | null;
+  label_purchased_at: number | null;
+  shipment_status: string;
+  shipped_at: number | null;
+  delivered_at: number | null;
+  exception_type: string | null;
+  exception_notes: string | null;
+  shipment_created_at: number;
+  // From marketplace_orders
+  order_id: number;
+  source: string;
+  external_order_id: string;
+  display_order_number: string;
+  customer_name: string;
+  order_date: number;
+  item_count: number;
+  product_value_cents: number;
+  shipping_fee_cents: number;
+  shipping_method: string | null;
+  order_status: string;
+}
+
+/**
+ * Unified response shape for dashboard (works for both Stripe and marketplace)
+ */
+interface UnifiedFulfillment {
+  id: string;                    // 'stripe:{sessionId}' or 'mp:{shipmentId}'
+  source: "cardmint" | "tcgplayer" | "ebay";
+  orderNumber: string;
+  customerName: string | null;   // Available for marketplace, null for CardMint (PII)
+  itemCount: number;
+  valueCents: number;
+  shippingCostCents: number;
+  shippingMethod: string | null;
+  status: string;
+  shipping: {
+    carrier: string | null;
+    trackingNumber: string | null;
+    trackingUrl: string | null;
+    service: string | null;
+    labelUrl: string | null;
+    labelCostCents: number | null;
+    labelPurchasedAt: number | null;
+  };
+  timeline: {
+    createdAt: number;
+    shippedAt: number | null;
+    deliveredAt: number | null;
+  };
+  exception: {
+    type: string | null;
+    notes: string | null;
+  } | null;
+  sourceRef: {
+    stripeSessionId?: string;
+    marketplaceOrderId?: number;
+    shipmentId?: number;
+    externalOrderId?: string;
+  };
 }
 
 // Statuses visible in admin list (includes worker-managed statuses)
@@ -108,32 +187,28 @@ function extractClientIp(
 export function registerFulfillmentRoutes(app: Express, ctx: AppContext): void {
   const router = Router();
   const { db, logger, stripeService, easyPostService, emailOutboxRepo } = ctx;
+  const printQueueRepo = new PrintQueueRepository(db, logger);
 
   // Mount at /api/cm-admin/fulfillment/* (NOT /api/fulfillment - that would be public)
   app.use("/api/cm-admin/fulfillment", router);
 
   /**
-   * Auth middleware applied to all routes
-   * Extracts operator ID, client IP, user agent for audit logging
-   * Rejects with 401 if Basic Auth is missing or invalid
+   * Auth middleware applied to all routes (two-layer):
+   * 1. requireAdminAuth - validates Bearer token against CARDMINT_ADMIN_API_KEY
+   * 2. Audit context - extracts operator ID, client IP, user agent for logging
+   *
+   * Operator ID can be provided via:
+   * - X-CardMint-Operator header (preferred)
+   * - Basic Auth username (backward compat for audit logging only)
+   * Defaults to "unknown" if neither provided.
    */
+  router.use(requireAdminAuth);
+
   router.use((req: Request, res: Response, next) => {
-    const operatorId = extractBasicAuthUser(req.headers.authorization);
-    if (!operatorId) {
-      logger.warn(
-        {
-          clientIp: extractClientIp(req.headers["x-forwarded-for"] as string, req.socket.remoteAddress),
-          userAgent: req.headers["user-agent"],
-          path: req.path,
-          method: req.method,
-        },
-        "fulfillment.auth.rejected"
-      );
-      return res.status(401).json({
-        error: "UNAUTHORIZED",
-        message: "Basic Auth required for fulfillment operations",
-      });
-    }
+    // Extract operator identity (for audit logging only - auth already validated)
+    const basicAuthUser = extractBasicAuthUser(req.headers.authorization);
+    const operatorHeader = req.headers["x-cardmint-operator"] as string | undefined;
+    const operatorId = operatorHeader || basicAuthUser || "unknown";
 
     // Attach audit context to request for handlers
     (req as any).auditContext = {
@@ -194,6 +269,230 @@ export function registerFulfillmentRoutes(app: Express, ctx: AppContext): void {
     } catch (err) {
       logger.error({ err, operatorId }, "Failed to list fulfillments");
       res.status(500).json({ error: "Failed to list fulfillments" });
+    }
+  });
+
+  /**
+   * GET /api/cm-admin/fulfillment/unified
+   * Combined view of Stripe fulfillment + marketplace shipments
+   *
+   * Query params:
+   * - source: 'all' | 'cardmint' | 'tcgplayer' | 'ebay' (default: 'all')
+   * - status: filter by status (pending, shipped, delivered, etc.)
+   * - limit: max results (default: 50, max: 100)
+   * - offset: pagination offset (default: 0)
+   *
+   * Returns unified response shape for dashboard consumption.
+   */
+  router.get("/unified", (req: Request, res: Response) => {
+    const { operatorId, clientIp, userAgent } = (req as any).auditContext;
+    const source = (req.query.source as string) || "all";
+    let status = req.query.status as string | undefined;
+    if (status === "all" || status === "any" || status === "") {
+      status = undefined;
+    }
+    const requestedLimit = parseInt(req.query.limit as string);
+    const limit = Math.min(!isNaN(requestedLimit) && requestedLimit > 0 ? requestedLimit : 50, 100);
+    const requestedOffset = parseInt(req.query.offset as string);
+    const offset = !isNaN(requestedOffset) && requestedOffset > 0 ? requestedOffset : 0;
+
+    logger.info(
+      { operatorId, clientIp, userAgent, action: "unified.list", source, status, limit, offset },
+      "fulfillment.unified.list"
+    );
+
+    try {
+      const validSources = new Set(["all", "cardmint", "tcgplayer", "ebay"]);
+      if (!validSources.has(source)) {
+        return res.status(400).json({
+          error: "BAD_REQUEST",
+          message: "source must be one of: all, cardmint, tcgplayer, ebay",
+        });
+      }
+
+      // Union of Stripe fulfillment statuses + marketplace shipment statuses.
+      // Note: Status filtering is strict to avoid accidentally ignoring filters.
+      const validUnifiedStatuses = new Set([
+        "pending",
+        "processing",
+        "reviewed",
+        "label_purchased",
+        "shipped",
+        "in_transit",
+        "delivered",
+        "exception",
+      ]);
+      if (status && !validUnifiedStatuses.has(status)) {
+        return res.status(400).json({
+          error: "BAD_REQUEST",
+          message:
+            "status must be one of: pending, processing, reviewed, label_purchased, shipped, in_transit, delivered, exception",
+        });
+      }
+
+      const results: UnifiedFulfillment[] = [];
+      let stripeTotal = 0;
+      let marketplaceTotal = 0;
+      const maxFetch = offset + limit;
+
+      // Query Stripe fulfillments (source='cardmint' or 'all')
+      if (source === "all" || source === "cardmint") {
+        // If a marketplace-only status is requested, Stripe should contribute zero rows.
+        if (status && !FILTER_STATUSES.includes(status)) {
+          stripeTotal = 0;
+        } else {
+        let stripeQuery = `
+          SELECT f.*, o.order_number, o.order_uid
+          FROM fulfillment f
+          LEFT JOIN orders o ON f.stripe_session_id = o.stripe_session_id
+        `;
+        const stripeParams: (string | number)[] = [];
+
+        if (status && FILTER_STATUSES.includes(status)) {
+          stripeQuery += " WHERE f.status = ?";
+          stripeParams.push(status);
+        }
+
+        // Fetch only what we need for merged pagination: top (offset+limit) from each source.
+        const stripeRows = db
+          .prepare(stripeQuery + " ORDER BY f.created_at DESC LIMIT ?")
+          .all(...stripeParams, maxFetch) as FulfillmentRow[];
+
+        // Count for this source
+        const stripeCountQuery = status
+          ? "SELECT COUNT(*) as total FROM fulfillment WHERE status = ?"
+          : "SELECT COUNT(*) as total FROM fulfillment";
+        const stripeCountRow = status
+          ? (db.prepare(stripeCountQuery).get(status) as { total: number })
+          : (db.prepare(stripeCountQuery).get() as { total: number });
+        stripeTotal = stripeCountRow.total;
+
+        // Transform Stripe rows to unified shape
+        for (const row of stripeRows) {
+          results.push(formatStripeToUnified(row));
+        }
+        }
+      }
+
+      // Query marketplace shipments (source='tcgplayer', 'ebay', or 'all')
+      if (source === "all" || source === "tcgplayer" || source === "ebay") {
+        let mpQuery = `
+          SELECT
+            ms.id as shipment_id,
+            ms.shipment_sequence,
+            ms.carrier,
+            ms.service,
+            ms.tracking_number,
+            ms.tracking_url,
+            ms.label_url,
+            ms.label_cost_cents,
+            ms.label_purchased_at,
+            ms.status as shipment_status,
+            ms.shipped_at,
+            ms.delivered_at,
+            ms.exception_type,
+            ms.exception_notes,
+            ms.created_at as shipment_created_at,
+            mo.id as order_id,
+            mo.source,
+            mo.external_order_id,
+            mo.display_order_number,
+            mo.customer_name,
+            mo.order_date,
+            mo.item_count,
+            mo.product_value_cents,
+            mo.shipping_fee_cents,
+            mo.shipping_method,
+            mo.status as order_status
+          FROM marketplace_shipments ms
+          JOIN marketplace_orders mo ON ms.marketplace_order_id = mo.id
+        `;
+        const mpParams: (string | number)[] = [];
+        const conditions: string[] = [];
+
+        // Filter by source if specific marketplace requested
+        if (source !== "all") {
+          conditions.push("mo.source = ?");
+          mpParams.push(source);
+        }
+
+        // Filter by status (match against shipment status)
+        if (status) {
+          // Map common statuses to marketplace shipment statuses
+          const mpStatusMap: Record<string, string[]> = {
+            pending: ["pending"],
+            label_purchased: ["label_purchased"],
+            shipped: ["shipped", "in_transit"],
+            delivered: ["delivered"],
+            exception: ["exception"],
+          };
+          const mappedStatuses = mpStatusMap[status] || [status];
+          conditions.push(`ms.status IN (${mappedStatuses.map(() => "?").join(", ")})`);
+          mpParams.push(...mappedStatuses);
+        }
+
+        if (conditions.length > 0) {
+          mpQuery += " WHERE " + conditions.join(" AND ");
+        }
+
+        mpQuery += " ORDER BY ms.created_at DESC LIMIT ?";
+
+        const mpRows = db.prepare(mpQuery).all(...mpParams, maxFetch) as MarketplaceShipmentRow[];
+
+        // Count for marketplace sources
+        let mpCountQuery = "SELECT COUNT(*) as total FROM marketplace_shipments ms JOIN marketplace_orders mo ON ms.marketplace_order_id = mo.id";
+        const mpCountParams: (string | number)[] = [];
+        const countConditions: string[] = [];
+
+        if (source !== "all") {
+          countConditions.push("mo.source = ?");
+          mpCountParams.push(source);
+        }
+        if (status) {
+          const mpStatusMap: Record<string, string[]> = {
+            pending: ["pending"],
+            label_purchased: ["label_purchased"],
+            shipped: ["shipped", "in_transit"],
+            delivered: ["delivered"],
+            exception: ["exception"],
+          };
+          const mappedStatuses = mpStatusMap[status] || [status];
+          countConditions.push(`ms.status IN (${mappedStatuses.map(() => "?").join(", ")})`);
+          mpCountParams.push(...mappedStatuses);
+        }
+
+        if (countConditions.length > 0) {
+          mpCountQuery += " WHERE " + countConditions.join(" AND ");
+        }
+
+        const mpCountRow = db.prepare(mpCountQuery).get(...mpCountParams) as { total: number };
+        marketplaceTotal = mpCountRow.total;
+
+        // Transform marketplace rows to unified shape
+        for (const row of mpRows) {
+          results.push(formatMarketplaceToUnified(row));
+        }
+      }
+
+      // Sort combined results by createdAt descending
+      results.sort((a, b) => b.timeline.createdAt - a.timeline.createdAt);
+
+      // Apply pagination to merged results
+      const paginatedResults = results.slice(offset, offset + limit);
+
+      res.json({
+        fulfillments: paginatedResults,
+        total: stripeTotal + marketplaceTotal,
+        counts: {
+          cardmint: source === "all" || source === "cardmint" ? stripeTotal : 0,
+          marketplace: source === "all" || source === "tcgplayer" || source === "ebay" ? marketplaceTotal : 0,
+        },
+        limit,
+        offset,
+      });
+    } catch (err) {
+      logger.error({ err, operatorId, source, status }, "Failed to list unified fulfillments");
+      res.status(500).json({ error: "Failed to list unified fulfillments" });
     }
   });
 
@@ -472,6 +771,13 @@ export function registerFulfillmentRoutes(app: Express, ctx: AppContext): void {
 
       // GUARDRAIL: Idempotency - check if label already purchased
       if (fulfillment.tracking_number && fulfillment.label_url) {
+        // Phase 5: ensure print queue row exists (idempotent retries should not re-enqueue)
+        printQueueRepo.upsertForShipment({
+          shipmentType: "stripe",
+          shipmentId: fulfillment.id,
+          labelUrl: fulfillment.label_url,
+        });
+
         logger.info(
           { operatorId, sessionId, action: "label.idempotent" },
           "fulfillment.label.already_purchased"
@@ -486,76 +792,164 @@ export function registerFulfillmentRoutes(app: Express, ctx: AppContext): void {
         });
       }
 
-      // Purchase label via EasyPost (includes method matching validation)
-      const result = await easyPostService.purchaseLabel(
-        shipmentId,
-        rateId,
-        fulfillment.shipping_method as ShippingMethod
-      );
+      // Concurrency guard: prevent double-spend on concurrent label purchase attempts.
+      // Uses a DB-level lock flag with stale-lock recovery.
+      const nowLock = Math.floor(Date.now() / 1000);
+      const staleBefore = nowLock - 300; // 5 minutes
 
-      if (!result.success) {
-        return res.status(400).json({
-          error: result.error,
-          errorCode: result.errorCode,
+      const lockResult = db
+        .prepare(
+          `
+          UPDATE fulfillment
+          SET label_purchase_in_progress = 1,
+              label_purchase_locked_at = ?,
+              updated_at = ?
+          WHERE stripe_session_id = ?
+            AND tracking_number IS NULL
+            AND (
+              label_purchase_in_progress = 0
+              OR label_purchase_locked_at IS NULL
+              OR label_purchase_locked_at < ?
+            )
+        `
+        )
+        .run(nowLock, nowLock, sessionId, staleBefore);
+
+      let lockAcquired = lockResult.changes === 1;
+
+      if (!lockAcquired) {
+        // Determine if it was purchased between our initial read and lock attempt
+        const current = db
+          .prepare("SELECT * FROM fulfillment WHERE stripe_session_id = ?")
+          .get(sessionId) as FulfillmentRow | undefined;
+
+        if (current?.tracking_number && current.label_url) {
+          // Phase 5: ensure print queue row exists
+          printQueueRepo.upsertForShipment({
+            shipmentType: "stripe",
+            shipmentId: current.id,
+            labelUrl: current.label_url,
+          });
+
+          return res.json({
+            success: true,
+            alreadyPurchased: true,
+            trackingNumber: current.tracking_number,
+            labelUrl: current.label_url,
+            carrier: current.carrier,
+            service: current.easypost_service,
+          });
+        }
+
+        return res.status(409).json({
+          error: "PURCHASE_IN_PROGRESS",
+          message: "Another label purchase is in progress for this order. Please retry in a few seconds.",
         });
       }
 
-      // Update fulfillment record
-      const now = Math.floor(Date.now() / 1000);
-      const labelCostCents = result.shipment?.selected_rate
-        ? Math.round(parseFloat(result.shipment.selected_rate.rate) * 100)
-        : null;
+      // Purchase label via EasyPost (includes method matching validation)
+      try {
+        const result = await easyPostService.purchaseLabel(
+          shipmentId,
+          rateId,
+          fulfillment.shipping_method as ShippingMethod
+        );
 
-      db.prepare(
-        `UPDATE fulfillment SET
-          status = 'label_purchased',
-          carrier = ?,
-          tracking_number = ?,
-          tracking_url = ?,
-          easypost_rate_id = ?,
-          easypost_service = ?,
-          label_url = ?,
-          label_cost_cents = ?,
-          label_purchased_at = ?,
-          updated_at = ?
-        WHERE stripe_session_id = ?`
-      ).run(
-        result.carrier ?? "USPS",
-        result.trackingNumber,
-        `https://tools.usps.com/go/TrackConfirmAction?tLabels=${result.trackingNumber}`,
-        rateId,
-        result.service,
-        result.labelUrl,
-        labelCostCents,
-        now,
-        now,
-        sessionId
-      );
+        if (!result.success) {
+          return res.status(400).json({
+            error: result.error,
+            errorCode: result.errorCode,
+          });
+        }
 
-      logger.info(
-        {
-          operatorId,
-          clientIp,
-          sessionId,
+        if (!result.trackingNumber || !result.labelUrl) {
+          logger.error(
+            { operatorId, sessionId, hasTracking: !!result.trackingNumber, hasLabelUrl: !!result.labelUrl },
+            "fulfillment.label.incomplete_response"
+          );
+          return res.status(500).json({
+            error: "EASYPOST_INCOMPLETE",
+            message: "EasyPost returned incomplete label data (missing tracking number or label URL)",
+          });
+        }
+
+        // Update fulfillment record
+        const now = Math.floor(Date.now() / 1000);
+        const labelCostCents = result.shipment?.selected_rate
+          ? Math.round(parseFloat(result.shipment.selected_rate.rate) * 100)
+          : null;
+
+        db.prepare(
+          `UPDATE fulfillment SET
+            status = 'label_purchased',
+            carrier = ?,
+            tracking_number = ?,
+            tracking_url = ?,
+            easypost_rate_id = ?,
+            easypost_service = ?,
+            label_url = ?,
+            label_cost_cents = ?,
+            label_purchased_at = ?,
+            label_purchase_in_progress = 0,
+            label_purchase_locked_at = NULL,
+            updated_at = ?
+          WHERE stripe_session_id = ?`
+        ).run(
+          result.carrier ?? "USPS",
+          result.trackingNumber,
+          `https://tools.usps.com/go/TrackConfirmAction?tLabels=${result.trackingNumber}`,
+          rateId,
+          result.service,
+          result.labelUrl,
+          labelCostCents,
+          now,
+          now,
+          sessionId
+        );
+
+        // Phase 5: enqueue for immediate archival/print (all purchased labels)
+        printQueueRepo.upsertForShipment({
+          shipmentType: "stripe",
+          shipmentId: fulfillment.id,
+          labelUrl: result.labelUrl,
+        });
+
+        logger.info(
+          {
+            operatorId,
+            clientIp,
+            sessionId,
+            trackingNumber: result.trackingNumber,
+            carrier: result.carrier,
+            service: result.service,
+            labelCostCents,
+            alreadyPurchased: result.alreadyPurchased,
+            action: "label.purchased",
+          },
+          "fulfillment.label.success"
+        );
+
+        res.json({
+          success: true,
+          alreadyPurchased: result.alreadyPurchased ?? false,
           trackingNumber: result.trackingNumber,
+          labelUrl: result.labelUrl,
           carrier: result.carrier,
           service: result.service,
           labelCostCents,
-          alreadyPurchased: result.alreadyPurchased,
-          action: "label.purchased",
-        },
-        "fulfillment.label.success"
-      );
-
-      res.json({
-        success: true,
-        alreadyPurchased: result.alreadyPurchased ?? false,
-        trackingNumber: result.trackingNumber,
-        labelUrl: result.labelUrl,
-        carrier: result.carrier,
-        service: result.service,
-        labelCostCents,
-      });
+        });
+      } finally {
+        if (lockAcquired) {
+          // Always release lock on exit (success or error).
+          db.prepare(
+            `UPDATE fulfillment
+             SET label_purchase_in_progress = 0,
+                 label_purchase_locked_at = NULL,
+                 updated_at = strftime('%s', 'now')
+             WHERE stripe_session_id = ?`
+          ).run(sessionId);
+        }
+      }
     } catch (err) {
       logger.error({ err, sessionId, operatorId }, "Failed to purchase label");
       res.status(500).json({ error: "Failed to purchase shipping label" });
@@ -1024,6 +1418,88 @@ function formatFulfillmentResponse(row: FulfillmentRow) {
     easypost: {
       shipmentId: row.easypost_shipment_id,
       rateId: row.easypost_rate_id,
+    },
+  };
+}
+
+/**
+ * Format Stripe fulfillment row to unified response shape
+ */
+function formatStripeToUnified(row: FulfillmentRow): UnifiedFulfillment {
+  return {
+    id: `stripe:${row.stripe_session_id}`,
+    source: "cardmint",
+    orderNumber: row.order_number ?? `Session: ${row.stripe_session_id.slice(-8)}`,
+    customerName: null, // PII - not stored, fetch from Stripe when needed
+    itemCount: row.item_count,
+    valueCents: row.final_subtotal_cents,
+    shippingCostCents: row.shipping_cost_cents,
+    shippingMethod: row.shipping_method,
+    status: row.status,
+    shipping: {
+      carrier: row.carrier,
+      trackingNumber: row.tracking_number,
+      trackingUrl: row.tracking_url,
+      service: row.easypost_service,
+      labelUrl: row.label_url,
+      labelCostCents: row.label_cost_cents,
+      labelPurchasedAt: row.label_purchased_at,
+    },
+    timeline: {
+      createdAt: row.created_at,
+      shippedAt: row.shipped_at,
+      deliveredAt: row.delivered_at,
+    },
+    exception: row.exception_type
+      ? {
+          type: row.exception_type,
+          notes: row.exception_notes,
+        }
+      : null,
+    sourceRef: {
+      stripeSessionId: row.stripe_session_id,
+    },
+  };
+}
+
+/**
+ * Format marketplace shipment row to unified response shape
+ */
+function formatMarketplaceToUnified(row: MarketplaceShipmentRow): UnifiedFulfillment {
+  return {
+    id: `mp:${row.shipment_id}`,
+    source: row.source as "tcgplayer" | "ebay",
+    orderNumber: row.display_order_number,
+    customerName: row.customer_name,
+    itemCount: row.item_count,
+    valueCents: row.product_value_cents,
+    shippingCostCents: row.shipping_fee_cents,
+    shippingMethod: row.shipping_method,
+    status: row.shipment_status,
+    shipping: {
+      carrier: row.carrier,
+      trackingNumber: row.tracking_number,
+      trackingUrl: row.tracking_url,
+      service: row.service,
+      labelUrl: row.label_url,
+      labelCostCents: row.label_cost_cents,
+      labelPurchasedAt: row.label_purchased_at,
+    },
+    timeline: {
+      createdAt: row.shipment_created_at,
+      shippedAt: row.shipped_at,
+      deliveredAt: row.delivered_at,
+    },
+    exception: row.exception_type
+      ? {
+          type: row.exception_type,
+          notes: row.exception_notes,
+        }
+      : null,
+    sourceRef: {
+      marketplaceOrderId: row.order_id,
+      shipmentId: row.shipment_id,
+      externalOrderId: row.external_order_id,
     },
   };
 }

@@ -1,0 +1,21 @@
+{
+  "name": "@cardmint/print-agent",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "tsx src/index.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/node": "^20.14.2",
+    "tsx": "^4.11.3",
+    "typescript": "^5.4.5"
+  }
+}
+

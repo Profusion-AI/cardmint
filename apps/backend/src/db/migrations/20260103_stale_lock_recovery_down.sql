@@ -1,0 +1,4 @@
+-- Rollback stale-lock recovery timestamp column
+-- SQLite limitations: can't easily drop columns; forward-only is safest
+-- Column is additive and NULL-safe
+-- ROLLBACK POSTURE: Forward-only (column is additive, NULL-safe)

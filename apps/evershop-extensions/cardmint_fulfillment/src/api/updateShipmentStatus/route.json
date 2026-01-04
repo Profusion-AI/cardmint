@@ -1,0 +1,5 @@
+{
+  "methods": ["PATCH"],
+  "path": "/admin/api/fulfillment/marketplace/shipments/:id/status",
+  "access": "private"
+}

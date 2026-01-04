@@ -1,0 +1,13 @@
+{
+  "name": "@cardmint/fulfillment",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "CardMint unified fulfillment dashboard for Stripe and marketplace orders",
+  "scripts": {
+    "build": "rm -rf dist && mkdir -p dist && cp -r src/* dist/",
+    "clean": "rm -rf dist"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
