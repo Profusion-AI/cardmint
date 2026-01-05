@@ -99,6 +99,7 @@ Retrieve these only when the specific task requires them:
 | Price sync logic | `apps/backend/src/services/pricing/` |
 | Acceptance SQL | `scripts/validate/acceptance.sql` |
 | Stock display (ESP32) | `hardware/stock-display/` — operator dashboard hardware |
+| **EverShop extensions (definitive)** | `docs/EVERSHOP_EXTENSIONS.md` — build/deploy, routing/middleware/UI areas, GraphQL + DB topology |
 | **EverShop extension gotchas** | `apps/evershop-extensions/cardmint_admin_theme/docs/COLUMN_EXTENSION_PATTERN.md` |
 | Fulfillment & EasyPost | `apps/backend/src/routes/fulfillment.ts`, `apps/backend/src/services/easyPostService.ts` |
 | **Security middleware** | `apps/backend/src/middleware/adminAuth.ts` — Bearer auth, internal access, display token |
@@ -109,6 +110,8 @@ Retrieve these only when the specific task requires them:
 > **Deployment rule:** Before any `ssh`, `rsync`, or prod file edit, re-read `docs/DO-verified-access.md` for current SSH credentials, paths, and safety protocols.
 
 > **EverShop extension rule:** In production, EverShop only discovers UI components from `extensions/*/dist/pages/**/[A-Z]*.js` (not `.jsx`), and the scanner requires a literal `export const layout = { areaId: '...', sortOrder: N }` (not `export { layout }`). Keep the `layout` export comment-free or the regex won't match.
+
+> **EverShop route sanity check:** If `/admin/fulfillment` 404s but `/admin/admin/fulfillment` redirects to login, your `route.json` has `"path": "/admin/fulfillment"` when it should be `"path": "/fulfillment"` — EverShop's `registerAdminRoute` auto-prefixes `/admin`.
 
 > **Backend env file rule:** The backend reads from `/var/www/cardmint-backend/.env` (dotenv), NOT `/etc/cardmint-backend.env`. Update the `.env` file directly when changing env vars.
 
