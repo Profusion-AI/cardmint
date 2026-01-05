@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
-import RatesModal from './RatesModal.jsx';
-import MarketplaceShipmentActions from './MarketplaceShipmentActions.jsx';
+import RatesModal from './RatesModal.js';
+import MarketplaceShipmentActions from './MarketplaceShipmentActions.js';
 
 /**
  * Unified Fulfillment Grid Component

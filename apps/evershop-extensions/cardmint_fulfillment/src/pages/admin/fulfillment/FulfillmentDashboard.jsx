@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import UnifiedGrid from '../../../components/UnifiedGrid.jsx';
-import ImportModal from '../../../components/ImportModal.jsx';
-import UnmatchedTrackingPanel from '../../../components/UnmatchedTrackingPanel.jsx';
-import PrintQueuePanel from '../../../components/PrintQueuePanel.jsx';
+import UnifiedGrid from '../../../components/UnifiedGrid.js';
+import ImportModal from '../../../components/ImportModal.js';
+import UnmatchedTrackingPanel from '../../../components/UnmatchedTrackingPanel.js';
+import PrintQueuePanel from '../../../components/PrintQueuePanel.js';
 
 /**
  * Fulfillment Dashboard Page

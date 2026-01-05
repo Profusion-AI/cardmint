@@ -4,7 +4,7 @@
   "type": "module",
   "description": "CardMint unified fulfillment dashboard for Stripe and marketplace orders",
   "scripts": {
-    "build": "rm -rf dist && mkdir -p dist && cp -r src/* dist/",
+    "build": "node ./scripts/build.mjs",
     "clean": "rm -rf dist"
   },
   "engines": {
