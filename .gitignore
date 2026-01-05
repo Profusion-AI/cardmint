@@ -62,6 +62,8 @@ coverage/
 # === Large data/SDK files ===
 /docs/
 !/docs/releases/
+!/docs/security/**
+!/docs/Unkey-readme.md
 /pokemoncards/
 /data/
 

@@ -211,6 +211,147 @@ ssh -i ~/.ssh/cardmint_droplet cardmint@157.245.213.233 'docker compose -f /opt/
 ssh -i ~/.ssh/cardmint_droplet cardmint@157.245.213.233 'docker compose -f /opt/cardmint/docker-compose.yml ps'
 ```
 
+### EverShop Extension Deployment (Comprehensive Guide)
+
+**Where extensions live:**
+- Local: `apps/evershop-extensions/`
+- Droplet: `/opt/cardmint/extensions/`
+- Container mount: `/app/extensions/`
+
+#### Why "Works Locally, Fails in Prod"
+
+| Issue | Local Behavior | Prod Behavior | Fix |
+|-------|----------------|---------------|-----|
+| JSX files | EverShop dev server handles JSX | Only scans `*.js` in `dist/` | Build locally before deploy |
+| Layout export | Works | Regex scanner breaks | Keep a literal `export const layout = { areaId: '...', sortOrder: N }` (no inline comments; not `export { layout }`) |
+| Backend calls | `localhost:4000` works | Container can't reach host's localhost | Use `http://172.17.0.1:4000` |
+| Missing API key | May work unauthenticated | 401/503 depending on auth mode | **Static/Dual:** set `CARDMINT_ADMIN_API_KEY` in backend + EverShop. **Unkey:** set backend `UNKEY_ROOT_KEY` + EverShop `CARDMINT_ADMIN_API_KEY` (Unkey service key). |
+
+#### Production Discovery Rules
+
+EverShop's production scanner **only** discovers components matching:
+```
+extensions/*/dist/pages/**/[A-Z]*.js
+```
+
+**Must have:**
+- File in `dist/` (not `src/`)
+- `.js` extension (not `.jsx`)
+- PascalCase filename (starts with uppercase)
+- Literal `export const layout = { areaId: '...', sortOrder: N }` (no inline comments; not `export { layout }`)
+
+#### Pre-Flight Checks (Run Before Every Extension Deploy)
+
+```bash
+# 1. Build locally and verify dist/ has .js files
+npm --prefix apps/evershop-extensions run build
+ls apps/evershop-extensions/cardmint_fulfillment/dist/pages/admin/all/
+# Expected: FulfillmentSidebarLink.js (not .jsx)
+
+# 2. `.jsx` imports are OK (EverShop resolves `.jsx` -> `.js`), but every imported `.jsx` must have a matching `.js` file in dist/
+grep -r "\.jsx" apps/evershop-extensions/cardmint_fulfillment/dist/ | head
+# Expected: output is OK; if EverShop build errors with module-not-found, a file didn't transpile into dist/
+
+# 3. Check backend health on prod
+ssh -i ~/.ssh/cardmint_droplet cardmint@157.245.213.233 'curl -sS localhost:4000/health | jq -r .status'
+# Expected: "ok"
+
+# 4. Check container can reach backend (for extensions using BackendProxy)
+ssh -i ~/.ssh/cardmint_droplet cardmint@157.245.213.233 \
+  'docker exec cardmint-app-1 node -e "fetch(\"http://172.17.0.1:4000/health\").then(r=>r.json()).then(d=>console.log(d.status))"'
+# Expected: "ok"
+
+# 5. Verify CARDMINT_ADMIN_API_KEY is set in container (if extension needs backend auth)
+ssh -i ~/.ssh/cardmint_droplet cardmint@157.245.213.233 \
+  'docker exec cardmint-app-1 printenv CARDMINT_ADMIN_API_KEY | head -c 8 && echo "..."'
+# Expected: first 8 chars of key (not empty). In Unkey mode, this is a Unkey service key and does NOT need to match the backend env.
+```
+
+#### Full Deploy Sequence
+
+```bash
+# Step 1: Build extensions locally
+npm --prefix apps/evershop-extensions run build
+
+# Step 2: Rsync to droplet (all extensions or specific one)
+rsync -avz -e "ssh -i ~/.ssh/cardmint_droplet" \
+  apps/evershop-extensions/cardmint_fulfillment/ \
+  cardmint@157.245.213.233:/opt/cardmint/extensions/cardmint_fulfillment/
+
+# Step 3: Rebuild EverShop bundles inside container (~2.5 min)
+ssh -i ~/.ssh/cardmint_droplet cardmint@157.245.213.233 \
+  'docker exec cardmint-app-1 npm run build'
+
+# Step 4: Restart container to pick up changes
+ssh -i ~/.ssh/cardmint_droplet cardmint@157.245.213.233 \
+  'docker restart cardmint-app-1'
+
+# Step 5: Wait for container to be healthy (~30s)
+sleep 30
+
+# Step 6: Verify admin is accessible
+curl -Is -u admin:'[BASIC_AUTH_PW]' https://cardmintshop.com/admin/ | head -1
+# Expected: HTTP/2 200
+```
+
+**Total deploy time:** ~5 minutes (build + rsync + container rebuild + restart)
+
+#### Troubleshooting
+
+| Symptom | Likely Cause | Fix |
+|---------|--------------|-----|
+| Sidebar link missing | JSX in dist, or missing layout export | Check `dist/` has `.js` files with `export const layout` |
+| Dashboard shows "Error loading" | BackendProxy can't reach backend | Check `CARDMINT_ADMIN_API_KEY` + `CARDMINT_BACKEND_URL` |
+| 401/503 from backend | Admin auth misconfigured | **Static/Dual:** backend missing `CARDMINT_ADMIN_API_KEY`. **Unkey/Dual:** backend missing `UNKEY_ROOT_KEY` or Unkey verify failing. |
+| Container can't reach backend | Wrong URL | Use `http://172.17.0.1:4000` not `localhost:4000` |
+| Changes not visible | Container cache | Full restart: `docker restart cardmint-app-1` |
+| "Module not found" errors | Import paths have `.jsx` | Fix source imports to use `.js` |
+
+#### Admin API Authentication (Preferred: Unkey)
+
+Backend verifies inbound Bearer tokens via Unkey (no long-lived shared secret in the backend env).
+
+**Backend (`/etc/cardmint-backend.env`):**
+- `CARDMINT_ADMIN_AUTH_MODE=unkey` (or `dual` during cutover)
+- `UNKEY_ROOT_KEY=...` (verify-only root key)
+- Optional: `UNKEY_ADMIN_PERMISSION=...`
+
+**EverShop (`/opt/cardmint/.env`):**
+- `CARDMINT_ADMIN_API_KEY=...` (Unkey service key value; still sent as `Authorization: Bearer ...`)
+- `CARDMINT_BACKEND_URL=http://172.17.0.1:4000`
+
+Restart:
+- Backend: `sudo systemctl restart cardmint-backend`
+- EverShop: `cd /opt/cardmint && docker compose up -d --force-recreate`
+
+#### Legacy: Adding CARDMINT_ADMIN_API_KEY (Static Mode Only)
+
+```bash
+# 1. Generate a key
+NEW_KEY=$(openssl rand -hex 32)
+echo "Generated key: $NEW_KEY"
+
+# 2. Add to backend
+ssh -i ~/.ssh/cardmint_droplet cardmint@157.245.213.233 \
+  "echo 'CARDMINT_ADMIN_API_KEY=$NEW_KEY' | sudo tee -a /etc/cardmint-backend.env"
+
+# 3. Restart backend
+ssh -i ~/.ssh/cardmint_droplet cardmint@157.245.213.233 \
+  'sudo systemctl restart cardmint-backend'
+
+# 4. Add to docker-compose.yml
+ssh -i ~/.ssh/cardmint_droplet cardmint@157.245.213.233 \
+  "cd /opt/cardmint && sudo sed -i '/CARDMINT_SYNC_ENABLED/a\\      CARDMINT_ADMIN_API_KEY: $NEW_KEY\\n      CARDMINT_BACKEND_URL: http://172.17.0.1:4000' docker-compose.yml"
+
+# 5. Recreate containers with new env
+ssh -i ~/.ssh/cardmint_droplet cardmint@157.245.213.233 \
+  'cd /opt/cardmint && docker compose up -d'
+
+# 6. Verify
+ssh -i ~/.ssh/cardmint_droplet cardmint@157.245.213.233 \
+  'docker exec cardmint-app-1 printenv | grep CARDMINT'
+```
+
 ---
 
 ## Nginx Reverse Proxy & SSL Configuration
@@ -501,6 +642,120 @@ EOF
 
 ---
 
+## Environment Variables Master Reference
+
+This section documents all environment variables across the CardMint production stack. **Critical:** Some variables must match across multiple services.
+
+### Backend Environment (`/etc/cardmint-backend.env`)
+
+| Variable | Purpose | Required | Example |
+|----------|---------|----------|---------|
+| `CARDMINT_ENV` | Environment identifier | Yes | `production` |
+| `CARDMINT_ADMIN_AUTH_MODE` | Admin auth mode (`static|unkey|dual`) | Yes | `unkey` |
+| `CARDMINT_ADMIN_API_KEY` | Bearer token for `/api/cm-admin/*` endpoints (static/dual only) | Static/Dual | `openssl rand -hex 32` |
+| `UNKEY_ROOT_KEY` | Unkey root key for verification (unkey/dual only) | Unkey/Dual | `[REDACTED]` |
+| `UNKEY_ADMIN_PERMISSION` | Optional Unkey permission expression for admin endpoints | Optional | `cardmint.admin` |
+| `EVERSHOP_WEBHOOK_SECRET` | HMAC secret for EverShop→backend webhooks | If webhooks enabled | `openssl rand -hex 32` |
+| `CAPTURE_INTERNAL_KEY` | Header for capture/calibration endpoints | Prod | `openssl rand -hex 32` |
+| `DISPLAY_TOKEN` | Header for `/api/stock-summary` (static/dual only) | Optional | `openssl rand -hex 32` |
+| `OPENAI_API_KEY` | GPT-4o for card identification | Yes | `sk-...` |
+| `STRIPE_SECRET_KEY` | Stripe API (live mode) | Yes | `sk_live_...` |
+| `STRIPE_WEBHOOK_SECRET` | Stripe webhook signature | Yes | `whsec_...` |
+| `EASYPOST_API_KEY` | Shipping label API | Yes | `EZ...` |
+| `KLAVIYO_API_KEY` | Email marketing | Optional | `pk_...` |
+
+### EverShop Environment (`/opt/cardmint/.env` + `docker-compose.yml`)
+
+| Variable | Purpose | Required | Set In |
+|----------|---------|----------|--------|
+| `DB_HOST` | Postgres host | Yes | docker-compose.yml |
+| `DB_PORT` | Postgres port | Yes | docker-compose.yml |
+| `DB_USER` | Postgres user | Yes | .env |
+| `DB_PASSWORD` | Postgres password | Yes | .env |
+| `DB_NAME` | Postgres database | Yes | .env |
+| `APP_URL` | Public URL | Yes | docker-compose.yml |
+| `ADMIN_URL` | Admin URL | Yes | docker-compose.yml |
+| `SESSION_SECRET` | Express session secret | Yes | .env |
+| `CARDMINT_WEBHOOK_URL` | Backend webhook endpoint | Yes | docker-compose.yml |
+| `CARDMINT_WEBHOOK_SECRET` | Webhook HMAC secret | Yes | docker-compose.yml |
+| `CARDMINT_SYNC_ENABLED` | Enable bidirectional sync | Yes | docker-compose.yml |
+| `CARDMINT_ADMIN_API_KEY` | Unkey service key (preferred) | For extensions | docker-compose.yml |
+| `CARDMINT_BACKEND_URL` | Backend URL from container | For extensions | docker-compose.yml |
+
+### Cross-Service Variable Sync
+
+**These variables MUST have identical values across services:**
+
+| Variable | Backend | EverShop | Notes |
+|----------|---------|----------|-------|
+| `CARDMINT_ADMIN_API_KEY` | `/etc/cardmint-backend.env` | `docker-compose.yml` | **Static/Dual only.** In Unkey mode: EverShop holds a service key; backend holds `UNKEY_ROOT_KEY`. |
+| `CARDMINT_WEBHOOK_SECRET` | `/etc/cardmint-backend.env` (`EVERSHOP_WEBHOOK_SECRET`) | `docker-compose.yml` | EverShop→Backend webhook HMAC |
+
+### Container→Host Networking
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│ DO Droplet Host (157.245.213.233)                                   │
+│                                                                     │
+│  ┌─────────────────────────────────┐                                │
+│  │ Docker Network (MyEverShop)     │                                │
+│  │                                 │                                │
+│  │  cardmint-app-1 ─────┐          │     ┌──────────────────────┐   │
+│  │  (EverShop :3000)    │          │     │ CardMint Backend     │   │
+│  │                      │          │     │ (systemd :4000)      │   │
+│  │  cardmint-database-1 │  ───────────►  │                      │   │
+│  │  (Postgres :5432)    │ 172.17.0.1     │ /etc/cardmint-       │   │
+│  │                      │          │     │   backend.env        │   │
+│  └──────────────────────┘          │     └──────────────────────┘   │
+│                                    │                                │
+│  Container→Host: http://172.17.0.1:4000                            │
+│  (NOT localhost - containers can't reach host's localhost)          │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+**Key insight:** Docker containers cannot reach `localhost:4000`. Use `172.17.0.1:4000` (Docker bridge gateway) to reach host services from within a container.
+
+---
+
+## Pre-Deployment Checklist
+
+Run these checks **before** any production deployment:
+
+### 1. Backend Health
+```bash
+ssh -i ~/.ssh/cardmint_droplet cardmint@157.245.213.233 'curl -sS localhost:4000/health | jq -r .status'
+# Expected: "ok"
+```
+
+### 2. Container Status
+```bash
+ssh -i ~/.ssh/cardmint_droplet cardmint@157.245.213.233 'docker ps --format "{{.Names}}: {{.Status}}"'
+# Expected: cardmint-app-1: Up ..., cardmint-database-1: Up ...
+```
+
+### 3. Container→Host Connectivity
+```bash
+ssh -i ~/.ssh/cardmint_droplet cardmint@157.245.213.233 \
+  'docker exec cardmint-app-1 node -e "fetch(\"http://172.17.0.1:4000/health\").then(r=>r.json()).then(d=>console.log(d.status)).catch(e=>console.log(\"FAIL:\",e.message))"'
+# Expected: "ok"
+```
+
+### 4. Admin API Key Configured (for extensions needing backend access)
+```bash
+ssh -i ~/.ssh/cardmint_droplet cardmint@157.245.213.233 \
+  'grep -q CARDMINT_ADMIN_API_KEY /etc/cardmint-backend.env && echo "Backend: ✓" || echo "Backend: MISSING"'
+ssh -i ~/.ssh/cardmint_droplet cardmint@157.245.213.233 \
+  'docker exec cardmint-app-1 printenv CARDMINT_ADMIN_API_KEY >/dev/null 2>&1 && echo "EverShop: ✓" || echo "EverShop: MISSING"'
+```
+
+### 5. Disk Space
+```bash
+ssh -i ~/.ssh/cardmint_droplet cardmint@157.245.213.233 'df -h / | tail -1 | awk "{print \$5}"'
+# Expected: <80%
+```
+
+---
+
 ## CardMint Backend Deployment
 
 The CardMint backend at `/var/www/cardmint-backend/` is deployed via rsync (not git clone).
@@ -540,12 +795,25 @@ ssh -i ~/.ssh/cardmint_droplet cardmint@157.245.213.233 'curl -sS localhost:4000
 
 ### Environment Configuration
 
-Backend environment file: `/etc/cardmint-backend.env`
+> **CRITICAL:** The backend uses **two** env files that must stay in sync:
+> - `/var/www/cardmint-backend/.env` — **Actually read by the backend** (via dotenv in `config.ts`)
+> - `/etc/cardmint-backend.env` — Referenced by systemd EnvironmentFile (legacy, kept for reference)
+>
+> When updating env vars, update `/var/www/cardmint-backend/.env` and restart the service.
+> The systemd EnvironmentFile is NOT used because dotenv loads the local `.env` first.
 
-Key variables (Dec 2025):
-- `CARDMINT_ADMIN_API_KEY` - Bearer token for `/api/admin/*`
+Key variables (Jan 2026):
+- `CARDMINT_ADMIN_AUTH_MODE` - `static|unkey|dual` for admin endpoint auth
+- `CARDMINT_ADMIN_API_KEY` - Bearer token for `/api/cm-admin/*` (static/dual mode only)
+- `UNKEY_ROOT_KEY` - Unkey root key with verify permission (unkey/dual mode only)
+- `UNKEY_ADMIN_PERMISSION` - Optional Unkey permission expression required for admin endpoints
+- `CARDMINT_PRINT_AGENT_AUTH_MODE` - `static|unkey|dual` for `/api/print-agent/*`
+- `UNKEY_PRINT_AGENT_PERMISSION` - Optional Unkey permission expression for print agent keys
+- `CARDMINT_DISPLAY_AUTH_MODE` - `static|unkey|dual` for `/api/stock-summary`
+- `UNKEY_DISPLAY_PERMISSION` - Optional Unkey permission expression for display keys
 - `CAPTURE_INTERNAL_KEY` - Header for capture/calibration endpoints
-- `DISPLAY_TOKEN` - Header for `/api/stock-summary/*`
+- `PRINT_AGENT_TOKEN` - Static token for `/api/print-agent/*` (static/dual mode only)
+- `DISPLAY_TOKEN` - Static token for `/api/stock-summary` (static/dual mode only)
 
 ### Service Management
 
@@ -611,8 +879,8 @@ ssh -i ~/.ssh/cardmint_droplet cardmint@157.245.213.233 'sudo systemctl status c
 
 ---
 
-**Document Version:** 5.0
+**Document Version:** 6.0
 **Maintained By:** Claude (Lead Developer)
 **Reviewed By:** Kyle (Operator/CEO)
-**Last Updated:** December 25, 2025 (prod-2025-12-27a deployment, security hardening)
-**Next Review:** After first fulfillment E2E test
+**Last Updated:** January 4, 2026 (Env vars master reference, container networking, extension deployment guide)
+**Next Review:** After fulfillment extension deploy

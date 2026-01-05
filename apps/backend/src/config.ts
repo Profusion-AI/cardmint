@@ -206,12 +206,23 @@ const envSchema = z.object({
   EMAIL_OUTBOX_STUCK_THRESHOLD_MS: z.coerce.number().default(300000), // 5 min before recovering stuck 'sending' rows
   // Admin API auth (Dec 2025 - Codex review security fix)
   CARDMINT_ADMIN_API_KEY: z.string().optional(),
+  CARDMINT_ADMIN_AUTH_MODE: z.enum(["static", "unkey", "dual"]).default("static"),
+  // Unkey auth (Jan 2026 - replace shared secrets with centrally-managed keys)
+  UNKEY_ROOT_KEY: z.string().optional(),
+  UNKEY_API_URL: z.string().default("https://api.unkey.com"),
+  UNKEY_ADMIN_PERMISSION: z.string().optional(),
+  UNKEY_PRINT_AGENT_PERMISSION: z.string().optional(),
+  UNKEY_DISPLAY_PERMISSION: z.string().optional(),
+  UNKEY_VERIFY_TIMEOUT_MS: z.coerce.number().default(2500),
+  UNKEY_VERIFY_CACHE_TTL_MS: z.coerce.number().default(60000),
   // Print agent auth (Phase 5 - local Fedora label pipeline)
   PRINT_AGENT_TOKEN: z.string().optional(),
+  CARDMINT_PRINT_AGENT_AUTH_MODE: z.enum(["static", "unkey", "dual"]).default("static"),
   // Internal endpoint auth (capture/calibration)
   CAPTURE_INTERNAL_KEY: z.string().optional(),
   // Stock display auth (ESP32 devices)
   DISPLAY_TOKEN: z.string().optional(),
+  CARDMINT_DISPLAY_AUTH_MODE: z.enum(["static", "unkey", "dual"]).default("static"),
 });
 
 const parsed = envSchema.parse(process.env);
@@ -457,10 +468,20 @@ export const runtimeConfig = {
   emailOutboxStuckThresholdMs: parsed.EMAIL_OUTBOX_STUCK_THRESHOLD_MS,
   // Admin API auth (Dec 2025 - Codex review security fix)
   cardmintAdminApiKey: parsed.CARDMINT_ADMIN_API_KEY ?? "",
+  cardmintAdminAuthMode: parsed.CARDMINT_ADMIN_AUTH_MODE,
+  unkeyRootKey: parsed.UNKEY_ROOT_KEY ?? "",
+  unkeyApiUrl: parsed.UNKEY_API_URL,
+  unkeyAdminPermission: parsed.UNKEY_ADMIN_PERMISSION ?? "",
+  unkeyPrintAgentPermission: parsed.UNKEY_PRINT_AGENT_PERMISSION ?? "",
+  unkeyDisplayPermission: parsed.UNKEY_DISPLAY_PERMISSION ?? "",
+  unkeyVerifyTimeoutMs: parsed.UNKEY_VERIFY_TIMEOUT_MS,
+  unkeyVerifyCacheTtlMs: parsed.UNKEY_VERIFY_CACHE_TTL_MS,
   // Print agent auth (Phase 5 - local Fedora label pipeline)
   printAgentToken: parsed.PRINT_AGENT_TOKEN ?? "",
+  printAgentAuthMode: parsed.CARDMINT_PRINT_AGENT_AUTH_MODE,
   captureInternalKey: parsed.CAPTURE_INTERNAL_KEY ?? "",
   displayToken: parsed.DISPLAY_TOKEN ?? "",
+  displayAuthMode: parsed.CARDMINT_DISPLAY_AUTH_MODE,
 };
 
 // Log API key detection status

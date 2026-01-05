@@ -102,10 +102,52 @@ Retrieve these only when the specific task requires them:
 | **EverShop extension gotchas** | `apps/evershop-extensions/cardmint_admin_theme/docs/COLUMN_EXTENSION_PATTERN.md` |
 | Fulfillment & EasyPost | `apps/backend/src/routes/fulfillment.ts`, `apps/backend/src/services/easyPostService.ts` |
 | **Security middleware** | `apps/backend/src/middleware/adminAuth.ts` — Bearer auth, internal access, display token |
+| **Unkey integration** | `docs/Unkey-readme.md` — Auth architecture, service keys, business strategy |
 | **First sale milestone** | `docs/milestones/2025-12-23-first-production-sale.md` |
 | **iPhone pipeline (isolated)** | `iPhone/readme/README.md` — TCGPlayer-only, no CardMint imports |
 
 > **Deployment rule:** Before any `ssh`, `rsync`, or prod file edit, re-read `docs/DO-verified-access.md` for current SSH credentials, paths, and safety protocols.
+
+> **EverShop extension rule:** In production, EverShop only discovers UI components from `extensions/*/dist/pages/**/[A-Z]*.js` (not `.jsx`), and the scanner requires a literal `export const layout = { areaId: '...', sortOrder: N }` (not `export { layout }`). Keep the `layout` export comment-free or the regex won't match.
+
+> **Backend env file rule:** The backend reads from `/var/www/cardmint-backend/.env` (dotenv), NOT `/etc/cardmint-backend.env`. Update the `.env` file directly when changing env vars.
+
+## Production Deployment Complexity
+
+**"Works locally" ≠ "Works in prod"** — Production has additional constraints:
+
+| Local | Production | Why Different |
+|-------|------------|---------------|
+| EverShop dev server | Docker container | Container can't reach host's `localhost` |
+| JSX works directly | Must transpile to `.js` | Prod scanner only reads `.js` files |
+| No auth needed | `CARDMINT_ADMIN_API_KEY` required | BackendProxy needs Bearer token |
+| Single process | Multiple services | Backend (systemd), EverShop (Docker), Postgres (Docker) |
+
+**Before any prod deployment:**
+1. Read `docs/DO-verified-access.md` (SSH, paths, env vars)
+2. Run pre-flight checks (health, connectivity, env vars)
+3. Follow the full deploy sequence (build → rsync → container rebuild → restart)
+
+**Container→Host networking:** Use `http://172.17.0.1:4000` to reach CardMint backend from EverShop container (not `localhost:4000`).
+
+**Env vars that must match across services:**
+- `CARDMINT_ADMIN_API_KEY` — EverShop `/opt/cardmint/.env` ↔ backend `/var/www/cardmint-backend/.env` (only when `CARDMINT_ADMIN_AUTH_MODE=static|dual`)
+- `CARDMINT_WEBHOOK_SECRET` — EverShop `/opt/cardmint/.env` ↔ backend `/var/www/cardmint-backend/.env` (`EVERSHOP_WEBHOOK_SECRET`)
+
+**Unkey (immediate auth migration):**
+- Backend `/var/www/cardmint-backend/.env`: `CARDMINT_ADMIN_AUTH_MODE=unkey|dual`, `UNKEY_ROOT_KEY`, optional `UNKEY_ADMIN_PERMISSION`
+- EverShop `/opt/cardmint/.env`: `CARDMINT_ADMIN_API_KEY` becomes the Unkey service key (still sent as `Authorization: Bearer ...`)
+- Optional: migrate additional inbound tokens to Unkey (no client header changes required)
+  - Print agent: `CARDMINT_PRINT_AGENT_AUTH_MODE=unkey|dual`, `UNKEY_PRINT_AGENT_PERMISSION` (client still sends `X-Print-Agent-Token`)
+  - Stock display: `CARDMINT_DISPLAY_AUTH_MODE=unkey|dual`, `UNKEY_DISPLAY_PERMISSION` (device still sends `X-CardMint-Display-Token`)
+
+> Never put `UNKEY_ROOT_KEY` in EverShop, print agent, or devices. Only the backend needs it for verification.
+
+**CEO Sprint Policy (Jan 2026): Unkey rotation posture**
+- `UNKEY_ROOT_KEY` is treated as the primary “crown jewel” and is the **only** key we rotate immediately on suspected exposure.
+- Unkey **service keys** (e.g., EverShop/print-agent/display/agent keys) may remain in place during the sprint even if exposure is suspected; track as known risk/tech debt and revisit after the sprint.
+
+**If extension deploy fails:** Check troubleshooting table in `docs/DO-verified-access.md` → "EverShop Extension Deployment".
 
 ## Prod Constraints (non-negotiable)
 

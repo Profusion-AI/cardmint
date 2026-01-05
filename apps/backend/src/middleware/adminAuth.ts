@@ -11,6 +11,7 @@
 
 import type { Request, Response, NextFunction } from "express";
 import { runtimeConfig } from "../config";
+import { verifyUnkeyKey } from "../services/unkeyAuth";
 
 const logger = {
   warn: (data: object, msg: string) => console.warn(`[adminAuth] ${msg}`, JSON.stringify(data)),
@@ -43,21 +44,6 @@ function extractBearerToken(req: Request): string | null {
  * Logs attempts (without leaking token values).
  */
 export function requireAdminAuth(req: Request, res: Response, next: NextFunction): void {
-  const configuredKey = runtimeConfig.cardmintAdminApiKey;
-
-  // If no admin key is configured, reject all requests (fail closed)
-  if (!configuredKey) {
-    logger.warn(
-      { path: req.path, method: req.method, ip: req.ip },
-      "Admin auth rejected: CARDMINT_ADMIN_API_KEY not configured"
-    );
-    res.status(503).json({
-      error: "ADMIN_AUTH_NOT_CONFIGURED",
-      message: "Admin API authentication is not configured on this server",
-    });
-    return;
-  }
-
   const providedToken = extractBearerToken(req);
 
   if (!providedToken) {
@@ -72,8 +58,111 @@ export function requireAdminAuth(req: Request, res: Response, next: NextFunction
     return;
   }
 
-  // Constant-time comparison to prevent timing attacks
-  if (!timingSafeEqual(providedToken, configuredKey)) {
+  const mode = runtimeConfig.cardmintAdminAuthMode;
+  const configuredStaticKey = runtimeConfig.cardmintAdminApiKey;
+  const hasStatic = !!configuredStaticKey;
+  const hasUnkey = !!runtimeConfig.unkeyRootKey;
+
+  if (mode === "static") {
+    if (!hasStatic) {
+      logger.warn(
+        { path: req.path, method: req.method, ip: req.ip },
+        "Admin auth rejected: CARDMINT_ADMIN_API_KEY not configured"
+      );
+      res.status(503).json({
+        error: "ADMIN_AUTH_NOT_CONFIGURED",
+        message: "Admin API authentication is not configured on this server",
+      });
+      return;
+    }
+
+    if (!timingSafeEqual(providedToken, configuredStaticKey)) {
+      logger.warn(
+        { path: req.path, method: req.method, ip: req.ip },
+        "Admin auth rejected: invalid token"
+      );
+      res.status(401).json({
+        error: "UNAUTHORIZED",
+        message: "Invalid admin API key",
+      });
+      return;
+    }
+
+    next();
+    return;
+  }
+
+  if (mode === "unkey") {
+    if (!hasUnkey) {
+      logger.warn(
+        { path: req.path, method: req.method, ip: req.ip },
+        "Admin auth rejected: UNKEY_ROOT_KEY not configured"
+      );
+      res.status(503).json({
+        error: "ADMIN_AUTH_NOT_CONFIGURED",
+        message: "Admin API authentication is not configured on this server",
+      });
+      return;
+    }
+
+    void (async () => {
+      const result = await verifyUnkeyKey({
+        key: providedToken,
+        permissions: runtimeConfig.unkeyAdminPermission || undefined,
+        ip: req.ip,
+        path: req.path,
+      });
+
+      if (!result.ok) {
+        const status = result.status === 429 ? 429 : 503;
+        logger.warn(
+          { path: req.path, method: req.method, ip: req.ip, reason: result.error, status: result.status },
+          "Admin auth rejected: Unkey verification error"
+        );
+        res.status(status).json({
+          error: result.error === "RATE_LIMITED" ? "RATE_LIMITED" : "ADMIN_AUTH_VERIFY_ERROR",
+          message: result.error === "RATE_LIMITED" ? "Too many requests" : "Admin API authentication failed verification",
+        });
+        return;
+      }
+
+      if (!result.data.valid) {
+        logger.warn(
+          { path: req.path, method: req.method, ip: req.ip, code: result.data.code },
+          "Admin auth rejected: invalid key"
+        );
+        res.status(401).json({
+          error: "UNAUTHORIZED",
+          message: "Invalid admin API key",
+        });
+        return;
+      }
+
+      next();
+    })();
+
+    return;
+  }
+
+  // dual: accept either static key or Unkey key
+  if (!hasStatic && !hasUnkey) {
+    logger.warn(
+      { path: req.path, method: req.method, ip: req.ip },
+      "Admin auth rejected: no auth provider configured"
+    );
+    res.status(503).json({
+      error: "ADMIN_AUTH_NOT_CONFIGURED",
+      message: "Admin API authentication is not configured on this server",
+    });
+    return;
+  }
+
+  if (hasStatic && timingSafeEqual(providedToken, configuredStaticKey)) {
+    next();
+    return;
+  }
+
+  if (!hasUnkey) {
     logger.warn(
       { path: req.path, method: req.method, ip: req.ip },
       "Admin auth rejected: invalid token"
@@ -85,8 +174,41 @@ export function requireAdminAuth(req: Request, res: Response, next: NextFunction
     return;
   }
 
-  // Auth successful
-  next();
+  void (async () => {
+    const result = await verifyUnkeyKey({
+      key: providedToken,
+      permissions: runtimeConfig.unkeyAdminPermission || undefined,
+      ip: req.ip,
+      path: req.path,
+    });
+
+    if (!result.ok) {
+      const status = result.status === 429 ? 429 : 503;
+      logger.warn(
+        { path: req.path, method: req.method, ip: req.ip, reason: result.error, status: result.status },
+        "Admin auth rejected: Unkey verification error"
+      );
+      res.status(status).json({
+        error: result.error === "RATE_LIMITED" ? "RATE_LIMITED" : "ADMIN_AUTH_VERIFY_ERROR",
+        message: result.error === "RATE_LIMITED" ? "Too many requests" : "Admin API authentication failed verification",
+      });
+      return;
+    }
+
+    if (!result.data.valid) {
+      logger.warn(
+        { path: req.path, method: req.method, ip: req.ip, code: result.data.code },
+        "Admin auth rejected: invalid key"
+      );
+      res.status(401).json({
+        error: "UNAUTHORIZED",
+        message: "Invalid admin API key",
+      });
+      return;
+    }
+
+    next();
+  })();
 }
 
 /**
@@ -164,22 +286,122 @@ export function requireInternalAccess(req: Request, res: Response, next: NextFun
  * Checks X-CardMint-Display-Token header.
  */
 export function requireDisplayToken(req: Request, res: Response, next: NextFunction): void {
+  const mode = runtimeConfig.displayAuthMode;
   const configuredToken = runtimeConfig.displayToken;
+  const hasStatic = !!configuredToken;
+  const hasUnkey = !!runtimeConfig.unkeyRootKey;
 
-  // If no display token is configured, allow access (for dev/backward compat)
-  if (!configuredToken) {
-    if (!didWarnMissingDisplayToken && runtimeConfig.cardmintEnv === "production") {
-      didWarnMissingDisplayToken = true;
-      logger.warn(
-        { env: runtimeConfig.cardmintEnv },
-        "DISPLAY_TOKEN not configured; stock display endpoints are unprotected",
-      );
+  const providedToken = req.headers["x-cardmint-display-token"] as string | undefined;
+
+  if (mode === "static") {
+    // If no display token is configured, allow access (for dev/backward compat)
+    if (!hasStatic) {
+      if (!didWarnMissingDisplayToken && runtimeConfig.cardmintEnv === "production") {
+        didWarnMissingDisplayToken = true;
+        logger.warn(
+          { env: runtimeConfig.cardmintEnv },
+          "DISPLAY_TOKEN not configured; stock display endpoints are unprotected",
+        );
+      }
+      next();
+      return;
     }
+
+    if (!providedToken) {
+      res.status(401).json({
+        error: "UNAUTHORIZED",
+        message: "Missing X-CardMint-Display-Token header",
+      });
+      return;
+    }
+
+    if (!timingSafeEqual(providedToken, configuredToken)) {
+      res.status(401).json({
+        error: "UNAUTHORIZED",
+        message: "Invalid display token",
+      });
+      return;
+    }
+
     next();
     return;
   }
 
-  const providedToken = req.headers["x-cardmint-display-token"] as string | undefined;
+  if (mode === "unkey") {
+    if (!hasUnkey) {
+      logger.warn({ env: runtimeConfig.cardmintEnv }, "Display auth rejected: UNKEY_ROOT_KEY not configured");
+      res.status(503).json({
+        error: "DISPLAY_AUTH_NOT_CONFIGURED",
+        message: "Display authentication is not configured on this server",
+      });
+      return;
+    }
+
+    if (!providedToken) {
+      res.status(401).json({
+        error: "UNAUTHORIZED",
+        message: "Missing X-CardMint-Display-Token header",
+      });
+      return;
+    }
+
+    void (async () => {
+      const result = await verifyUnkeyKey({
+        key: providedToken,
+        permissions: runtimeConfig.unkeyDisplayPermission || undefined,
+        ip: req.ip,
+        path: req.path,
+      });
+
+      if (!result.ok) {
+        const status = result.status === 429 ? 429 : 503;
+        logger.warn(
+          { path: req.path, method: req.method, ip: req.ip, reason: result.error, status: result.status },
+          "Display auth rejected: Unkey verification error"
+        );
+        res.status(status).json({
+          error: result.error === "RATE_LIMITED" ? "RATE_LIMITED" : "DISPLAY_AUTH_VERIFY_ERROR",
+          message: result.error === "RATE_LIMITED" ? "Too many requests" : "Display authentication failed verification",
+        });
+        return;
+      }
+
+      if (!result.data.valid) {
+        res.status(401).json({
+          error: "UNAUTHORIZED",
+          message: "Invalid display token",
+        });
+        return;
+      }
+
+      next();
+    })();
+
+    return;
+  }
+
+  // dual: accept either static token or Unkey key
+  if (!hasStatic && !hasUnkey) {
+    logger.warn({ env: runtimeConfig.cardmintEnv }, "Display auth rejected: no auth provider configured");
+    res.status(503).json({
+      error: "DISPLAY_AUTH_NOT_CONFIGURED",
+      message: "Display authentication is not configured on this server",
+    });
+    return;
+  }
+
+  if (hasStatic && providedToken && timingSafeEqual(providedToken, configuredToken)) {
+    next();
+    return;
+  }
+
+  if (!hasUnkey) {
+    res.status(401).json({
+      error: "UNAUTHORIZED",
+      message: "Invalid display token",
+    });
+    return;
+  }
 
   if (!providedToken) {
     res.status(401).json({
@@ -189,15 +411,37 @@ export function requireDisplayToken(req: Request, res: Response, next: NextFunct
     return;
   }
 
-  if (!timingSafeEqual(providedToken, configuredToken)) {
-    res.status(401).json({
-      error: "UNAUTHORIZED",
-      message: "Invalid display token",
+  void (async () => {
+    const result = await verifyUnkeyKey({
+      key: providedToken,
+      permissions: runtimeConfig.unkeyDisplayPermission || undefined,
+      ip: req.ip,
+      path: req.path,
     });
-    return;
-  }
 
-  next();
+    if (!result.ok) {
+      const status = result.status === 429 ? 429 : 503;
+      logger.warn(
+        { path: req.path, method: req.method, ip: req.ip, reason: result.error, status: result.status },
+        "Display auth rejected: Unkey verification error"
+      );
+      res.status(status).json({
+        error: result.error === "RATE_LIMITED" ? "RATE_LIMITED" : "DISPLAY_AUTH_VERIFY_ERROR",
+        message: result.error === "RATE_LIMITED" ? "Too many requests" : "Display authentication failed verification",
+      });
+      return;
+    }
+
+    if (!result.data.valid) {
+      res.status(401).json({
+        error: "UNAUTHORIZED",
+        message: "Invalid display token",
+      });
+      return;
+    }
+
+    next();
+  })();
 }
 
 /**
