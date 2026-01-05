@@ -1365,6 +1365,65 @@ export function registerFulfillmentRoutes(app: Express, ctx: AppContext): void {
       res.status(500).json({ error: "Failed to resend tracking email" });
     }
   });
+
+  /**
+   * GET /api/cm-admin/fulfillment/:sessionId/customer
+   * Fetch customer shipping details from Stripe (on-demand PII lookup)
+   *
+   * Returns customer name and shipping address for label verification.
+   * NOT stored in DB - fetched live from Stripe to maintain PII protection.
+   */
+  router.get("/:sessionId/customer", async (req: Request, res: Response) => {
+    const { operatorId, clientIp, userAgent } = (req as any).auditContext;
+    const { sessionId } = req.params;
+
+    logger.info(
+      { operatorId, clientIp, userAgent, sessionId, action: "customer.lookup" },
+      "fulfillment.customer.lookup"
+    );
+
+    try {
+      // Verify fulfillment exists
+      const fulfillment = db
+        .prepare("SELECT id FROM fulfillment WHERE stripe_session_id = ?")
+        .get(sessionId) as { id: number } | undefined;
+
+      if (!fulfillment) {
+        return res.status(404).json({ error: "Fulfillment not found" });
+      }
+
+      // Fetch from Stripe (live lookup, not stored)
+      const session = await stripeService.getCheckoutSession(sessionId);
+      if (!session) {
+        return res.status(404).json({ error: "Stripe session not found" });
+      }
+
+      const shippingDetails = session.shipping_details ?? session.customer_details;
+      if (!shippingDetails) {
+        return res.status(404).json({ error: "No customer details on Stripe session" });
+      }
+
+      // Return customer info (audit logged but not persisted)
+      res.json({
+        customerName: shippingDetails.name ?? null,
+        email: session.customer_details?.email ?? null,
+        phone: shippingDetails.phone ?? null,
+        address: shippingDetails.address
+          ? {
+              line1: shippingDetails.address.line1,
+              line2: shippingDetails.address.line2 ?? null,
+              city: shippingDetails.address.city,
+              state: shippingDetails.address.state,
+              postalCode: shippingDetails.address.postal_code,
+              country: shippingDetails.address.country,
+            }
+          : null,
+      });
+    } catch (err) {
+      logger.error({ err, sessionId, operatorId }, "Failed to fetch customer details");
+      res.status(500).json({ error: "Failed to fetch customer details" });
+    }
+  });
 }
 
 /**

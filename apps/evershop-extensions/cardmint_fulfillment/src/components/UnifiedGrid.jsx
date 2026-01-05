@@ -8,6 +8,7 @@ import MarketplaceShipmentActions from './MarketplaceShipmentActions.js';
  * Displays fulfillments from all sources in a unified table format.
  * Supports pagination and shows source-specific details.
  * Includes action buttons for marketplace shipments (Phase 4).
+ * Customer lookup for CardMint orders (on-demand PII from Stripe).
  */
 export default function UnifiedGrid({
   fulfillments = [],
@@ -20,6 +21,31 @@ export default function UnifiedGrid({
 }) {
   const [ratesModalOpen, setRatesModalOpen] = useState(false);
   const [selectedShipment, setSelectedShipment] = useState(null);
+  // Customer lookup state (keyed by fulfillment id)
+  const [customerData, setCustomerData] = useState({});
+  const [customerLoading, setCustomerLoading] = useState({});
+
+  // Fetch customer details from Stripe via backend
+  const handleLookupCustomer = async (fulfillmentId, stripeSessionId) => {
+    if (customerData[fulfillmentId] || customerLoading[fulfillmentId]) return;
+
+    setCustomerLoading((prev) => ({ ...prev, [fulfillmentId]: true }));
+    try {
+      const response = await fetch(`/api/admin/api/fulfillment/stripe/${stripeSessionId}/customer`, {
+        credentials: 'include',
+      });
+      const data = await response.json();
+      if (data.ok) {
+        setCustomerData((prev) => ({ ...prev, [fulfillmentId]: data }));
+      } else {
+        setCustomerData((prev) => ({ ...prev, [fulfillmentId]: { error: data.error || 'Failed to load' } }));
+      }
+    } catch (err) {
+      setCustomerData((prev) => ({ ...prev, [fulfillmentId]: { error: 'Network error' } }));
+    } finally {
+      setCustomerLoading((prev) => ({ ...prev, [fulfillmentId]: false }));
+    }
+  };
 
   const handleOpenRatesModal = (shipment) => {
     setSelectedShipment(shipment);
@@ -199,15 +225,68 @@ export default function UnifiedGrid({
                 <span style={sourceTagStyle(f.source)}>{f.source}</span>
               </td>
               <td style={tdStyle}>
-                <strong>{f.orderNumber}</strong>
+                {f.orderNumber?.startsWith('Session:') ? (
+                  <div>
+                    <span style={{ color: '#6B7280', fontSize: '11px' }}>Stripe checkout</span>
+                    <br />
+                    <strong style={{ fontFamily: 'monospace', fontSize: '12px' }}>{f.orderNumber.replace('Session: ', '#')}</strong>
+                  </div>
+                ) : (
+                  <strong>{f.orderNumber || '—'}</strong>
+                )}
               </td>
               <td style={tdStyle}>
-                {f.customerName || <span style={{ color: '#9CA3AF', fontStyle: 'italic' }}>PII Protected</span>}
+                {f.customerName ? (
+                  f.customerName
+                ) : f.source === 'cardmint' && f.sourceRef?.stripeSessionId ? (
+                  customerData[f.id] ? (
+                    customerData[f.id].error ? (
+                      <span style={{ color: '#C62828', fontSize: '11px' }}>{customerData[f.id].error}</span>
+                    ) : (
+                      <div style={{ fontSize: '12px', lineHeight: '1.4' }}>
+                        <div style={{ fontWeight: 500 }}>{customerData[f.id].customerName}</div>
+                        {customerData[f.id].address && (
+                          <div style={{ color: '#6B7280', fontSize: '11px' }}>
+                            {customerData[f.id].address.city}, {customerData[f.id].address.state} {customerData[f.id].address.postalCode}
+                          </div>
+                        )}
+                      </div>
+                    )
+                  ) : (
+                    <button
+                      onClick={() => handleLookupCustomer(f.id, f.sourceRef.stripeSessionId)}
+                      disabled={customerLoading[f.id]}
+                      style={{
+                        padding: '2px 8px',
+                        fontSize: '11px',
+                        borderRadius: '4px',
+                        border: '1px solid #e5e7eb',
+                        backgroundColor: customerLoading[f.id] ? '#f3f4f6' : '#fff',
+                        color: customerLoading[f.id] ? '#9CA3AF' : '#1565C0',
+                        cursor: customerLoading[f.id] ? 'not-allowed' : 'pointer',
+                      }}
+                    >
+                      {customerLoading[f.id] ? 'Loading...' : 'View'}
+                    </button>
+                  )
+                ) : (
+                  <span style={{ color: '#9CA3AF', fontStyle: 'italic' }}>PII Protected</span>
+                )}
               </td>
               <td style={tdStyle}>{f.itemCount}</td>
               <td style={tdStyle}>{formatCurrency(f.valueCents)}</td>
               <td style={tdStyle}>
                 <span style={statusTagStyle(f.status)}>{f.status.replace('_', ' ')}</span>
+                {f.exception && (
+                  <div style={{ marginTop: '4px', fontSize: '11px', color: '#6B7280', maxWidth: '180px' }}>
+                    <div style={{ fontWeight: 500, color: '#C62828' }}>{f.exception.type?.replace(/_/g, ' ')}</div>
+                    {f.exception.notes && (
+                      <div style={{ marginTop: '2px', lineHeight: '1.3', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                        {f.exception.notes.length > 80 ? `${f.exception.notes.slice(0, 80)}…` : f.exception.notes}
+                      </div>
+                    )}
+                  </div>
+                )}
               </td>
               <td style={tdStyle}>
                 {f.shipping?.trackingNumber ? (

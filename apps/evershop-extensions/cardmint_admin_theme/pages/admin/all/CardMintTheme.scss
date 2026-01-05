@@ -73,6 +73,23 @@ body {
   border-left: 3px solid #4ADC61 !important;
 }
 
+/* Section headers in navigation (QUICK LINKS, CATALOG, SALE, etc.) */
+.admin-nav .root-label,
+.admin-navigation .root-label {
+  color: #9CA3AF !important;  /* Light gray - visible on dark sidebar bg */
+}
+
+/* Navigation item icons */
+.admin-navigation .nav-item svg,
+.admin-nav .nav-item svg {
+  color: #6B7280 !important;
+}
+
+.admin-navigation .nav-item.active svg,
+.admin-nav .nav-item.active svg {
+  color: #4ADC61 !important;
+}
+
 /* Main content area */
 #app {
   background-color: var(--background) !important;
