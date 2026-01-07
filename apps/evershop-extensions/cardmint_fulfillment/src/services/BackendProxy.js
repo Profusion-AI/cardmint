@@ -77,13 +77,19 @@ export async function proxyGet(path, query = {}) {
     const data = await response.json();
 
     if (!response.ok) {
-      return { ok: false, status: response.status, error: data.error || data.message || "Unknown error" };
+      // Include full backend response data for error context
+      return {
+        ok: false,
+        status: response.status,
+        error: data.error || data.message || "Unknown error",
+        data, // Forward full error body for message and debug info
+      };
     }
 
     return { ok: true, status: response.status, data };
   } catch (error) {
     console.error("[BackendProxy] GET error:", error.message);
-    return { ok: false, status: 502, error: error.message };
+    return { ok: false, status: 502, error: error.message, data: null };
   }
 }
 
@@ -106,13 +112,19 @@ export async function proxyPost(path, body = {}) {
     const data = await response.json();
 
     if (!response.ok) {
-      return { ok: false, status: response.status, error: data.error || data.message || "Unknown error" };
+      // Include full backend response data for error context (message, detectedHeaders, etc.)
+      return {
+        ok: false,
+        status: response.status,
+        error: data.error || data.message || "Unknown error",
+        data, // Forward full error body for message, detectedHeaders, format info
+      };
     }
 
     return { ok: true, status: response.status, data };
   } catch (error) {
     console.error("[BackendProxy] POST error:", error.message);
-    return { ok: false, status: 502, error: error.message };
+    return { ok: false, status: 502, error: error.message, data: null };
   }
 }
 
@@ -135,13 +147,19 @@ export async function proxyPatch(path, body = {}) {
     const data = await response.json();
 
     if (!response.ok) {
-      return { ok: false, status: response.status, error: data.error || data.message || "Unknown error" };
+      // Include full backend response data for error context
+      return {
+        ok: false,
+        status: response.status,
+        error: data.error || data.message || "Unknown error",
+        data, // Forward full error body for message and debug info
+      };
     }
 
     return { ok: true, status: response.status, data };
   } catch (error) {
     console.error("[BackendProxy] PATCH error:", error.message);
-    return { ok: false, status: 502, error: error.message };
+    return { ok: false, status: 502, error: error.message, data: null };
   }
 }
 

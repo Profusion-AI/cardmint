@@ -91,6 +91,7 @@ interface MarketplaceShipmentRow {
   exception_type: string | null;
   exception_notes: string | null;
   shipment_created_at: number;
+  is_external: number; // 0 = CardMint-fulfilled, 1 = External/TCGPlayer-fulfilled
   // From marketplace_orders
   order_id: number;
   source: string;
@@ -103,6 +104,7 @@ interface MarketplaceShipmentRow {
   shipping_fee_cents: number;
   shipping_method: string | null;
   order_status: string;
+  import_format: string | null; // 'shipping_export' | 'orderlist'
 }
 
 /**
@@ -118,6 +120,8 @@ interface UnifiedFulfillment {
   shippingCostCents: number;
   shippingMethod: string | null;
   status: string;
+  isExternal: boolean;           // True = External fulfillment (no CardMint label), false = CardMint-fulfilled
+  importFormat?: string | null;  // 'shipping_export' | 'orderlist' (for marketplace debugging)
   shipping: {
     carrier: string | null;
     trackingNumber: string | null;
@@ -393,6 +397,7 @@ export function registerFulfillmentRoutes(app: Express, ctx: AppContext): void {
             ms.exception_type,
             ms.exception_notes,
             ms.created_at as shipment_created_at,
+            ms.is_external,
             mo.id as order_id,
             mo.source,
             mo.external_order_id,
@@ -403,7 +408,8 @@ export function registerFulfillmentRoutes(app: Express, ctx: AppContext): void {
             mo.product_value_cents,
             mo.shipping_fee_cents,
             mo.shipping_method,
-            mo.status as order_status
+            mo.status as order_status,
+            mo.import_format
           FROM marketplace_shipments ms
           JOIN marketplace_orders mo ON ms.marketplace_order_id = mo.id
         `;
@@ -1495,6 +1501,7 @@ function formatStripeToUnified(row: FulfillmentRow): UnifiedFulfillment {
     shippingCostCents: row.shipping_cost_cents,
     shippingMethod: row.shipping_method,
     status: row.status,
+    isExternal: false, // Stripe/CardMint orders are always internal
     shipping: {
       carrier: row.carrier,
       trackingNumber: row.tracking_number,
@@ -1535,6 +1542,8 @@ function formatMarketplaceToUnified(row: MarketplaceShipmentRow): UnifiedFulfill
     shippingCostCents: row.shipping_fee_cents,
     shippingMethod: row.shipping_method,
     status: row.shipment_status,
+    isExternal: row.is_external === 1, // External = TCGPlayer-fulfilled (no CardMint label)
+    importFormat: row.import_format,
     shipping: {
       carrier: row.carrier,
       trackingNumber: row.tracking_number,

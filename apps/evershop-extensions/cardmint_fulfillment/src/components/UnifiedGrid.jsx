@@ -112,7 +112,20 @@ export default function UnifiedGrid({
     color: source === 'cardmint' ? '#2E7D32' : source === 'tcgplayer' ? '#1565C0' : '#E65100',
   });
 
-  const statusTagStyle = (status) => {
+  const statusTagStyle = (status, isExternal = false) => {
+    // External fulfillment gets a distinct neutral gray badge
+    if (isExternal) {
+      return {
+        display: 'inline-block',
+        padding: '2px 8px',
+        borderRadius: '12px',
+        fontSize: '11px',
+        fontWeight: 500,
+        backgroundColor: '#E5E7EB',
+        color: '#6B7280',
+      };
+    }
+
     const colors = {
       pending: { bg: '#FFF8E1', color: '#F57C00' },
       processing: { bg: '#E3F2FD', color: '#1565C0' },
@@ -223,6 +236,21 @@ export default function UnifiedGrid({
             <tr key={f.id}>
               <td style={tdStyle}>
                 <span style={sourceTagStyle(f.source)}>{f.source}</span>
+                {f.isExternal && (
+                  <span style={{
+                    display: 'inline-block',
+                    marginLeft: '6px',
+                    padding: '2px 6px',
+                    borderRadius: '4px',
+                    fontSize: '10px',
+                    fontWeight: 600,
+                    backgroundColor: '#FFF3E0',
+                    color: '#E65100',
+                    border: '1px solid #FFB74D',
+                  }}>
+                    EXTERNAL
+                  </span>
+                )}
               </td>
               <td style={tdStyle}>
                 {f.orderNumber?.startsWith('Session:') ? (
@@ -276,7 +304,11 @@ export default function UnifiedGrid({
               <td style={tdStyle}>{f.itemCount}</td>
               <td style={tdStyle}>{formatCurrency(f.valueCents)}</td>
               <td style={tdStyle}>
-                <span style={statusTagStyle(f.status)}>{f.status.replace('_', ' ')}</span>
+                {f.isExternal ? (
+                  <span style={statusTagStyle(f.status, true)}>External</span>
+                ) : (
+                  <span style={statusTagStyle(f.status)}>{f.status.replace('_', ' ')}</span>
+                )}
                 {f.exception && (
                   <div style={{ marginTop: '4px', fontSize: '11px', color: '#6B7280', maxWidth: '180px' }}>
                     <div style={{ fontWeight: 500, color: '#C62828' }}>{f.exception.type?.replace(/_/g, ' ')}</div>
@@ -314,6 +346,7 @@ export default function UnifiedGrid({
                         trackingNumber: f.shipping?.trackingNumber,
                         itemCount: f.itemCount,
                         valueCents: f.valueCents,
+                        isExternal: f.isExternal,
                       }}
                       onOpenRatesModal={handleOpenRatesModal}
                       onStatusChange={handleStatusChange}

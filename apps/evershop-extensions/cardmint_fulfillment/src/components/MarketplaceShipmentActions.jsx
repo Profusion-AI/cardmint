@@ -4,7 +4,7 @@ import React, { useState } from 'react';
  * MarketplaceShipmentActions Component
  *
  * Action buttons for marketplace shipments based on current status.
- * - pending: "Get Rates" button
+ * - pending: "Purchase Label" button (opens rates modal)
  * - label_purchased: "Download Label" + "Mark Shipped" buttons
  * - shipped: "Mark Delivered" button
  */
@@ -77,15 +77,32 @@ export default function MarketplaceShipmentActions({
 
   return (
     <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
-      {/* Pending: Show "Get Rates" button */}
-      {status === 'pending' && (
+      {/* Pending: Show "Purchase Label" button (hidden for external fulfillment) */}
+      {status === 'pending' && !shipment.isExternal && (
         <button
           style={buttonStyle('primary')}
           onClick={() => onOpenRatesModal(shipment)}
           disabled={loading}
+          title="View shipping rates and purchase a label"
         >
-          Get Rates
+          Purchase Label
         </button>
+      )}
+
+      {/* External fulfillment: Show "TCGPlayer Fulfillment" indicator */}
+      {status === 'pending' && shipment.isExternal && (
+        <span
+          style={{
+            padding: '4px 8px',
+            backgroundColor: '#E5E7EB',
+            color: '#6B7280',
+            borderRadius: '4px',
+            fontSize: '11px',
+            fontWeight: 500,
+          }}
+        >
+          TCGPlayer Fulfillment
+        </span>
       )}
 
       {/* Label Purchased: Show "Download Label" + "Mark Shipped" */}

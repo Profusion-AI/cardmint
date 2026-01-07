@@ -28,8 +28,32 @@ export default function FulfillmentDashboard() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [showImportModal, setShowImportModal] = useState(false);
-  const [importType, setImportType] = useState(null); // 'tcgplayer' | 'easypost'
   const [pagination, setPagination] = useState({ limit: 20, offset: 0 });
+  const [toast, setToast] = useState({ show: false, message: '', fading: false });
+  const [stats, setStats] = useState({ pendingLabels: 0, unmatchedTracking: 0, exceptions: 0, shippedToday: 0 });
+  const [isRematching, setIsRematching] = useState(false);
+  const [unmatchedRefreshTrigger, setUnmatchedRefreshTrigger] = useState(0);
+
+  // Fetch stats (actionable counts)
+  const fetchStats = useCallback(async () => {
+    try {
+      const response = await fetch('/api/admin/api/fulfillment/stats', {
+        credentials: 'include',
+      });
+      const data = await response.json();
+      if (response.ok && data.ok) {
+        setStats({
+          pendingLabels: data.pendingLabels ?? 0,
+          unmatchedTracking: data.unmatchedTracking ?? 0,
+          exceptions: data.exceptions ?? 0,
+          shippedToday: data.shippedToday ?? 0,
+        });
+      }
+    } catch (err) {
+      // Stats fetch failure is non-critical, just log
+      console.warn('Failed to fetch stats:', err);
+    }
+  }, []);
 
   // Fetch fulfillments
   const fetchFulfillments = useCallback(async () => {
@@ -56,13 +80,16 @@ export default function FulfillmentDashboard() {
       setFulfillments(data.fulfillments || []);
       setCounts(data.counts || { cardmint: 0, marketplace: 0 });
       setTotal(data.total || 0);
+
+      // Also refresh stats when fulfillments change
+      fetchStats();
     } catch (err) {
       setError(err.message);
       setFulfillments([]);
     } finally {
       setLoading(false);
     }
-  }, [activeSource, statusFilter, pagination]);
+  }, [activeSource, statusFilter, pagination, fetchStats]);
 
   useEffect(() => {
     fetchFulfillments();
@@ -79,21 +106,56 @@ export default function FulfillmentDashboard() {
     setPagination({ ...pagination, offset: 0 });
   };
 
-  const handleImportClick = (type) => {
-    setImportType(type);
+  const handleImportClick = () => {
     setShowImportModal(true);
   };
 
   const handleImportClose = (shouldRefresh) => {
     setShowImportModal(false);
-    setImportType(null);
     if (shouldRefresh) {
       fetchFulfillments();
+      // Trigger UnmatchedTrackingPanel refresh (EasyPost import adds unmatched entries)
+      setUnmatchedRefreshTrigger(prev => prev + 1);
+      // Show success toast
+      setToast({ show: true, message: 'Upload Success!', fading: false });
+      // Start fade after 4.5s, hide after 5s
+      setTimeout(() => setToast(t => ({ ...t, fading: true })), 4500);
+      setTimeout(() => setToast({ show: false, message: '', fading: false }), 5000);
     }
   };
 
   const handlePageChange = (newOffset) => {
     setPagination({ ...pagination, offset: newOffset });
+  };
+
+  const handleRematch = async () => {
+    setIsRematching(true);
+    try {
+      const response = await fetch('/api/admin/api/fulfillment/marketplace/rematch', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      const data = await response.json();
+      if (!response.ok || !data.ok) {
+        throw new Error(data.error || 'Rematch failed');
+      }
+      // Refresh data (fetchFulfillments already triggers fetchStats)
+      await fetchFulfillments();
+      // Trigger UnmatchedTrackingPanel refresh
+      setUnmatchedRefreshTrigger(prev => prev + 1);
+      // Show success toast
+      setToast({ show: true, message: `Re-matched ${data.matched} tracking entries`, fading: false });
+      setTimeout(() => setToast(t => ({ ...t, fading: true })), 4500);
+      setTimeout(() => setToast({ show: false, message: '', fading: false }), 5000);
+    } catch (err) {
+      setToast({ show: true, message: `Rematch failed: ${err.message}`, fading: false });
+      setTimeout(() => setToast(t => ({ ...t, fading: true })), 4500);
+      setTimeout(() => setToast({ show: false, message: '', fading: false }), 5000);
+    } finally {
+      setIsRematching(false);
+    }
   };
 
   // Styles
@@ -216,6 +278,26 @@ export default function FulfillmentDashboard() {
     marginBottom: '20px',
   };
 
+  const toastStyle = {
+    position: 'fixed',
+    top: '20px',
+    right: '20px',
+    backgroundColor: '#4ADC61',
+    color: '#0A203F',
+    padding: '16px 24px',
+    borderRadius: '8px',
+    boxShadow: '0 4px 20px rgba(74, 220, 97, 0.4)',
+    fontWeight: 600,
+    fontSize: '14px',
+    zIndex: 1001,
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
+    opacity: toast.fading ? 0 : 1,
+    transform: toast.fading ? 'translateY(-10px)' : 'translateY(0)',
+    transition: 'opacity 0.5s ease, transform 0.5s ease',
+  };
+
   return (
     <div style={containerStyle}>
       {/* Header */}
@@ -224,32 +306,49 @@ export default function FulfillmentDashboard() {
         <div style={actionsStyle}>
           <button
             style={secondaryButtonStyle}
-            onClick={() => handleImportClick('easypost')}
+            onClick={handleRematch}
+            disabled={isRematching}
           >
-            Import EasyPost Tracking
+            {isRematching ? 'Re-matching...' : 'Re-match Tracking'}
           </button>
           <button
             style={primaryButtonStyle}
-            onClick={() => handleImportClick('tcgplayer')}
+            onClick={handleImportClick}
           >
-            Import TCGPlayer Orders
+            Import CSV
           </button>
         </div>
       </div>
 
-      {/* Stats Row */}
+      {/* Stats Row - Actionable Counts */}
       <div style={statsRowStyle}>
         <div style={statCardStyle}>
-          <div style={statLabelStyle}>Total Orders</div>
-          <div style={statValueStyle}>{total}</div>
+          <div style={statLabelStyle}>Pending Labels</div>
+          <div style={{
+            ...statValueStyle,
+            color: stats.pendingLabels > 0 ? '#F57C00' : '#0A203F',
+          }}>{stats.pendingLabels}</div>
         </div>
         <div style={statCardStyle}>
-          <div style={statLabelStyle}>CardMint</div>
-          <div style={statValueStyle}>{counts.cardmint}</div>
+          <div style={statLabelStyle}>Unmatched Tracking</div>
+          <div style={{
+            ...statValueStyle,
+            color: stats.unmatchedTracking > 0 ? '#E53935' : '#0A203F',
+          }}>{stats.unmatchedTracking}</div>
         </div>
         <div style={statCardStyle}>
-          <div style={statLabelStyle}>Marketplace</div>
-          <div style={statValueStyle}>{counts.marketplace}</div>
+          <div style={statLabelStyle}>Exceptions</div>
+          <div style={{
+            ...statValueStyle,
+            color: stats.exceptions > 0 ? '#C62828' : '#0A203F',
+          }}>{stats.exceptions}</div>
+        </div>
+        <div style={statCardStyle}>
+          <div style={statLabelStyle}>Shipped Today</div>
+          <div style={{
+            ...statValueStyle,
+            color: stats.shippedToday > 0 ? '#2E7D32' : '#0A203F',
+          }}>{stats.shippedToday}</div>
         </div>
       </div>
 
@@ -313,7 +412,7 @@ export default function FulfillmentDashboard() {
       )}
 
       {/* Unmatched Tracking Panel */}
-      <UnmatchedTrackingPanel onResolved={fetchFulfillments} />
+      <UnmatchedTrackingPanel onResolved={fetchFulfillments} refreshTrigger={unmatchedRefreshTrigger} />
 
       {/* Fulfillment Grid */}
       <UnifiedGrid
@@ -325,12 +424,22 @@ export default function FulfillmentDashboard() {
         onPageChange={handlePageChange}
       />
 
-      {/* Import Modal */}
+      {/* Import Modal (unified - auto-detects format) */}
       {showImportModal && (
         <ImportModal
-          type={importType}
           onClose={handleImportClose}
         />
+      )}
+
+      {/* Success Toast */}
+      {toast.show && (
+        <div style={toastStyle}>
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
+            <polyline points="22 4 12 14.01 9 11.01" />
+          </svg>
+          {toast.message}
+        </div>
       )}
     </div>
   );

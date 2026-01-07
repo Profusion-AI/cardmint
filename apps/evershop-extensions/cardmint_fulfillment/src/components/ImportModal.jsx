@@ -3,23 +3,39 @@ import React, { useState, useRef } from 'react';
 /**
  * Import Modal Component
  *
- * Handles CSV file upload for TCGPlayer orders and EasyPost tracking.
+ * Unified CSV import for fulfillment dashboard.
+ * Auto-detects CSV format and handles:
+ * - TCGPlayer Shipping Export (full address, label-ready)
+ * - TCGPlayer Order List (no address, external fulfillment)
+ * - EasyPost Tracking (tracking linkage)
+ *
  * Supports:
  * - File drag-and-drop
  * - Dry-run validation
  * - Import progress and results
  */
-export default function ImportModal({ type, onClose }) {
+// Max file size: 10MB (must match backend MAX_CSV_SIZE in marketplace.ts)
+const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024;
+const MAX_FILE_SIZE_DISPLAY = '10MB';
+
+export default function ImportModal({ type = 'unified', onClose }) {
   const [file, setFile] = useState(null);
   const [csvData, setCsvData] = useState('');
   const [dryRun, setDryRun] = useState(true);
   const [importing, setImporting] = useState(false);
   const [result, setResult] = useState(null);
+  const [resultWasDryRun, setResultWasDryRun] = useState(null); // Track dry run state at request time
   const [error, setError] = useState(null);
   const [dragOver, setDragOver] = useState(false);
   const fileInputRef = useRef(null);
 
   const typeConfig = {
+    unified: {
+      title: 'Import CSV',
+      description: 'Auto-detects format: TCGPlayer Shipping/Order List or EasyPost Tracking.',
+      endpoint: '/api/admin/api/fulfillment/import/unified',
+      helpText: 'Drop any supported CSV file. Format will be auto-detected from column headers.',
+    },
     tcgplayer: {
       title: 'Import TCGPlayer Orders',
       description: 'Upload a CSV file exported from TCGPlayer Seller Portal.',
@@ -34,20 +50,20 @@ export default function ImportModal({ type, onClose }) {
     },
   };
 
-  const config = typeConfig[type] || typeConfig.tcgplayer;
+  const config = typeConfig[type] || typeConfig.unified;
 
-  const shouldRefreshAfterImport = (data) => {
-    if (!data || dryRun) return false;
+  const shouldRefreshAfterImport = (data, wasDryRun) => {
+    if (!data || wasDryRun) return false;
 
-    if (type === 'tcgplayer') {
-      return (data.imported ?? 0) > 0;
-    }
-
-    if (type === 'easypost') {
-      return ((data.autoLinked ?? 0) + (data.queued ?? 0) + (data.unmatched ?? 0)) > 0;
-    }
-
-    return false;
+    // Unified import can have any combination of result fields
+    // Refresh if any data was changed
+    const changedCount = (data.imported ?? 0) +
+                         (data.upgraded ?? 0) +
+                         (data.autoLinked ?? 0) +
+                         (data.queued ?? 0) +
+                         (data.unmatched ?? 0) +
+                         (data.reMatched ?? 0);
+    return changedCount > 0;
   };
 
   // Handlers
@@ -82,9 +98,15 @@ export default function ImportModal({ type, onClose }) {
       return;
     }
 
+    if (selectedFile.size > MAX_FILE_SIZE_BYTES) {
+      setError(`File too large. Maximum size is ${MAX_FILE_SIZE_DISPLAY}`);
+      return;
+    }
+
     setFile(selectedFile);
     setError(null);
     setResult(null);
+    setResultWasDryRun(null);
 
     const reader = new FileReader();
     reader.onload = (e) => {
@@ -102,6 +124,9 @@ export default function ImportModal({ type, onClose }) {
       return;
     }
 
+    // Capture dryRun state at request time to prevent race conditions
+    const currentDryRun = dryRun;
+
     try {
       setImporting(true);
       setError(null);
@@ -113,20 +138,26 @@ export default function ImportModal({ type, onClose }) {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ csvData, dryRun }),
+        body: JSON.stringify({
+          csvData,
+          dryRun: currentDryRun,
+          fileName: file?.name,
+        }),
       });
 
       const data = await response.json();
 
       if (!response.ok || !data.ok) {
-        throw new Error(data.error || `HTTP ${response.status}`);
+        // Prefer human-readable message over error code
+        throw new Error(data.message || data.error || `HTTP ${response.status}`);
       }
 
       setResult(data);
+      setResultWasDryRun(currentDryRun); // Lock the dry run state for this result
 
       // If it was a real import (not dry run), refresh after delay
       // Check for any successful imports (TCGPlayer uses 'imported', EasyPost uses 'autoLinked' or 'queued')
-      if (shouldRefreshAfterImport(data)) {
+      if (shouldRefreshAfterImport(data, currentDryRun)) {
         setTimeout(() => {
           onClose(true);
         }, 2000);
@@ -139,11 +170,11 @@ export default function ImportModal({ type, onClose }) {
   };
 
   const handleClose = () => {
-    onClose(shouldRefreshAfterImport(result));
+    onClose(shouldRefreshAfterImport(result, resultWasDryRun));
   };
 
   const hasErrors = (result?.errors?.length ?? 0) > 0;
-  const didChange = shouldRefreshAfterImport(result);
+  const didChange = shouldRefreshAfterImport(result, resultWasDryRun);
 
   // Styles
   const overlayStyle = {
@@ -311,7 +342,7 @@ export default function ImportModal({ type, onClose }) {
               Drop CSV file here or click to browse
             </div>
             <div style={{ color: '#9CA3AF', fontSize: '12px', marginTop: '4px' }}>
-              Max file size: 10MB
+              Max file size: {MAX_FILE_SIZE_DISPLAY}
             </div>
           </div>
 
@@ -334,7 +365,16 @@ export default function ImportModal({ type, onClose }) {
             <input
               type="checkbox"
               checked={dryRun}
-              onChange={(e) => setDryRun(e.target.checked)}
+              onChange={(e) => {
+                const newDryRun = e.target.checked;
+                setDryRun(newDryRun);
+                // Clear stale validation result when toggling dry run OFF
+                // This forces user to click Import for fresh results
+                if (!newDryRun && result && resultWasDryRun) {
+                  setResult(null);
+                  setResultWasDryRun(null);
+                }
+              }}
             />
             <span>
               <strong>Dry run</strong> — validate without importing
@@ -355,42 +395,65 @@ export default function ImportModal({ type, onClose }) {
           {result && (
             <div style={resultStyle}>
               <div style={{ fontWeight: 600, marginBottom: '8px', color: '#0A203F' }}>
-                {dryRun ? 'Validation Complete' : 'Import Complete'}
+                {resultWasDryRun ? 'Validation Complete' : 'Import Complete'}
               </div>
+
+              {/* Show detected format for unified imports */}
+              {result.formatDisplayName && (
+                <div style={{ fontSize: '13px', color: '#6B7280', marginBottom: '8px', fontStyle: 'italic' }}>
+                  Detected: {result.formatDisplayName}
+                </div>
+              )}
+
+              {/* Warning for Order List imports (no address = no CardMint label) */}
+              {result.format === 'tcgplayer_orderlist' && (
+                <div style={{
+                  padding: '12px',
+                  backgroundColor: '#FFF3E0',
+                  borderRadius: '6px',
+                  marginBottom: '12px',
+                  border: '1px solid #FFB74D',
+                }}>
+                  <div style={{ fontWeight: 600, color: '#E65100', marginBottom: '4px' }}>
+                    External Fulfillment Only
+                  </div>
+                  <div style={{ fontSize: '13px', color: '#6B7280' }}>
+                    Order List imports do not include shipping addresses. These orders cannot have labels purchased through CardMint — fulfill through TCGPlayer.
+                  </div>
+                </div>
+              )}
+
               <div style={{ fontSize: '14px', color: '#374151' }}>
-                {/* TCGPlayer imports show: imported, skipped, errors */}
-                {type === 'tcgplayer' && (
-                  <>
-                    {result.imported > 0 && (
-                      <div style={{ color: '#2E7D32' }}>Imported: {result.imported}</div>
-                    )}
-                    {result.skipped > 0 && (
-                      <div style={{ color: '#F57C00' }}>Skipped (duplicates): {result.skipped}</div>
-                    )}
-                    {result.errors?.length > 0 && (
-                      <div style={{ color: '#C62828' }}>Errors: {result.errors.length}</div>
-                    )}
-                  </>
+                {/* Unified results - show all applicable fields */}
+                {/* TCGPlayer order imports */}
+                {result.imported > 0 && (
+                  <div style={{ color: '#2E7D32' }}>Imported: {result.imported}</div>
                 )}
-                {/* EasyPost tracking imports show: autoLinked, queued, unmatched, errors */}
-                {type === 'easypost' && (
-                  <>
-                    {result.autoLinked > 0 && (
-                      <div style={{ color: '#2E7D32' }}>Auto-linked: {result.autoLinked}</div>
-                    )}
-                    {result.queued > 0 && (
-                      <div style={{ color: '#1565C0' }}>Queued for review: {result.queued}</div>
-                    )}
-                    {result.unmatched > 0 && (
-                      <div style={{ color: '#F57C00' }}>Unmatched (needs review): {result.unmatched}</div>
-                    )}
-                    {result.errors?.length > 0 && (
-                      <div style={{ color: '#C62828' }}>Errors: {result.errors.length}</div>
-                    )}
-                  </>
+                {result.upgraded > 0 && (
+                  <div style={{ color: '#1565C0' }}>Upgraded: {result.upgraded} (Order List → Shipping Export)</div>
+                )}
+                {result.reMatched > 0 && (
+                  <div style={{ color: '#1565C0' }}>+ {result.reMatched} tracking entries auto-matched</div>
+                )}
+                {result.skipped > 0 && (
+                  <div style={{ color: '#F57C00' }}>Skipped (duplicates): {result.skipped}</div>
+                )}
+                {/* EasyPost tracking imports */}
+                {result.autoLinked > 0 && (
+                  <div style={{ color: '#2E7D32' }}>Auto-linked: {result.autoLinked}</div>
+                )}
+                {result.queued > 0 && (
+                  <div style={{ color: '#1565C0' }}>Queued for review: {result.queued}</div>
+                )}
+                {result.unmatched > 0 && (
+                  <div style={{ color: '#F57C00' }}>Unmatched (needs review): {result.unmatched}</div>
+                )}
+                {/* Errors */}
+                {result.errors?.length > 0 && (
+                  <div style={{ color: '#C62828' }}>Errors: {result.errors.length}</div>
                 )}
               </div>
-              {!dryRun && ((result.imported > 0) || (result.autoLinked > 0) || (result.queued > 0)) && (
+              {!resultWasDryRun && shouldRefreshAfterImport(result, false) && (
                 <div style={{ marginTop: '8px', fontSize: '13px', color: '#2E7D32' }}>
                   Closing in 2 seconds...
                 </div>

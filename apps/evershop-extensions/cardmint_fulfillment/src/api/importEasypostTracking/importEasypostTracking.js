@@ -27,6 +27,8 @@ export default async function importEasypostTracking(request, response) {
     return response.status(result.status).json({
       ok: false,
       error: result.error,
+      // Forward human-readable message for UX
+      message: result.data?.message || result.error,
     });
   }
 

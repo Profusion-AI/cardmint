@@ -8,6 +8,17 @@
 import type { Database, Statement } from "better-sqlite3";
 import type { Logger } from "pino";
 import { encryptJson, decryptJson } from "../../utils/encryption";
+import { normalizeNameForMatching } from "../../utils/nameNormalization.js";
+
+// ============================================================================
+// Module-Level State
+// ============================================================================
+
+/**
+ * Process-wide flag to ensure name normalization backfill runs at most once.
+ * Set to true after first successful probe/backfill.
+ */
+let didBackfillCustomerNameNormalization = false;
 
 // ============================================================================
 // Types
@@ -43,6 +54,7 @@ export interface MarketplaceOrder {
   shipping_method: string | null;
   status: "pending" | "processing" | "shipped" | "delivered" | "exception" | "cancelled";
   import_batch_id: number | null;
+  import_format: "shipping_export" | "orderlist";
   created_at: number;
   updated_at: number;
 }
@@ -86,6 +98,8 @@ export interface MarketplaceShipment {
   parcel_weight_oz: number | null;
   insured_value_cents: number | null;
   item_count: number | null;
+  // External fulfillment flag (Order List imports)
+  is_external: number; // 0 = CardMint label, 1 = TCGPlayer/external fulfillment
   // Concurrency lock for label purchase
   label_purchase_in_progress: number;
   label_purchase_locked_at: number | null;
@@ -132,6 +146,8 @@ export interface CreateOrderInput {
   shipping_method?: string;
   import_batch_id?: number;
   shipping_address?: ShippingAddress;
+  import_format?: "shipping_export" | "orderlist";
+  is_external?: boolean; // true = external fulfillment (Order List imports)
 }
 
 export interface ListOrdersOptions {
@@ -185,6 +201,97 @@ export class MarketplaceService {
     this.statements = this.prepareStatements();
   }
 
+  /**
+   * Backfill customer_name_normalized with consistent punctuation-stripping.
+   * Fixes inconsistency where old records may have punctuation (e.g., "O'DONNELL")
+   * while new normalization strips it ("ODONNELL").
+   *
+   * Idempotent: safe to call multiple times.
+   * @returns Number of records updated
+   */
+  backfillCustomerNameNormalization(): number {
+    const rows = this.db.prepare(`
+      SELECT id, customer_name, customer_name_normalized
+      FROM marketplace_orders
+    `).all() as Array<{ id: number; customer_name: string; customer_name_normalized: string }>;
+
+    const update = this.db.prepare(`
+      UPDATE marketplace_orders
+      SET customer_name_normalized = ?, updated_at = strftime('%s','now')
+      WHERE id = ?
+    `);
+
+    const tx = this.db.transaction(() => {
+      let updated = 0;
+      for (const row of rows) {
+        const normalized = normalizeNameForMatching(row.customer_name);
+        if (normalized !== row.customer_name_normalized) {
+          update.run(normalized, row.id);
+          updated++;
+        }
+      }
+      return updated;
+    });
+
+    const updatedCount = tx();
+    if (updatedCount > 0) {
+      this.logger.info(
+        { updatedCount },
+        "Backfilled customer_name_normalized (punctuation normalization)"
+      );
+    }
+    return updatedCount;
+  }
+
+  /**
+   * Ensure customer_name_normalized is backfilled (one-time, process-wide).
+   *
+   * Uses a fast probe to check if any rows have punctuation in normalized name.
+   * If found, runs full backfill. Sets module-level flag to avoid repeated scans.
+   *
+   * Call this in non-dry-run flows before any matching operations.
+   * Safe to call multiple times - returns immediately after first run.
+   */
+  ensureCustomerNameNormalizationBackfilled(): void {
+    // Skip if already done this process
+    if (didBackfillCustomerNameNormalization) {
+      return;
+    }
+
+    // Fast probe: check if any rows have punctuation (apostrophe, hyphen, period, comma)
+    // Note: SQLite uses '' to escape single quotes inside single-quoted strings
+    const probe = this.db.prepare(`
+      SELECT 1 FROM marketplace_orders
+      WHERE customer_name_normalized LIKE '%''%'
+         OR customer_name_normalized LIKE '%-%'
+         OR customer_name_normalized LIKE '%.%'
+         OR customer_name_normalized LIKE '%,%'
+      LIMIT 1
+    `).get();
+
+    if (probe) {
+      // Found punctuation in normalized names - run backfill
+      this.logger.info("Punctuation detected in customer_name_normalized, running backfill");
+      this.backfillCustomerNameNormalization();
+    }
+
+    // Mark as done regardless of whether backfill was needed
+    didBackfillCustomerNameNormalization = true;
+  }
+
+  /**
+   * Check if there are any pending unmatched tracking entries.
+   * Used to decide whether to run re-match even when no new orders imported.
+   */
+  hasUnmatchedTracking(): boolean {
+    const result = this.db.prepare(`
+      SELECT 1 FROM unmatched_tracking
+      WHERE resolution_status = 'pending'
+      LIMIT 1
+    `).get();
+    return !!result;
+  }
+
   private prepareStatements() {
     return {
       insertBatch: this.db.prepare(`
@@ -206,8 +313,8 @@ export class MarketplaceService {
         INSERT INTO marketplace_orders (
           source, external_order_id, display_order_number, customer_name, customer_name_normalized,
           order_date, item_count, product_value_cents, shipping_fee_cents, product_weight_oz,
-          shipping_method, import_batch_id
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          shipping_method, import_batch_id, import_format
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `),
 
       getOrderById: this.db.prepare(`
@@ -260,8 +367,8 @@ export class MarketplaceService {
 
       insertShipment: this.db.prepare(`
         INSERT INTO marketplace_shipments (
-          marketplace_order_id, shipment_sequence, shipping_address_encrypted, shipping_zip, address_expires_at
-        ) VALUES (?, ?, ?, ?, ?)
+          marketplace_order_id, shipment_sequence, shipping_address_encrypted, shipping_zip, address_expires_at, is_external
+        ) VALUES (?, ?, ?, ?, ?, ?)
       `),
 
       getShipmentsByOrderId: this.db.prepare(`
@@ -384,10 +491,12 @@ export class MarketplaceService {
   // ============================================================================
 
   /**
-   * Normalize customer name for matching (uppercase, trim, remove extra whitespace)
+   * Normalize customer name for matching.
+   * Delegates to shared helper for consistency with EasyPost tracking linker.
+   * @deprecated Use normalizeNameForMatching() directly for new code
    */
   normalizeCustomerName(name: string): string {
-    return name.toUpperCase().trim().replace(/\s+/g, " ");
+    return normalizeNameForMatching(name);
   }
 
   /**
@@ -426,6 +535,11 @@ export class MarketplaceService {
       addressExpiresAt = null;
     }
 
+    // Import format defaults to 'shipping_export' (has address)
+    const importFormat = input.import_format ?? "shipping_export";
+    // External flag: true for Order List imports (no CardMint label)
+    const isExternal = input.is_external ? 1 : 0;
+
     // Use transaction to ensure atomicity
     const result = this.db.transaction(() => {
       const orderResult = this.statements.insertOrder.run(
@@ -440,7 +554,8 @@ export class MarketplaceService {
         input.shipping_fee_cents,
         input.product_weight_oz ?? null,
         input.shipping_method ?? null,
-        input.import_batch_id ?? null
+        input.import_batch_id ?? null,
+        importFormat
       );
 
       const orderId = orderResult.lastInsertRowid as number;
@@ -451,7 +566,8 @@ export class MarketplaceService {
         1, // sequence
         encryptedAddress,
         shippingZip,
-        addressExpiresAt
+        addressExpiresAt,
+        isExternal
       );
 
       const shipmentId = shipmentResult.lastInsertRowid as number;
@@ -460,7 +576,7 @@ export class MarketplaceService {
     })();
 
     this.logger.info(
-      { orderId: result.orderId, displayOrderNumber, source: input.source },
+      { orderId: result.orderId, displayOrderNumber, source: input.source, importFormat, isExternal },
       "Created marketplace order"
     );
 
@@ -481,6 +597,55 @@ export class MarketplaceService {
 
   getOrderByExternalId(source: "tcgplayer" | "ebay", externalOrderId: string): MarketplaceOrder | undefined {
     return this.statements.getOrderByExternalId.get(source, externalOrderId) as MarketplaceOrder | undefined;
+  }
+
+  /**
+   * Upgrade an Order List import to Shipping Export (add address, make label-ready).
+   *
+   * Used when Shipping Export CSV is imported after Order List for the same order.
+   * Updates: import_format, shipping_address, is_external flag.
+   *
+   * @param orderId - The marketplace order ID to upgrade
+   * @param shippingAddress - Full shipping address from Shipping Export
+   * @param weight - Product weight in oz (from Shipping Export)
+   * @returns true if upgrade was successful
+   */
+  upgradeOrderWithAddress(
+    orderId: number,
+    shippingAddress: ShippingAddress,
+    weight?: number
+  ): boolean {
+    const encryptedAddress = encryptJson(shippingAddress);
+
+    const result = this.db.transaction(() => {
+      // Update order: set import_format to shipping_export, update weight if provided
+      this.db.prepare(`
+        UPDATE marketplace_orders
+        SET import_format = 'shipping_export',
+            product_weight_oz = COALESCE(?, product_weight_oz),
+            updated_at = strftime('%s', 'now')
+        WHERE id = ?
+      `).run(weight ?? null, orderId);
+
+      // Update shipment: add address, clear is_external flag
+      this.db.prepare(`
+        UPDATE marketplace_shipments
+        SET shipping_address_encrypted = ?,
+            shipping_zip = ?,
+            is_external = 0,
+            updated_at = strftime('%s', 'now')
+        WHERE marketplace_order_id = ? AND shipment_sequence = 1
+      `).run(encryptedAddress, shippingAddress.zip, orderId);
+
+      return true;
+    })();
+
+    this.logger.info(
+      { orderId, zip: shippingAddress.zip },
+      "Upgraded Order List import to Shipping Export (address added)"
+    );
+
+    return result;
   }
 
   listOrders(options: ListOrdersOptions = {}): { orders: MarketplaceOrder[]; total: number } {
@@ -636,7 +801,7 @@ export class MarketplaceService {
     easypostStatus: string | null,
     createdAtEasypost: number | null
   ): number {
-    const normalizedSignedBy = signedBy ? this.normalizeCustomerName(signedBy) : null;
+    const normalizedSignedBy = signedBy ? normalizeNameForMatching(signedBy) : null;
     const result = this.statements.insertUnmatchedTracking.run(
       importBatchId,
       easypostTrackerId,
@@ -672,7 +837,40 @@ export class MarketplaceService {
   }
 
   /**
-   * Find potential matches for unmatched tracking by customer name
+   * Generate carrier-specific tracking URL.
+   * Returns null for unknown carriers to avoid incorrect URLs.
+   */
+  generateTrackingUrl(trackingNumber: string, carrier: string | null): string | null {
+    if (!trackingNumber || !carrier) return null;
+
+    const carrierLower = carrier.toLowerCase();
+
+    // USPS
+    if (carrierLower === "usps" || carrierLower.includes("usps")) {
+      return `https://tools.usps.com/go/TrackConfirmAction?tLabels=${trackingNumber}`;
+    }
+
+    // UPS
+    if (carrierLower === "ups" || carrierLower.includes("ups")) {
+      return `https://www.ups.com/track?tracknum=${trackingNumber}`;
+    }
+
+    // FedEx
+    if (carrierLower === "fedex" || carrierLower.includes("fedex")) {
+      return `https://www.fedex.com/fedextrack/?trknbr=${trackingNumber}`;
+    }
+
+    // DHL
+    if (carrierLower === "dhl" || carrierLower.includes("dhl")) {
+      return `https://www.dhl.com/en/express/tracking.html?AWB=${trackingNumber}`;
+    }
+
+    // Unknown carrier - return null to avoid incorrect URL
+    return null;
+  }
+
+  /**
+   * Find potential matches for unmatched tracking by customer name (legacy ZIP-based)
    */
   findMatchCandidates(normalizedName: string, destinationZip: string | null): MarketplaceOrder[] {
     const stmt = this.db.prepare(`
@@ -688,6 +886,240 @@ export class MarketplaceService {
       return stmt.all(normalizedName, destinationZip) as MarketplaceOrder[];
     }
     return stmt.all(normalizedName) as MarketplaceOrder[];
+  }
+
+  /**
+   * Find potential matches for tracking by customer name AND order date.
+   * Uses America/Chicago (CST) timezone for date normalization.
+   *
+   * Window logic: Match tracking created within -6h before to +30h after order date.
+   * This handles:
+   * - Same-day shipments (label purchased hours after order)
+   * - Next-day label purchases (most common scenario)
+   * - Time zone edge cases
+   *
+   * @param normalizedName - Normalized customer name (from EasyPost signed_by)
+   * @param trackingCreatedAt - Unix timestamp from EasyPost tracking created_at
+   * @returns Matching orders where name matches and tracking is within date window
+   */
+  findMatchCandidatesByDate(
+    normalizedName: string,
+    trackingCreatedAt: number
+  ): MarketplaceOrder[] {
+    // Re-normalize the name in case it was stored with old logic (punctuation)
+    const reNormalizedName = normalizeNameForMatching(normalizedName);
+
+    // Window: 6 hours before order date to 30 hours after
+    // Allows same-day and next-day label purchases
+    const WINDOW_BEFORE = 6 * 3600; // 6h before CST midnight
+    const WINDOW_AFTER = 30 * 3600; // 30h after CST midnight (next day + 6h)
+
+    const stmt = this.db.prepare(`
+      SELECT DISTINCT mo.* FROM marketplace_orders mo
+      JOIN marketplace_shipments ms ON mo.id = ms.marketplace_order_id
+      WHERE mo.customer_name_normalized = ?
+        AND ? BETWEEN (mo.order_date - ?) AND (mo.order_date + ?)
+        AND mo.status IN ('pending', 'processing')
+      ORDER BY mo.order_date DESC
+    `);
+
+    return stmt.all(
+      reNormalizedName,
+      trackingCreatedAt,
+      WINDOW_BEFORE,
+      WINDOW_AFTER
+    ) as MarketplaceOrder[];
+  }
+
+  /**
+   * Re-match unmatched tracking entries against marketplace orders.
+   * Called after TCGPlayer/eBay order imports to link previously unmatched tracking.
+   *
+   * Uses date-based matching (name + order date) as primary strategy.
+   *
+   * Guardrails:
+   * 1. Only auto-link when exactly one candidate order found
+   * 2. Candidate must have an eligible shipment (pending/label_purchased/shipped)
+   * 3. Shipment must have no existing tracking number
+   * 4. Full update: tracking_number + tracking_url + status from EasyPost
+   *
+   * @returns Count of tracking entries that were matched
+   */
+  reMatchUnmatchedTracking(): {
+    matched: number;
+    details: Array<{ trackingNumber: string; orderNumber: string }>;
+  } {
+    // Ensure name normalization is consistent before matching (one-time, process-wide)
+    this.ensureCustomerNameNormalizationBackfilled();
+
+    const pending = this.listUnmatchedTracking(1000, 0); // Get all pending
+    const matched: Array<{ trackingNumber: string; orderNumber: string }> = [];
+
+    for (const tracking of pending) {
+      // Skip if no created_at timestamp or no signed_by
+      if (!tracking.created_at_easypost || !tracking.signed_by_normalized) {
+        continue;
+      }
+
+      // Re-normalize for punctuation consistency
+      const normalizedName = normalizeNameForMatching(tracking.signed_by_normalized);
+
+      // Try date-based matching first
+      const candidates = this.findMatchCandidatesByDate(
+        normalizedName,
+        tracking.created_at_easypost
+      );
+
+      // Guardrail 1: Exactly one candidate
+      if (candidates.length !== 1) {
+        continue;
+      }
+
+      const order = candidates[0];
+      const shipments = this.getShipmentsByOrderId(order.id);
+
+      // Guardrail 2: Find eligible shipment (pending/label_purchased/shipped)
+      // Guardrail 3: No existing tracking number
+      const eligibleShipment = shipments.find(
+        (s) =>
+          (s.status === "pending" ||
+            s.status === "label_purchased" ||
+            s.status === "shipped") &&
+          !s.tracking_number
+      );
+
+      if (!eligibleShipment) {
+        continue;
+      }
+
+      // All guardrails passed - perform full update
+      // Generate carrier-aware tracking URL (null if carrier unknown)
+      const trackingUrl = this.generateTrackingUrl(
+        tracking.tracking_number,
+        tracking.carrier
+      );
+      this.updateShipmentTracking(
+        eligibleShipment.id,
+        tracking.tracking_number,
+        trackingUrl,
+        tracking.carrier || null,
+        "auto",
+        "system:rematch"
+      );
+
+      // Update shipment status based on EasyPost status
+      if (tracking.easypost_status) {
+        const statusMap: Record<string, MarketplaceShipment["status"]> = {
+          delivered: "delivered",
+          in_transit: "in_transit",
+          pre_transit: "shipped",
+          out_for_delivery: "in_transit",
+        };
+        const newStatus = statusMap[tracking.easypost_status.toLowerCase()];
+        if (newStatus) {
+          this.updateShipmentStatus(eligibleShipment.id, newStatus);
+        }
+      }
+
+      // Mark tracking as matched
+      this.resolveUnmatchedTracking(
+        tracking.id,
+        "matched",
+        eligibleShipment.id,
+        "system:rematch"
+      );
+
+      matched.push({
+        trackingNumber: tracking.tracking_number,
+        orderNumber: order.display_order_number,
+      });
+
+      this.logger.info(
+        {
+          unmatchedId: tracking.id,
+          trackingNumber: tracking.tracking_number,
+          orderNumber: order.display_order_number,
+          shipmentId: eligibleShipment.id,
+        },
+        "Auto-rematched tracking to order"
+      );
+    }
+
+    if (matched.length > 0) {
+      this.logger.info(
+        { matchedCount: matched.length },
+        "Completed re-matching unmatched tracking"
+      );
+    }
+
+    return { matched: matched.length, details: matched };
+  }
+
+  /**
+   * Get fulfillment stats for dashboard.
+   * Aggregates both marketplace (TCGPlayer/eBay) and CardMint (Stripe) fulfillments.
+   *
+   * @returns Actionable counts for fulfillment dashboard
+   */
+  getFulfillmentStats(): {
+    pendingLabels: number;
+    unmatchedTracking: number;
+    exceptions: number;
+    shippedToday: number;
+  } {
+    // Marketplace pending labels (shipments without tracking, excluding external fulfillment)
+    // External shipments (is_external=1) are fulfilled via TCGPlayer, not CardMint labels
+    const marketplacePending = this.db.prepare(`
+      SELECT COUNT(*) as count FROM marketplace_shipments
+      WHERE status = 'pending' AND is_external = 0
+    `).get() as { count: number };
+
+    // CardMint pending labels (awaiting label action)
+    const cardmintPending = this.db.prepare(`
+      SELECT COUNT(*) as count FROM fulfillment
+      WHERE status IN ('pending', 'reviewed')
+    `).get() as { count: number };
+
+    // Unmatched tracking count (marketplace only - no CardMint equivalent)
+    const unmatchedCount = this.db.prepare(`
+      SELECT COUNT(*) as count FROM unmatched_tracking
+      WHERE resolution_status = 'pending'
+    `).get() as { count: number };
+
+    // Marketplace exceptions
+    const marketplaceExceptions = this.db.prepare(`
+      SELECT COUNT(*) as count FROM marketplace_shipments
+      WHERE status = 'exception'
+    `).get() as { count: number };
+
+    // CardMint exceptions
+    const cardmintExceptions = this.db.prepare(`
+      SELECT COUNT(*) as count FROM fulfillment
+      WHERE status = 'exception'
+    `).get() as { count: number };
+
+    // Shipped today (CST calendar day)
+    // Calculate CST day boundaries: now - 6 hours, then floor to midnight
+    const nowUtc = Math.floor(Date.now() / 1000);
+    const cstDayStart = Math.floor((nowUtc - 6 * 3600) / 86400) * 86400 + 6 * 3600;
+
+    const marketplaceShippedToday = this.db.prepare(`
+      SELECT COUNT(*) as count FROM marketplace_shipments
+      WHERE shipped_at >= ? AND shipped_at < ? + 86400
+    `).get(cstDayStart, cstDayStart) as { count: number };
+
+    // CardMint shipped today
+    const cardmintShippedToday = this.db.prepare(`
+      SELECT COUNT(*) as count FROM fulfillment
+      WHERE shipped_at >= ? AND shipped_at < ? + 86400
+    `).get(cstDayStart, cstDayStart) as { count: number };
+
+    return {
+      pendingLabels: marketplacePending.count + cardmintPending.count,
+      unmatchedTracking: unmatchedCount.count,
+      exceptions: marketplaceExceptions.count + cardmintExceptions.count,
+      shippedToday: marketplaceShippedToday.count + cardmintShippedToday.count,
+    };
   }
 
   // ============================================================================

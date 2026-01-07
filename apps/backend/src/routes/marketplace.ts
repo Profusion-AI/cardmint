@@ -7,6 +7,7 @@
  *
  * POST /api/cm-admin/marketplace/import/tcgplayer       - Import TCGPlayer CSV
  * POST /api/cm-admin/marketplace/import/easypost-tracking - Link EasyPost tracking
+ * GET /api/cm-admin/marketplace/stats                   - Get fulfillment stats
  * GET /api/cm-admin/marketplace/orders                  - List marketplace orders
  * GET /api/cm-admin/marketplace/orders/:orderId         - Get order with shipments
  * GET /api/cm-admin/marketplace/unmatched-tracking      - List pending tracking
@@ -14,6 +15,7 @@
  * POST /api/cm-admin/marketplace/shipments/:id/rates    - Get EasyPost rates
  * POST /api/cm-admin/marketplace/shipments/:id/label    - Purchase label
  * PATCH /api/cm-admin/marketplace/shipments/:id/status  - Update status
+ * POST /api/cm-admin/marketplace/rematch                - Manual re-match unmatched tracking
  *
  * Guardrails:
  * - Auth required: All handlers require Bearer Auth (CARDMINT_ADMIN_API_KEY)
@@ -29,6 +31,7 @@ import { MarketplaceService } from "../services/marketplace/marketplaceService.j
 import { TcgplayerImporter } from "../services/marketplace/tcgplayerImporter.js";
 import { EasypostTrackingLinker } from "../services/marketplace/easypostTrackingLinker.js";
 import { EasyPostService, type EasyPostAddress, type EasyPostParcel } from "../services/easyPostService.js";
+import { detectCsvFormat, extractHeadersFromCsv, getFormatDisplayName } from "../services/marketplace/csvFormatDetector.js";
 import { runtimeConfig } from "../config.js";
 import { requireAdminAuth } from "../middleware/adminAuth.js";
 import { PrintQueueRepository } from "../repositories/printQueueRepository.js";
@@ -177,6 +180,18 @@ export function registerMarketplaceRoutes(app: Express, ctx: AppContext): void {
         dryRun
       );
 
+      // After actual import (not dry-run), re-match unmatched tracking
+      // Run re-match if new orders imported OR there's pending unmatched tracking
+      // (allows duplicate uploads to still trigger re-match for previously unmatched entries)
+      let reMatchResult: { matched: number; details: Array<{ trackingNumber: string; orderNumber: string }> } | null = null;
+      if (!dryRun && (result.imported > 0 || marketplaceService.hasUnmatchedTracking())) {
+        reMatchResult = marketplaceService.reMatchUnmatchedTracking();
+        logger.info(
+          { operatorId, reMatched: reMatchResult.matched, details: reMatchResult.details },
+          "marketplace.import.tcgplayer.rematch"
+        );
+      }
+
       logger.info(
         {
           operatorId,
@@ -184,12 +199,17 @@ export function registerMarketplaceRoutes(app: Express, ctx: AppContext): void {
           imported: result.imported,
           skipped: result.skipped,
           errors: result.errors.length,
+          reMatched: reMatchResult?.matched ?? 0,
           dryRun,
         },
         "marketplace.import.tcgplayer.complete"
       );
 
-      res.json(result);
+      res.json({
+        ...result,
+        reMatched: reMatchResult?.matched ?? 0,
+        reMatchDetails: reMatchResult?.details ?? [],
+      });
     } catch (err) {
       const error = err as Error;
       logger.error(
@@ -266,6 +286,160 @@ export function registerMarketplaceRoutes(app: Express, ctx: AppContext): void {
         error: "IMPORT_FAILED",
         message: error.message,
       });
+    }
+  });
+
+  /**
+   * POST /api/cm-admin/marketplace/import/unified
+   * Unified CSV import endpoint with auto-format detection.
+   * Accepts: TCGPlayer Shipping Export, TCGPlayer Order List, EasyPost Tracking
+   *
+   * Body: { csvData: string, dryRun?: boolean, fileName?: string }
+   * Returns: { ok, format, formatDisplayName, ...format-specific results }
+   */
+  router.post("/import/unified", async (req: Request, res: Response) => {
+    const { operatorId, clientIp, userAgent } = (req as any).auditContext as AuditContext;
+    const { csvData, dryRun = true, fileName } = req.body;
+
+    logger.info(
+      { operatorId, clientIp, userAgent, action: "import.unified", dryRun, fileName },
+      "marketplace.import.unified.start"
+    );
+
+    // Validate input
+    if (!csvData || typeof csvData !== "string") {
+      return res.status(400).json({
+        error: "BAD_REQUEST",
+        message: "csvData is required and must be a string",
+      });
+    }
+
+    if (csvData.length > MAX_CSV_SIZE) {
+      return res.status(400).json({
+        error: "PAYLOAD_TOO_LARGE",
+        message: `CSV data exceeds maximum size of ${MAX_CSV_SIZE / 1024 / 1024}MB`,
+      });
+    }
+
+    // Detect CSV format from headers
+    const headers = extractHeadersFromCsv(csvData);
+    const format = detectCsvFormat(headers);
+
+    if (format === "unknown") {
+      logger.warn(
+        { operatorId, headers: headers.slice(0, 10), fileName },
+        "marketplace.import.unified.unknown_format"
+      );
+      return res.status(400).json({
+        ok: false,
+        error: "UNKNOWN_FORMAT",
+        message: "Unrecognized CSV format. Expected TCGPlayer Shipping Export, TCGPlayer Order List, or EasyPost Tracking CSV.",
+        detectedHeaders: headers.slice(0, 10), // First 10 headers for debugging
+      });
+    }
+
+    logger.info(
+      { operatorId, format, formatDisplayName: getFormatDisplayName(format), fileName },
+      "marketplace.import.unified.format_detected"
+    );
+
+    try {
+      let result: any;
+      let reMatchResult: { matched: number; details: Array<{ trackingNumber: string; orderNumber: string }> } | null = null;
+
+      switch (format) {
+        case "tcgplayer_shipping":
+          result = await tcgplayerImporter.import(csvData, operatorId, fileName || null, dryRun);
+          // Re-match unmatched tracking after shipping export import
+          if (!dryRun && (result.imported > 0 || result.upgraded > 0 || marketplaceService.hasUnmatchedTracking())) {
+            reMatchResult = marketplaceService.reMatchUnmatchedTracking();
+          }
+          break;
+
+        case "tcgplayer_orderlist":
+          result = await tcgplayerImporter.importOrderList(csvData, operatorId, fileName || null, dryRun);
+          // Re-match unmatched tracking after order list import
+          if (!dryRun && (result.imported > 0 || marketplaceService.hasUnmatchedTracking())) {
+            reMatchResult = marketplaceService.reMatchUnmatchedTracking();
+          }
+          break;
+
+        case "easypost_tracking":
+          result = await easypostTrackingLinker.link(csvData, operatorId, fileName || null, dryRun);
+          break;
+      }
+
+      logger.info(
+        {
+          operatorId,
+          format,
+          dryRun,
+          imported: result.imported ?? 0,
+          upgraded: result.upgraded ?? 0,
+          skipped: result.skipped ?? 0,
+          autoLinked: result.autoLinked ?? 0,
+          queued: result.queued ?? 0,
+          unmatched: result.unmatched ?? 0,
+          errors: result.errors?.length ?? 0,
+          reMatched: reMatchResult?.matched ?? 0,
+        },
+        "marketplace.import.unified.complete"
+      );
+
+      res.json({
+        ok: true,
+        format,
+        formatDisplayName: getFormatDisplayName(format),
+        ...result,
+        reMatched: reMatchResult?.matched ?? 0,
+        reMatchDetails: reMatchResult?.details ?? [],
+      });
+    } catch (err) {
+      const error = err as Error;
+      logger.error(
+        { err: error.message, operatorId, format, fileName },
+        "marketplace.import.unified.failed"
+      );
+      res.status(400).json({
+        ok: false,
+        error: "IMPORT_FAILED",
+        format,
+        formatDisplayName: getFormatDisplayName(format),
+        message: error.message,
+      });
+    }
+  });
+
+  // ============================================================================
+  // Stats Endpoint
+  // ============================================================================
+
+  /**
+   * GET /api/cm-admin/marketplace/stats
+   * Get fulfillment dashboard stats (combined CardMint + Marketplace).
+   *
+   * Returns: {
+   *   pendingLabels: number,     // Shipments awaiting label purchase
+   *   unmatchedTracking: number, // Unmatched tracking entries pending resolution
+   *   exceptions: number,        // Shipments with exception status
+   *   shippedToday: number       // Shipments marked shipped today (CST)
+   * }
+   */
+  router.get("/stats", (req: Request, res: Response) => {
+    const { operatorId, clientIp, userAgent } = (req as any).auditContext as AuditContext;
+
+    logger.info(
+      { operatorId, clientIp, userAgent, action: "get.stats" },
+      "marketplace.stats.request"
+    );
+
+    try {
+      const stats = marketplaceService.getFulfillmentStats();
+      res.json(stats);
+    } catch (err) {
+      const error = err as Error;
+      logger.error({ err: error.message, operatorId }, "marketplace.stats.failed");
+      res.status(500).json({ error: "Failed to get fulfillment stats" });
     }
   });
 
@@ -641,6 +815,14 @@ export function registerMarketplaceRoutes(app: Express, ctx: AppContext): void {
       });
     }
 
+    // 2b. GUARDRAIL: Block external fulfillment orders (Codex #7)
+    if (shipmentData.is_external === 1) {
+      return res.status(400).json({
+        error: "EXTERNAL_FULFILLMENT",
+        message: "Cannot purchase labels for external fulfillment orders. These are fulfilled via TCGPlayer.",
+      });
+    }
+
     // 3. Check for expired/purged address
     if (!shipmentData.decryptedAddress) {
       return res.status(400).json({
@@ -837,6 +1019,14 @@ export function registerMarketplaceRoutes(app: Express, ctx: AppContext): void {
       return res.status(404).json({ error: "Shipment not found" });
     }
 
+    // 1b. GUARDRAIL: Block external fulfillment orders (Codex #7)
+    if (shipment.is_external === 1) {
+      return res.status(400).json({
+        error: "EXTERNAL_FULFILLMENT",
+        message: "Cannot purchase labels for external fulfillment orders. These are fulfilled via TCGPlayer.",
+      });
+    }
+
     // 2. Verify easypost_shipment_id exists (must call /rates first)
     if (!shipment.easypost_shipment_id) {
       return res.status(400).json({
@@ -998,6 +1188,45 @@ export function registerMarketplaceRoutes(app: Express, ctx: AppContext): void {
   // ============================================================================
   // Maintenance Endpoints
   // ============================================================================
+
+  /**
+   * POST /api/cm-admin/marketplace/rematch
+   * Manually trigger re-matching of unmatched tracking entries.
+   * Useful when orders were imported before tracking, or to retry after
+   * new orders are added without uploading a new CSV.
+   *
+   * Returns: { matched, details: [{ trackingNumber, orderNumber }] }
+   */
+  router.post("/rematch", (req: Request, res: Response) => {
+    const { operatorId, clientIp, userAgent } = (req as any).auditContext as AuditContext;
+
+    logger.info(
+      { operatorId, clientIp, userAgent, action: "rematch" },
+      "marketplace.rematch.start"
+    );
+
+    try {
+      const result = marketplaceService.reMatchUnmatchedTracking();
+
+      logger.info(
+        { operatorId, matched: result.matched, details: result.details },
+        "marketplace.rematch.complete"
+      );
+
+      res.json({
+        ok: true,
+        matched: result.matched,
+        details: result.details,
+      });
+    } catch (err) {
+      const error = err as Error;
+      logger.error(
+        { err: error.message, operatorId },
+        "marketplace.rematch.failed"
+      );
+      res.status(500).json({ error: "Failed to re-match unmatched tracking" });
+    }
+  });
 
   /**
    * POST /api/cm-admin/marketplace/purge-expired-addresses

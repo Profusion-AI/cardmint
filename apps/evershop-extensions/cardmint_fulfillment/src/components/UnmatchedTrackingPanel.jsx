@@ -6,7 +6,7 @@ import React, { useState, useEffect, useCallback } from 'react';
  * Displays EasyPost tracking records that couldn't be auto-linked to orders.
  * Allows operators to manually match or ignore unmatched tracking.
  */
-export default function UnmatchedTrackingPanel({ onResolved }) {
+export default function UnmatchedTrackingPanel({ onResolved, refreshTrigger }) {
   const [unmatched, setUnmatched] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -41,6 +41,13 @@ export default function UnmatchedTrackingPanel({ onResolved }) {
   useEffect(() => {
     fetchUnmatched();
   }, [fetchUnmatched]);
+
+  // Refresh when parent triggers (e.g., after re-match)
+  useEffect(() => {
+    if (refreshTrigger) {
+      fetchUnmatched();
+    }
+  }, [refreshTrigger, fetchUnmatched]);
 
   // Auto-expand when there's an error so users notice it
   useEffect(() => {

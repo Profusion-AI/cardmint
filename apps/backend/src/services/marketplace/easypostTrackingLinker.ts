@@ -1,18 +1,25 @@
 /**
  * EasyPost Tracking Linker
  *
- * Parses EasyPost tracking export CSV and links tracking to marketplace orders.
+ * Parses EasyPost export CSVs and links tracking to marketplace orders.
  * Uses confidence-based matching: auto-link on exact name+ZIP, queue ambiguous.
  *
- * CSV Format (EasyPost Tracking Export):
- * created_at,updated_at,id,shipment_id,tracking_code,status,signed_by,weight,
- * carrier,service,container_type,est_delivery_date,est_delivery_date_local,
- * est_delivery_time_local,origin_location,destination_location,...
+ * Supports TWO EasyPost export formats:
+ *
+ * 1. Tracking Export (delivery events):
+ *    created_at,updated_at,id,shipment_id,tracking_code,status,signed_by,weight,
+ *    carrier,service,...,destination_location,...
+ *    - Uses: signed_by (customer name), destination_location (parse ZIP)
+ *
+ * 2. Shipments Export (created labels):
+ *    created_at,id,tracking_code,status,...,to_name,to_zip,...,carrier,...
+ *    - Uses: to_name (customer name), to_zip (direct ZIP)
  */
 
 import { parse as parseCsv } from "csv-parse/sync";
 import type { Logger } from "pino";
 import { computeChecksum } from "../../utils/encryption";
+import { normalizeNameForMatching } from "../../utils/nameNormalization.js";
 import {
   MarketplaceService,
   type MarketplaceOrder,
@@ -23,33 +30,53 @@ import {
 // Types
 // ============================================================================
 
+/**
+ * Combined type for both EasyPost export formats.
+ * Fields may be present or absent depending on export type.
+ */
 export interface EasypostTrackingRow {
+  // Common fields (both formats)
   created_at: string;
-  updated_at: string;
-  id: string; // tracker ID
-  shipment_id: string;
+  id: string;
   tracking_code: string;
   status: string;
-  signed_by: string;
-  weight: string;
   carrier: string;
-  service: string;
-  container_type: string;
-  est_delivery_date: string;
-  est_delivery_date_local: string;
-  est_delivery_time_local: string;
-  origin_location: string;
-  destination_location: string;
-  current_detail_message: string;
-  current_detail_status: string;
-  current_detail_datetime: string;
-  current_detail_source: string;
-  current_detail_city: string;
-  current_detail_state: string;
-  current_detail_country: string;
-  current_detail_zip: string;
-  public_url: string;
-  // ... additional transit detail fields
+
+  // Tracking Export specific
+  updated_at?: string;
+  shipment_id?: string;
+  signed_by?: string;           // Customer name (Tracking Export)
+  destination_location?: string; // Parse ZIP from this (Tracking Export)
+  weight?: string;
+  service?: string;
+  container_type?: string;
+  est_delivery_date?: string;
+  est_delivery_date_local?: string;
+  est_delivery_time_local?: string;
+  origin_location?: string;
+  current_detail_message?: string;
+  current_detail_status?: string;
+  current_detail_datetime?: string;
+  current_detail_source?: string;
+  current_detail_city?: string;
+  current_detail_state?: string;
+  current_detail_country?: string;
+  current_detail_zip?: string;
+  public_url?: string;
+
+  // Shipments Export specific
+  to_name?: string;             // Customer name (Shipments Export)
+  to_zip?: string;              // Direct ZIP (Shipments Export)
+  from_name?: string;
+  from_zip?: string;
+  rate?: string;
+  insured_value?: string;
+  is_return?: string;
+  refund_status?: string;
+  reference?: string;
+  label_fee?: string;
+  postage_fee?: string;
+  insurance_fee?: string;
 }
 
 export interface MatchResult {
@@ -120,23 +147,29 @@ export class EasypostTrackingLinker {
   }
 
   /**
-   * Normalize name for matching (uppercase, trim, remove punctuation)
+   * Normalize name for matching.
+   * Delegates to shared helper for consistency with marketplaceService.
    */
   private normalizeName(name: string): string {
-    if (!name) return "";
-    return name
-      .toUpperCase()
-      .trim()
-      .replace(/[^\w\s]/g, "") // Remove punctuation
-      .replace(/\s+/g, " "); // Normalize whitespace
+    return normalizeNameForMatching(name);
   }
 
   /**
-   * Attempt to match tracking to an order
+   * Attempt to match tracking to an order.
+   *
+   * Matching strategy (in order):
+   * 1. Primary: Name + Date match (CST-normalized) - most reliable
+   * 2. Fallback: Name + ZIP match (legacy, for edge cases)
+   * 3. Last resort: Name-only with review flag
+   *
+   * @param signedBy - Customer name from EasyPost tracking
+   * @param destinationZip - Destination ZIP from EasyPost (may be null/unknown)
+   * @param createdAtEasypost - Unix timestamp from EasyPost created_at (for date matching)
    */
   matchTracking(
     signedBy: string,
-    destinationZip: string | null
+    destinationZip: string | null,
+    createdAtEasypost: number | null = null
   ): MatchResult {
     const normalizedName = this.normalizeName(signedBy);
 
@@ -144,7 +177,52 @@ export class EasypostTrackingLinker {
       return { confidence: "unmatched", reason: "no-signed-by" };
     }
 
-    // Find candidates by normalized name
+    // PRIMARY: Try date-based matching first (if we have a timestamp)
+    if (createdAtEasypost) {
+      const dateCandidates = this.marketplaceService.findMatchCandidatesByDate(
+        normalizedName,
+        createdAtEasypost
+      );
+
+      if (dateCandidates.length === 1) {
+        const order = dateCandidates[0];
+        const shipments = this.marketplaceService.getShipmentsByOrderId(order.id);
+        const eligibleShipment = shipments.find(
+          (s) =>
+            (s.status === "pending" ||
+              s.status === "label_purchased" ||
+              s.status === "shipped") &&
+            !s.tracking_number // Guardrail: no existing tracking
+        );
+
+        if (eligibleShipment) {
+          return {
+            confidence: "auto",
+            order,
+            shipment: eligibleShipment,
+          };
+        }
+
+        // Order found but no eligible shipment
+        return {
+          confidence: "review",
+          order,
+          reason: "no-eligible-shipment",
+        };
+      }
+
+      if (dateCandidates.length > 1) {
+        // Multiple matches on same date - unusual, needs review
+        return {
+          confidence: "review",
+          candidates: dateCandidates,
+          reason: "multiple-date-matches",
+        };
+      }
+      // No date matches - fall through to ZIP-based matching
+    }
+
+    // FALLBACK: ZIP-based matching (legacy approach)
     const candidates = this.marketplaceService.findMatchCandidates(
       normalizedName,
       destinationZip
@@ -164,12 +242,13 @@ export class EasypostTrackingLinker {
       if (nameOnlyCandidates.length === 1) {
         const order = nameOnlyCandidates[0];
         const shipments = this.marketplaceService.getShipmentsByOrderId(order.id);
-        // Find eligible shipment (including shipped for backfill)
+        // Guard: Only eligible if status is valid AND no existing tracking number
         const eligibleShipment = shipments.find(
           (s) =>
-            s.status === "pending" ||
-            s.status === "label_purchased" ||
-            s.status === "shipped"
+            (s.status === "pending" ||
+              s.status === "label_purchased" ||
+              s.status === "shipped") &&
+            !s.tracking_number
         );
 
         return {
@@ -191,15 +270,15 @@ export class EasypostTrackingLinker {
     if (candidates.length === 1) {
       const order = candidates[0];
       const shipments = this.marketplaceService.getShipmentsByOrderId(order.id);
-      // Find a shipment that can accept tracking (pending, label_purchased, or shipped for backfill)
+      // Guard: Only eligible if status is valid AND no existing tracking number
       const eligibleShipment = shipments.find(
         (s) =>
-          s.status === "pending" ||
-          s.status === "label_purchased" ||
-          s.status === "shipped"
+          (s.status === "pending" ||
+            s.status === "label_purchased" ||
+            s.status === "shipped") &&
+          !s.tracking_number
       );
 
-      // If no eligible shipment found, queue for review instead of auto-linking
       if (!eligibleShipment) {
         return {
           confidence: "review",
@@ -266,6 +345,10 @@ export class EasypostTrackingLinker {
         fileName,
         rows.length
       );
+
+      // Ensure name normalization is consistent before matching (one-time, process-wide)
+      // Only run in non-dry-run mode to keep dry-run write-free
+      this.marketplaceService.ensureCustomerNameNormalizationBackfilled();
     }
 
     const result: LinkingResult = {
@@ -286,8 +369,12 @@ export class EasypostTrackingLinker {
       try {
         const trackerId = row.id;
         const trackingNumber = row.tracking_code;
-        const signedBy = row.signed_by;
-        const destinationZip = extractZipFromDestination(row.destination_location);
+
+        // Handle both export formats:
+        // - Tracking Export: signed_by, destination_location
+        // - Shipments Export: to_name, to_zip
+        const customerName = row.signed_by || row.to_name || "";
+        const destinationZip = row.to_zip || extractZipFromDestination(row.destination_location || "");
 
         if (!trackerId || !trackingNumber) {
           result.errors.push({
@@ -298,14 +385,15 @@ export class EasypostTrackingLinker {
           continue;
         }
 
-        // Attempt to match
-        const matchResult = this.matchTracking(signedBy, destinationZip);
+        // Attempt to match (pass EasyPost created_at for date-based matching)
+        const createdAtEasypost = parseEasypostDate(row.created_at);
+        const matchResult = this.matchTracking(customerName, destinationZip, createdAtEasypost);
 
         if (dryRun) {
           result.preview!.push({
             trackerId,
             trackingNumber,
-            signedBy: signedBy || "(empty)",
+            signedBy: customerName || "(empty)",
             carrier: row.carrier,
             matchStatus: matchResult.confidence,
             matchedOrderNumber: matchResult.order?.display_order_number,
@@ -359,7 +447,7 @@ export class EasypostTrackingLinker {
                 row.shipment_id || null,
                 trackingNumber,
                 row.carrier || null,
-                signedBy || null,
+                customerName || null,
                 destinationZip,
                 row.status || null,
                 parseEasypostDate(row.created_at)
@@ -377,7 +465,7 @@ export class EasypostTrackingLinker {
                 row.shipment_id || null,
                 trackingNumber,
                 row.carrier || null,
-                signedBy || null,
+                customerName || null,
                 destinationZip,
                 row.status || null,
                 parseEasypostDate(row.created_at)
