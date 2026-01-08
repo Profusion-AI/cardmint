@@ -29,6 +29,8 @@ import type { ShippingMethod } from "../domain/shipping.js";
 import { requireAdminAuth } from "../middleware/adminAuth.js";
 import type { EasyPostAddress } from "../services/easyPostService.js";
 import { PrintQueueRepository } from "../repositories/printQueueRepository.js";
+import { decryptJson } from "../utils/encryption.js";
+import { formatTcgplayerOrderNumber } from "../utils/orderNumberFormat.js";
 
 interface FulfillmentRow {
   id: number;
@@ -105,6 +107,62 @@ interface MarketplaceShipmentRow {
   shipping_method: string | null;
   order_status: string;
   import_format: string | null; // 'shipping_export' | 'orderlist'
+}
+
+interface MarketplaceOrderDetailRow {
+  id: number;
+  source: "tcgplayer" | "ebay";
+  external_order_id: string;
+  display_order_number: string;
+  customer_name: string;
+  order_date: number;
+  item_count: number;
+  product_value_cents: number;
+  shipping_fee_cents: number;
+  shipping_method: string | null;
+  status: string;
+  import_format: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
+interface MarketplaceShipmentDetailRow {
+  id: number;
+  marketplace_order_id: number;
+  shipment_sequence: number;
+  shipping_address_encrypted: string | null;
+  shipping_zip: string | null;
+  address_expires_at: number | null;
+  easypost_shipment_id: string | null;
+  easypost_rate_id: string | null;
+  carrier: string | null;
+  service: string | null;
+  tracking_number: string | null;
+  tracking_url: string | null;
+  label_url: string | null;
+  label_cost_cents: number | null;
+  label_purchased_at: number | null;
+  status: string;
+  shipped_at: number | null;
+  delivered_at: number | null;
+  exception_type: string | null;
+  exception_notes: string | null;
+  tracking_match_confidence: string | null;
+  tracking_matched_at: number | null;
+  tracking_matched_by: string | null;
+  is_external: number;
+  created_at: number;
+  updated_at: number;
+}
+
+interface MarketplaceShippingAddress {
+  name: string;
+  street1: string;
+  street2?: string;
+  city: string;
+  state: string;
+  zip: string;
+  country: string;
 }
 
 /**
@@ -499,6 +557,366 @@ export function registerFulfillmentRoutes(app: Express, ctx: AppContext): void {
     } catch (err) {
       logger.error({ err, operatorId, source, status }, "Failed to list unified fulfillments");
       res.status(500).json({ error: "Failed to list unified fulfillments" });
+    }
+  });
+
+  /**
+   * GET /api/cm-admin/fulfillment/orders/:source/:id
+   * Order drill-in details for the EverShop fulfillment dashboard.
+   *
+   * source:
+   * - cardmint: id = Stripe session id
+   * - marketplace: id = marketplace_orders.id
+   *
+   * Guardrails:
+   * - Bearer auth required (operator-only)
+   * - No address/PII written to logs
+   */
+  router.get("/orders/:source/:id", async (req: Request, res: Response) => {
+    const { operatorId, clientIp, userAgent } = (req as any).auditContext;
+    const source = req.params.source as string;
+    const id = req.params.id as string;
+
+    logger.info(
+      {
+        operatorId,
+        clientIp,
+        userAgent,
+        action: "order.details",
+        source,
+        idHint: source === "cardmint" ? id.slice(-8) : id,
+      },
+      "fulfillment.order.details"
+    );
+
+    if (source !== "cardmint" && source !== "marketplace") {
+      return res.status(400).json({
+        ok: false,
+        error: "BAD_REQUEST",
+        message: "source must be one of: cardmint, marketplace",
+      });
+    }
+
+    try {
+      if (source === "cardmint") {
+        const sessionId = id;
+
+        const row = db
+          .prepare(
+            `
+            SELECT f.*, o.order_number, o.order_uid
+            FROM fulfillment f
+            LEFT JOIN orders o ON f.stripe_session_id = o.stripe_session_id
+            WHERE f.stripe_session_id = ?
+          `
+          )
+          .get(sessionId) as FulfillmentRow | undefined;
+
+        if (!row) {
+          return res.status(404).json({ ok: false, error: "NOT_FOUND", message: "Order not found" });
+        }
+
+        const orderNumber = row.order_number ?? `Session: ${row.stripe_session_id.slice(-8)}`;
+        const discountCents = Math.max(0, row.original_subtotal_cents - row.final_subtotal_cents);
+        const totals = {
+          productCents: row.final_subtotal_cents,
+          shippingCents: row.shipping_cost_cents,
+          discountCents: discountCents > 0 ? discountCents : null,
+          taxCents: null as number | null,
+          totalCents: row.final_subtotal_cents + row.shipping_cost_cents,
+        };
+
+        let buyerName: string | null = null;
+        let buyerEmail: string | null = null;
+        let buyerPhone: string | null = null;
+        let address: any = null;
+        let paymentMethod: string | null = null;
+        let items: Array<{
+          title: string | null;
+          sku: string | null;
+          quantity: number;
+          unitPriceCents: number | null;
+          lineTotalCents: number | null;
+          imageUrl: string | null;
+        }> = [];
+
+        const hasShipmentData = !!row.label_purchased_at || !!row.tracking_number;
+
+        if (stripeService.isConfigured()) {
+          try {
+            const session = await stripeService.getCheckoutSession(sessionId);
+            const shippingDetails = session.shipping_details ?? session.customer_details;
+
+            buyerName = shippingDetails?.name ?? null;
+            buyerPhone = shippingDetails?.phone ?? null;
+            buyerEmail = session.customer_details?.email ?? null;
+
+            if (hasShipmentData && shippingDetails?.address) {
+              address = {
+                line1: shippingDetails.address.line1,
+                line2: shippingDetails.address.line2 ?? null,
+                city: shippingDetails.address.city,
+                state: shippingDetails.address.state,
+                postalCode: shippingDetails.address.postal_code,
+                country: shippingDetails.address.country,
+              };
+            }
+
+            const paymentIntent = session.payment_intent as any;
+            const paymentTypes = paymentIntent?.payment_method_types;
+            paymentMethod = Array.isArray(paymentTypes) && paymentTypes.length > 0 ? String(paymentTypes[0]) : null;
+
+            // Tax/discount details (best-effort; UI should degrade gracefully)
+            const taxCents = session.total_details?.amount_tax ?? null;
+            totals.taxCents = typeof taxCents === "number" ? taxCents : null;
+
+            const lineItems = await stripeService.listCheckoutSessionLineItems(sessionId);
+            items = (lineItems.data || []).map((li: any) => {
+              const product = li?.price?.product && typeof li.price.product === "object" ? li.price.product : null;
+              const metadata = product?.metadata ?? {};
+              const sku =
+                (metadata.canonical_sku as string | undefined) ||
+                (metadata.product_sku as string | undefined) ||
+                (metadata.public_sku as string | undefined) ||
+                (metadata.item_uid as string | undefined) ||
+                (metadata.product_uid as string | undefined) ||
+                null;
+
+              return {
+                title: li.description ?? product?.name ?? null,
+                sku,
+                quantity: typeof li.quantity === "number" ? li.quantity : 1,
+                unitPriceCents: li?.price?.unit_amount ?? null,
+                lineTotalCents: li?.amount_total ?? null,
+                imageUrl: Array.isArray(product?.images) && product.images.length > 0 ? product.images[0] : null,
+              };
+            });
+          } catch (err) {
+            logger.warn(
+              { operatorId, sessionIdHint: sessionId.slice(-8), err: (err as Error).message },
+              "fulfillment.order.details.stripe_fetch_failed"
+            );
+          }
+        }
+
+        return res.json({
+          ok: true,
+          source: "cardmint",
+          order: {
+            orderNumber,
+            status: row.status,
+            orderDate: row.created_at,
+            updatedAt: row.updated_at,
+            paymentMethod,
+            totals,
+          },
+          buyer: {
+            name: buyerName,
+            email: buyerEmail,
+            phone: buyerPhone,
+          },
+          shipping: {
+            shippingType: row.shipping_method,
+            address,
+            addressAvailable: !!address,
+            addressReason: address
+              ? null
+              : hasShipmentData
+                ? "Address not available from Stripe session."
+                : "Address withheld until label purchase (PII guardrail).",
+          },
+          items,
+          shipments: [
+            {
+              carrier: row.carrier,
+              service: row.easypost_service,
+              trackingNumber: row.tracking_number,
+              trackingUrl: row.tracking_url,
+              labelUrl: row.label_url,
+              labelPurchasedAt: row.label_purchased_at,
+              status: row.status,
+              provenance: row.label_url ? "easypost_label" : row.tracking_number ? "csv_upload" : "none",
+            },
+          ],
+        });
+      }
+
+      // marketplace
+      const orderId = parseInt(id, 10);
+      if (isNaN(orderId)) {
+        return res.status(400).json({ ok: false, error: "BAD_REQUEST", message: "id must be an integer for marketplace" });
+      }
+
+      const order = db
+        .prepare("SELECT * FROM marketplace_orders WHERE id = ?")
+        .get(orderId) as MarketplaceOrderDetailRow | undefined;
+
+      if (!order) {
+        return res.status(404).json({ ok: false, error: "NOT_FOUND", message: "Order not found" });
+      }
+
+      const shipments = db
+        .prepare("SELECT * FROM marketplace_shipments WHERE marketplace_order_id = ? ORDER BY shipment_sequence")
+        .all(orderId) as MarketplaceShipmentDetailRow[];
+
+      const shipmentsWithAddress = shipments.map((s) => {
+        const decryptedAddress = safeDecryptMarketplaceAddress(s.shipping_address_encrypted);
+        return {
+          shipmentSequence: s.shipment_sequence,
+          carrier: s.carrier,
+          service: s.service,
+          trackingNumber: s.tracking_number,
+          trackingUrl: s.tracking_url,
+          labelUrl: s.label_url,
+          labelPurchasedAt: s.label_purchased_at,
+          status: s.status,
+          shippedAt: s.shipped_at,
+          deliveredAt: s.delivered_at,
+          exception: s.exception_type ? { type: s.exception_type, notes: s.exception_notes ?? null } : null,
+          address: decryptedAddress,
+          provenance: s.label_url ? "easypost_label" : s.tracking_number ? "csv_upload" : "none",
+        };
+      });
+
+      const primaryShipment = shipmentsWithAddress[0] ?? null;
+
+      const derivedStatus = deriveMarketplaceOrderStatus(shipments.map((s) => s.status));
+      const totals = {
+        productCents: order.product_value_cents,
+        shippingCents: order.shipping_fee_cents,
+        discountCents: null as number | null,
+        taxCents: null as number | null,
+        totalCents: order.product_value_cents + order.shipping_fee_cents,
+      };
+
+      const address = primaryShipment?.address ?? null;
+      const addressAvailable = !!address;
+      const addressReason =
+        addressAvailable
+          ? null
+          : order.import_format === "orderlist"
+            ? "Order List imports do not include addresses. Import TCGPlayer Shipping Export or EasyPost Shipments export to attach an address."
+            : "Address not yet available.";
+
+      // Try to get real items from marketplace_order_items (Pull Sheet import)
+      // Primary query: by marketplace_order_id (items attached to order)
+      let orderItems = db
+        .prepare(`
+          SELECT * FROM marketplace_order_items
+          WHERE marketplace_order_id = ?
+          ORDER BY id
+        `)
+        .all(orderId) as Array<{
+          id: number;
+          product_name: string;
+          tcgplayer_sku_id: string | null;
+          set_name: string | null;
+          card_number: string | null;
+          condition: string | null;
+          rarity: string | null;
+          product_line: string | null;
+          quantity: number;
+          unit_price_cents: number | null;
+          price_confidence: "exact" | "estimated" | "unavailable";
+          image_url: string | null;
+        }>;
+
+      // Fallback: query by (source, external_order_id) for Pull Sheet-first scenario
+      // where items may not yet be attached to the order
+      if (orderItems.length === 0) {
+        orderItems = db
+          .prepare(`
+            SELECT * FROM marketplace_order_items
+            WHERE source = ? AND external_order_id = ?
+            ORDER BY id
+          `)
+          .all(order.source, order.external_order_id) as typeof orderItems;
+      }
+
+      let items: Array<{
+        title: string | null;
+        sku: string | null;
+        quantity: number;
+        unitPriceCents: number | null;
+        lineTotalCents: number | null;
+        imageUrl: string | null;
+        // Extended fields for card data
+        setName?: string | null;
+        cardNumber?: string | null;
+        condition?: string | null;
+        rarity?: string | null;
+        productLine?: string | null;
+        priceConfidence?: "exact" | "estimated" | "unavailable";
+      }>;
+
+      if (orderItems.length > 0) {
+        // Use real card data from Pull Sheet
+        items = orderItems.map((item) => ({
+          title: item.product_name,
+          sku: item.tcgplayer_sku_id,
+          quantity: item.quantity,
+          unitPriceCents: item.unit_price_cents,
+          lineTotalCents:
+            item.unit_price_cents !== null
+              ? item.unit_price_cents * item.quantity
+              : null,
+          imageUrl: item.image_url,
+          // Extended card fields
+          setName: item.set_name,
+          cardNumber: item.card_number,
+          condition: item.condition,
+          rarity: item.rarity,
+          productLine: item.product_line,
+          priceConfidence: item.price_confidence,
+        }));
+      } else {
+        // Fallback: placeholder item (no Pull Sheet imported)
+        items = [
+          {
+            title: `${order.source.toUpperCase()} order (line item details unavailable)`,
+            sku: null,
+            quantity: order.item_count ?? 1,
+            unitPriceCents:
+              order.item_count && order.item_count > 0
+                ? Math.round(order.product_value_cents / order.item_count)
+                : null,
+            lineTotalCents: order.product_value_cents,
+            imageUrl: null,
+          },
+        ];
+      }
+
+      return res.json({
+        ok: true,
+        source: "marketplace",
+        order: {
+          orderNumber:
+            order.source === "tcgplayer"
+              ? formatTcgplayerOrderNumber(order.external_order_id)
+              : order.display_order_number,
+          status: derivedStatus,
+          orderDate: order.order_date,
+          updatedAt: order.updated_at,
+          paymentMethod: null,
+          totals,
+        },
+        buyer: {
+          name: order.customer_name ?? null,
+          email: null,
+          phone: null,
+        },
+        shipping: {
+          shippingType: order.shipping_method,
+          address,
+          addressAvailable,
+          addressReason,
+        },
+        items,
+        shipments: shipmentsWithAddress,
+      });
+    } catch (err) {
+      logger.error({ err: (err as Error).message, operatorId, source }, "fulfillment.order.details.failed");
+      return res.status(500).json({ ok: false, error: "INTERNAL_ERROR", message: "Failed to load order details" });
     }
   });
 
@@ -1535,7 +1953,10 @@ function formatMarketplaceToUnified(row: MarketplaceShipmentRow): UnifiedFulfill
   return {
     id: `mp:${row.shipment_id}`,
     source: row.source as "tcgplayer" | "ebay",
-    orderNumber: row.display_order_number,
+    orderNumber:
+      row.source === "tcgplayer"
+        ? formatTcgplayerOrderNumber(row.external_order_id)
+        : row.display_order_number,
     customerName: row.customer_name,
     itemCount: row.item_count,
     valueCents: row.product_value_cents,
@@ -1554,7 +1975,7 @@ function formatMarketplaceToUnified(row: MarketplaceShipmentRow): UnifiedFulfill
       labelPurchasedAt: row.label_purchased_at,
     },
     timeline: {
-      createdAt: row.shipment_created_at,
+      createdAt: row.order_date,
       shippedAt: row.shipped_at,
       deliveredAt: row.delivered_at,
     },
@@ -1570,4 +1991,22 @@ function formatMarketplaceToUnified(row: MarketplaceShipmentRow): UnifiedFulfill
       externalOrderId: row.external_order_id,
     },
   };
+}
+
+function safeDecryptMarketplaceAddress(encrypted: string | null): MarketplaceShippingAddress | null {
+  if (!encrypted) return null;
+  try {
+    return decryptJson<MarketplaceShippingAddress>(encrypted);
+  } catch {
+    return null;
+  }
+}
+
+function deriveMarketplaceOrderStatus(statuses: string[]): string {
+  if (statuses.includes("exception")) return "exception";
+  if (statuses.length > 0 && statuses.every((s) => s === "delivered")) return "delivered";
+  if (statuses.includes("in_transit")) return "in_transit";
+  if (statuses.includes("shipped")) return "shipped";
+  if (statuses.includes("label_purchased")) return "label_purchased";
+  return "pending";
 }

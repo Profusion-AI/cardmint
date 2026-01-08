@@ -3,17 +3,31 @@
  *
  * Proxies to CardMint backend's marketplace shipment rates endpoint.
  * POST /admin/api/fulfillment/marketplace/shipments/:id/rates
+ *
+ * Body params:
+ *   - customWeightOz: number (optional)
+ *   - parcelPreset: string (optional) - "singlecard" | "multicard-bubble" | "multicard-box"
+ *   - parcelLength: number (optional) - inches
+ *   - parcelWidth: number (optional) - inches
+ *   - parcelHeight: number (optional) - inches
  */
 
 import { proxyPost } from "../../services/BackendProxy.js";
 
 export default async function getShipmentRates(request, response) {
   const { id } = request.params;
-  const { customWeightOz } = request.body || {};
+  const body = request.body || {};
 
+  // Forward all parcel-related params to backend
   const result = await proxyPost(
     `/api/cm-admin/marketplace/shipments/${id}/rates`,
-    { customWeightOz }
+    {
+      customWeightOz: body.customWeightOz,
+      parcelPreset: body.parcelPreset,
+      parcelLength: body.parcelLength,
+      parcelWidth: body.parcelWidth,
+      parcelHeight: body.parcelHeight,
+    }
   );
 
   if (!result.ok) {

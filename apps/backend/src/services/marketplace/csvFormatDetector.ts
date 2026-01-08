@@ -5,12 +5,14 @@
  * Supports:
  * - TCGPlayer Shipping Export (full address data, label-ready)
  * - TCGPlayer Order List (no address, tracking/reconciliation only)
+ * - TCGPlayer Pull Sheet (card-level line items with product details)
  * - EasyPost Tracking Export (tracking linkage)
  */
 
 export type CsvFormat =
   | "tcgplayer_shipping"
   | "tcgplayer_orderlist"
+  | "tcgplayer_pullsheet"
   | "easypost_tracking"
   | "unknown";
 
@@ -48,6 +50,16 @@ const FORMAT_SIGNATURES: Record<Exclude<CsvFormat, "unknown">, string[][]> = {
     ["order #", "buyer name", "total amt"],         // Alternate: "Total Amt" instead
     ["order #", "buyer name", "buyer paid"],        // Alternate: "Buyer Paid" is unique to Order List
     ["order #", "buyer name", "shipping type"],     // Alternate: "Shipping Type" is Order List specific
+  ],
+
+  // TCGPlayer Pull Sheet: card-level line items with "Order Quantity" field
+  // "Order Quantity" is unique to Pull Sheet (format: "ORDER-ID:QTY")
+  // Headers: Product Line, Product Name, Condition, Number, Set, Rarity, Quantity, Main Photo URL, Set Release Date, SkuId, Order Quantity
+  tcgplayer_pullsheet: [
+    ["product line", "product name", "order quantity"],           // Primary signature
+    ["product name", "order quantity", "skuid"],                  // Alternate (case variations)
+    ["product name", "order quantity", "sku id"],                 // Alternate: space in "Sku Id"
+    ["product name", "set", "order quantity"],                    // Minimal signature
   ],
 
   // EasyPost exports: Tracking (delivery events) or Shipments (created labels)
@@ -130,6 +142,8 @@ export function getFormatDisplayName(format: CsvFormat): string {
       return "TCGPlayer Shipping Export";
     case "tcgplayer_orderlist":
       return "TCGPlayer Order List";
+    case "tcgplayer_pullsheet":
+      return "TCGPlayer Pull Sheet";
     case "easypost_tracking":
       return "EasyPost Tracking";
     case "unknown":

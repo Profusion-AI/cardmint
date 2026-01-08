@@ -188,6 +188,8 @@ const envSchema = z.object({
   EASYPOST_PARCEL_LENGTH_IN: z.coerce.number().default(6.0),
   EASYPOST_PARCEL_WIDTH_IN: z.coerce.number().default(4.0),
   EASYPOST_PARCEL_HEIGHT_IN: z.coerce.number().default(0.5),
+  // Label processing cache (Phase 5 - PL-60 optimization)
+  LABEL_CACHE_DIR: z.string().default("/var/lib/cardmint/label-cache"),
   // Resend transactional email (Dec 2025 - PR2)
   RESEND_API_KEY: z.string().optional(),
   RESEND_FROM_EMAIL: z.string().default("CardMint <noreply@cardmintshop.com>"),
@@ -426,6 +428,8 @@ export const runtimeConfig = {
     widthIn: parsed.EASYPOST_PARCEL_WIDTH_IN,
     heightIn: parsed.EASYPOST_PARCEL_HEIGHT_IN,
   },
+  // Label cache for PL-60 optimized labels
+  labelCacheDir: parsed.LABEL_CACHE_DIR,
   // Marketplace parcel presets (Phase 4 - SSoT for package selection)
   parcelPresets: {
     singlecard: {

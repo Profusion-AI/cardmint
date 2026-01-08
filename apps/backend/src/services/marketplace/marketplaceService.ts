@@ -9,6 +9,7 @@ import type { Database, Statement } from "better-sqlite3";
 import type { Logger } from "pino";
 import { encryptJson, decryptJson } from "../../utils/encryption";
 import { normalizeNameForMatching } from "../../utils/nameNormalization.js";
+import { parseTcgplayerOrderNumber } from "../../utils/orderNumberFormat.js";
 
 // ============================================================================
 // Module-Level State
@@ -158,6 +159,53 @@ export interface ListOrdersOptions {
 }
 
 // ============================================================================
+// Order Item Types (Pull Sheet)
+// ============================================================================
+
+export interface MarketplaceOrderItem {
+  id: number;
+  marketplace_order_id: number | null;
+  source: "tcgplayer" | "ebay";
+  external_order_id: string;
+  item_key: string;
+  tcgplayer_sku_id: string | null;
+  product_name: string;
+  set_name: string | null;
+  card_number: string | null;
+  condition: string | null;
+  rarity: string | null;
+  product_line: string | null;
+  set_release_date: number | null;
+  quantity: number;
+  unit_price_cents: number | null;
+  price_confidence: "exact" | "estimated" | "unavailable";
+  image_url: string | null;
+  import_batch_id: number | null;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface UpsertOrderItemInput {
+  marketplaceOrderId: number | null;
+  source: "tcgplayer" | "ebay";
+  externalOrderId: string;
+  itemKey: string;
+  tcgplayerSkuId: string | null;
+  productName: string;
+  setName: string | null;
+  cardNumber: string | null;
+  condition: string | null;
+  rarity: string | null;
+  productLine: string | null;
+  setReleaseDate: number | null;
+  quantity: number;
+  unitPriceCents: number | null;
+  priceConfidence: "exact" | "estimated" | "unavailable";
+  imageUrl: string | null;
+  importBatchId: number | null;
+}
+
+// ============================================================================
 // Service
 // ============================================================================
 
@@ -183,6 +231,7 @@ export class MarketplaceService {
     updateShipmentTracking: Statement;
     updateShipmentStatus: Statement;
     updateShipmentLabel: Statement;
+    updateShipmentAddressIfMissing: Statement;
     setAddressExpiry: Statement;
     purgeExpiredAddresses: Statement;
     insertUnmatchedTracking: Statement;
@@ -193,6 +242,11 @@ export class MarketplaceService {
     countOrdersBySource: Statement;
     countOrdersByStatus: Statement;
     countOrdersBySourceAndStatus: Statement;
+    // Order items (Pull Sheet)
+    upsertOrderItem: Statement;
+    getItemsByOrderId: Statement;
+    getItemsByExternalOrderId: Statement;
+    attachItemsToOrder: Statement;
   };
 
   constructor(db: Database, logger: Logger) {
@@ -381,7 +435,7 @@ export class MarketplaceService {
 
       updateShipmentTracking: this.db.prepare(`
         UPDATE marketplace_shipments
-        SET tracking_number = ?, tracking_url = ?, carrier = ?,
+        SET tracking_number = ?, tracking_url = ?, carrier = ?, service = COALESCE(?, service),
             tracking_match_confidence = ?, tracking_matched_at = ?, tracking_matched_by = ?
         WHERE id = ?
       `),
@@ -399,6 +453,14 @@ export class MarketplaceService {
             tracking_number = ?, tracking_url = ?, label_url = ?, label_cost_cents = ?,
             label_purchased_at = strftime('%s', 'now'), status = 'label_purchased'
         WHERE id = ?
+      `),
+
+      updateShipmentAddressIfMissing: this.db.prepare(`
+        UPDATE marketplace_shipments
+        SET shipping_address_encrypted = ?,
+            shipping_zip = COALESCE(shipping_zip, ?)
+        WHERE id = ?
+          AND shipping_address_encrypted IS NULL
       `),
 
       // Set address expiry to 90 days from now (called when shipment delivered)
@@ -438,6 +500,45 @@ export class MarketplaceService {
         SELECT MAX(CAST(SUBSTR(display_order_number, -6) AS INTEGER)) as max_seq
         FROM marketplace_orders
         WHERE display_order_number LIKE ?
+      `),
+
+      // Order items (Pull Sheet) - idempotent upsert with overwrite semantics
+      upsertOrderItem: this.db.prepare(`
+        INSERT INTO marketplace_order_items (
+          marketplace_order_id, source, external_order_id, item_key,
+          tcgplayer_sku_id, product_name, set_name, card_number, condition,
+          rarity, product_line, set_release_date, quantity, unit_price_cents,
+          price_confidence, image_url, import_batch_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(source, external_order_id, item_key) DO UPDATE SET
+          marketplace_order_id = COALESCE(excluded.marketplace_order_id, marketplace_order_id),
+          quantity = excluded.quantity,
+          unit_price_cents = COALESCE(excluded.unit_price_cents, unit_price_cents),
+          price_confidence = CASE
+            WHEN excluded.price_confidence = 'exact' THEN 'exact'
+            WHEN price_confidence = 'exact' THEN 'exact'
+            ELSE excluded.price_confidence
+          END,
+          import_batch_id = excluded.import_batch_id,
+          updated_at = strftime('%s', 'now')
+      `),
+
+      getItemsByOrderId: this.db.prepare(`
+        SELECT * FROM marketplace_order_items
+        WHERE marketplace_order_id = ?
+        ORDER BY id
+      `),
+
+      getItemsByExternalOrderId: this.db.prepare(`
+        SELECT * FROM marketplace_order_items
+        WHERE source = ? AND external_order_id = ?
+        ORDER BY id
+      `),
+
+      attachItemsToOrder: this.db.prepare(`
+        UPDATE marketplace_order_items
+        SET marketplace_order_id = ?, updated_at = strftime('%s', 'now')
+        WHERE source = ? AND external_order_id = ? AND marketplace_order_id IS NULL
       `),
     };
   }
@@ -580,6 +681,9 @@ export class MarketplaceService {
       "Created marketplace order"
     );
 
+    // Auto-attach orphaned Pull Sheet items (handles "Pull Sheet first" scenario)
+    this.attachItemsToOrder(result.orderId, input.source, input.external_order_id);
+
     return result;
   }
 
@@ -597,6 +701,21 @@ export class MarketplaceService {
 
   getOrderByExternalId(source: "tcgplayer" | "ebay", externalOrderId: string): MarketplaceOrder | undefined {
     return this.statements.getOrderByExternalId.get(source, externalOrderId) as MarketplaceOrder | undefined;
+  }
+
+  findOrdersByOrderNumber(orderNumber: string): MarketplaceOrder[] {
+    // Parse input to handle both TCGP-... display format and raw 36666676-... format
+    const trimmed = orderNumber.trim();
+    const rawOrderNumber = parseTcgplayerOrderNumber(trimmed);
+
+    return this.db
+      .prepare(
+        `
+        SELECT * FROM marketplace_orders
+        WHERE external_order_id = ? OR display_order_number = ?
+      `
+      )
+      .all(rawOrderNumber, trimmed) as MarketplaceOrder[];
   }
 
   /**
@@ -710,6 +829,7 @@ export class MarketplaceService {
     trackingNumber: string,
     trackingUrl: string | null,
     carrier: string | null,
+    service: string | null,
     confidence: "auto" | "manual",
     matchedBy: string
   ): void {
@@ -717,11 +837,22 @@ export class MarketplaceService {
       trackingNumber,
       trackingUrl,
       carrier,
+      service,
       confidence,
       Math.floor(Date.now() / 1000),
       matchedBy,
       shipmentId
     );
+  }
+
+  updateShipmentAddressIfMissing(shipmentId: number, shippingAddress: ShippingAddress): boolean {
+    const encryptedAddress = encryptJson(shippingAddress);
+    const result = this.statements.updateShipmentAddressIfMissing.run(
+      encryptedAddress,
+      shippingAddress.zip,
+      shipmentId
+    );
+    return result.changes === 1;
   }
 
   updateShipmentStatus(
@@ -1003,6 +1134,7 @@ export class MarketplaceService {
         tracking.tracking_number,
         trackingUrl,
         tracking.carrier || null,
+        null,
         "auto",
         "system:rematch"
       );
@@ -1329,5 +1461,87 @@ export class MarketplaceService {
           updated_at = strftime('%s', 'now')
       WHERE id = ?
     `).run(shipmentId);
+  }
+
+  // ============================================================================
+  // Order Items (Pull Sheet)
+  // ============================================================================
+
+  /**
+   * Upsert an order item (idempotent via UNIQUE constraint on source+external_order_id+item_key).
+   *
+   * ON CONFLICT behavior:
+   * - marketplace_order_id: COALESCE to preserve existing FK if new value is NULL
+   * - quantity: overwrite with new value (not additive, per Codex QA)
+   * - unit_price_cents: COALESCE to preserve existing if new is NULL
+   * - price_confidence: prefer 'exact' over other values
+   */
+  upsertOrderItem(input: UpsertOrderItemInput): void {
+    this.statements.upsertOrderItem.run(
+      input.marketplaceOrderId,
+      input.source,
+      input.externalOrderId,
+      input.itemKey,
+      input.tcgplayerSkuId,
+      input.productName,
+      input.setName,
+      input.cardNumber,
+      input.condition,
+      input.rarity,
+      input.productLine,
+      input.setReleaseDate,
+      input.quantity,
+      input.unitPriceCents,
+      input.priceConfidence,
+      input.imageUrl,
+      input.importBatchId
+    );
+  }
+
+  /**
+   * Get all items for a marketplace order (by FK).
+   * Returns empty array if order has no items.
+   */
+  getItemsByOrderId(orderId: number): MarketplaceOrderItem[] {
+    return this.statements.getItemsByOrderId.all(orderId) as MarketplaceOrderItem[];
+  }
+
+  /**
+   * Get items by external order ID (for orders not yet in marketplace_orders).
+   * Used when Pull Sheet arrives before Order List.
+   */
+  getItemsByExternalOrderId(
+    source: "tcgplayer" | "ebay",
+    externalOrderId: string
+  ): MarketplaceOrderItem[] {
+    return this.statements.getItemsByExternalOrderId.all(
+      source,
+      externalOrderId
+    ) as MarketplaceOrderItem[];
+  }
+
+  /**
+   * Attach unlinked items to an order (when order arrives after Pull Sheet).
+   * Updates marketplace_order_id for items with NULL FK that match source+external_order_id.
+   *
+   * @returns Number of items attached
+   */
+  attachItemsToOrder(
+    orderId: number,
+    source: "tcgplayer" | "ebay",
+    externalOrderId: string
+  ): number {
+    const result = this.statements.attachItemsToOrder.run(
+      orderId,
+      source,
+      externalOrderId
+    );
+    if (result.changes > 0) {
+      this.logger.info(
+        { orderId, source, externalOrderId, itemsAttached: result.changes },
+        "Attached Pull Sheet items to order"
+      );
+    }
+    return result.changes;
   }
 }

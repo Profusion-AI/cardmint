@@ -4,8 +4,17 @@ import React, { useState, useEffect } from 'react';
  * RatesModal Component
  *
  * Displays available shipping rates for a marketplace shipment.
- * Allows weight override and rate selection before label purchase.
+ * Allows full parcel override (preset, dimensions, weight) and rate selection before label purchase.
+ * Features auto-pick for recommended rate (USPS Ground Advantage prioritized).
  */
+
+// Parcel preset definitions (must match backend config.ts)
+const PARCEL_PRESETS = {
+  singlecard: { label: 'Single Card Mailer', length: 6.5, width: 4.5, height: 0.1, weight: 3.0 },
+  'multicard-bubble': { label: 'Bubble Mailer', length: 8.0, width: 6.0, height: 1.0, weight: 4.0 },
+  'multicard-box': { label: 'Box', length: 10.0, width: 8.0, height: 2.0, weight: 8.0 },
+};
+
 export default function RatesModal({
   shipmentId,
   isOpen,
@@ -19,8 +28,18 @@ export default function RatesModal({
   const [error, setError] = useState(null);
   const [rates, setRates] = useState([]);
   const [selectedRate, setSelectedRate] = useState(null);
-  const [customWeightOz, setCustomWeightOz] = useState('');
   const [ratesData, setRatesData] = useState(null);
+  const [showConfirm, setShowConfirm] = useState(false);
+
+  // Parcel controls state
+  const [parcelPreset, setParcelPreset] = useState(''); // empty = auto
+  const [parcelLength, setParcelLength] = useState('');
+  const [parcelWidth, setParcelWidth] = useState('');
+  const [parcelHeight, setParcelHeight] = useState('');
+  const [customWeightOz, setCustomWeightOz] = useState('');
+
+  // Dirty state: tracks if parcel settings changed since last rate fetch
+  const [parcelDirty, setParcelDirty] = useState(false);
 
   // Styles
   const overlayStyle = {
@@ -112,24 +131,42 @@ export default function RatesModal({
     return `$${parseFloat(rate).toFixed(2)}`;
   };
 
-  const fetchRates = async () => {
+  const fetchRates = async (isInitialFetch = false) => {
     setLoading(true);
     setError(null);
     setRates([]);
     setSelectedRate(null);
+    setParcelDirty(false); // Clear dirty state when fetching
 
     try {
       const body = {};
-      if (customWeightOz && parseFloat(customWeightOz) > 0) {
-        body.customWeightOz = parseFloat(customWeightOz);
+
+      // Only send overrides if not initial fetch AND parcelPreset is set (not Auto)
+      // When Auto is selected (empty preset), let backend auto-determine all parcel params
+      if (!isInitialFetch && parcelPreset) {
+        body.parcelPreset = parcelPreset;
+        // Only send dimension/weight overrides when a preset is selected
+        if (parcelLength && parseFloat(parcelLength) > 0) {
+          body.parcelLength = parseFloat(parcelLength);
+        }
+        if (parcelWidth && parseFloat(parcelWidth) > 0) {
+          body.parcelWidth = parseFloat(parcelWidth);
+        }
+        if (parcelHeight && parseFloat(parcelHeight) > 0) {
+          body.parcelHeight = parseFloat(parcelHeight);
+        }
+        if (customWeightOz && parseFloat(customWeightOz) > 0) {
+          body.customWeightOz = parseFloat(customWeightOz);
+        }
       }
 
       const response = await fetch(
-        `/admin/api/fulfillment/marketplace/shipments/${shipmentId}/rates`,
+        `/api/admin/api/fulfillment/marketplace/shipments/${shipmentId}/rates`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
+          credentials: 'include',
         }
       );
 
@@ -142,6 +179,23 @@ export default function RatesModal({
 
       setRatesData(data);
       setRates(data.rates || []);
+
+      // Pre-populate parcel fields from response (for initial fetch or when not overriding)
+      if (isInitialFetch || !parcelPreset) {
+        setParcelPreset(data.parcelPreset || '');
+      }
+      if (isInitialFetch || !parcelLength) {
+        setParcelLength(data.parcelLength?.toString() || '');
+      }
+      if (isInitialFetch || !parcelWidth) {
+        setParcelWidth(data.parcelWidth?.toString() || '');
+      }
+      if (isInitialFetch || !parcelHeight) {
+        setParcelHeight(data.parcelHeight?.toString() || '');
+      }
+      if (isInitialFetch || !customWeightOz) {
+        setCustomWeightOz(data.parcelWeightOz?.toString() || '');
+      }
     } catch (err) {
       setError(err.message || 'Network error');
     } finally {
@@ -149,19 +203,63 @@ export default function RatesModal({
     }
   };
 
+  // Handle preset change - update dimensions and weight to preset defaults
+  const handlePresetChange = (newPreset) => {
+    setParcelPreset(newPreset);
+    setParcelDirty(true);
+    if (newPreset && PARCEL_PRESETS[newPreset]) {
+      const preset = PARCEL_PRESETS[newPreset];
+      setParcelLength(preset.length.toString());
+      setParcelWidth(preset.width.toString());
+      setParcelHeight(preset.height.toString());
+      setCustomWeightOz(preset.weight.toString());
+    } else {
+      // Auto selected - clear dimension fields (backend will auto-determine)
+      setParcelLength('');
+      setParcelWidth('');
+      setParcelHeight('');
+      setCustomWeightOz('');
+    }
+  };
+
+  // Handle dimension/weight change - set dirty
+  const handleDimensionChange = (setter) => (e) => {
+    setter(e.target.value);
+    setParcelDirty(true);
+  };
+
+  // Auto-pick the recommended rate
+  const handleAutoPick = () => {
+    const recommended = rates.find((r) => r.recommended);
+    if (recommended) {
+      setSelectedRate(recommended);
+    }
+  };
+
+  const handleBuyClick = () => {
+    if (!selectedRate) return;
+    setShowConfirm(true);
+  };
+
+  const handleConfirmCancel = () => {
+    setShowConfirm(false);
+  };
+
   const purchaseLabel = async () => {
     if (!selectedRate) return;
 
     setPurchasing(true);
     setError(null);
+    setShowConfirm(false);
 
     try {
       const response = await fetch(
-        `/admin/api/fulfillment/marketplace/shipments/${shipmentId}/label`,
+        `/api/admin/api/fulfillment/marketplace/shipments/${shipmentId}/label`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ rateId: selectedRate.id }),
+          credentials: 'include',
         }
       );
 
@@ -186,7 +284,16 @@ export default function RatesModal({
 
   useEffect(() => {
     if (isOpen && shipmentId) {
-      fetchRates();
+      // Reset state on modal open
+      setParcelPreset('');
+      setParcelLength('');
+      setParcelWidth('');
+      setParcelHeight('');
+      setCustomWeightOz('');
+      setParcelDirty(false);
+      setSelectedRate(null);
+      setError(null);
+      fetchRates(true); // Initial fetch to get defaults
     }
   }, [isOpen, shipmentId]);
 
@@ -221,82 +328,178 @@ export default function RatesModal({
           </div>
         )}
 
-        {/* Shipment info */}
-        {ratesData && (
-          <div style={sectionStyle}>
-            <div
-              style={{
-                display: 'grid',
-                gridTemplateColumns: 'repeat(3, 1fr)',
-                gap: '12px',
-                backgroundColor: '#F9FAFB',
-                padding: '12px',
-                borderRadius: '6px',
-                fontSize: '13px',
-              }}
-            >
-              <div>
-                <span style={{ color: '#6B7280' }}>Preset:</span>{' '}
-                <strong>{ratesData.parcelPreset}</strong>
+        {/* Parcel Controls */}
+        <div style={sectionStyle}>
+          <div
+            style={{
+              backgroundColor: '#F9FAFB',
+              padding: '16px',
+              borderRadius: '6px',
+              marginBottom: '12px',
+            }}
+          >
+            {/* Package Type Dropdown */}
+            <div style={{ marginBottom: '12px' }}>
+              <label style={labelStyle}>Package Type</label>
+              <select
+                value={parcelPreset}
+                onChange={(e) => handlePresetChange(e.target.value)}
+                style={{ ...inputStyle, width: '200px' }}
+                disabled={loading}
+              >
+                <option value="">Auto (based on item count)</option>
+                {Object.entries(PARCEL_PRESETS).map(([key, preset]) => (
+                  <option key={key} value={key}>{preset.label}</option>
+                ))}
+              </select>
+            </div>
+
+            {/* Dimensions Row */}
+            <div style={{ marginBottom: '12px' }}>
+              <label style={labelStyle}>Dimensions (inches)</label>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <input
+                  type="number"
+                  step="0.1"
+                  min="0.1"
+                  max="36"
+                  placeholder="L"
+                  value={parcelLength}
+                  onChange={handleDimensionChange(setParcelLength)}
+                  style={{ ...inputStyle, width: '70px' }}
+                  disabled={loading || !parcelPreset}
+                  title="Length"
+                />
+                <span style={{ color: '#6B7280' }}>×</span>
+                <input
+                  type="number"
+                  step="0.1"
+                  min="0.1"
+                  max="36"
+                  placeholder="W"
+                  value={parcelWidth}
+                  onChange={handleDimensionChange(setParcelWidth)}
+                  style={{ ...inputStyle, width: '70px' }}
+                  disabled={loading || !parcelPreset}
+                  title="Width"
+                />
+                <span style={{ color: '#6B7280' }}>×</span>
+                <input
+                  type="number"
+                  step="0.1"
+                  min="0.1"
+                  max="36"
+                  placeholder="H"
+                  value={parcelHeight}
+                  onChange={handleDimensionChange(setParcelHeight)}
+                  style={{ ...inputStyle, width: '70px' }}
+                  disabled={loading || !parcelPreset}
+                  title="Height"
+                />
               </div>
-              <div>
-                <span style={{ color: '#6B7280' }}>Weight:</span>{' '}
-                <strong>{ratesData.parcelWeightOz} oz</strong>
-              </div>
-              <div>
+            </div>
+
+            {/* Weight Row */}
+            <div style={{ marginBottom: '12px' }}>
+              <label style={labelStyle}>Weight (oz)</label>
+              <input
+                type="number"
+                step="0.1"
+                min="0.1"
+                max="1120"
+                placeholder="Weight"
+                value={customWeightOz}
+                onChange={handleDimensionChange(setCustomWeightOz)}
+                style={{ ...inputStyle, width: '100px' }}
+                disabled={loading || !parcelPreset}
+              />
+              {!parcelPreset && (
+                <span style={{ marginLeft: '8px', fontSize: '12px', color: '#6B7280' }}>
+                  (Auto-determined by item count)
+                </span>
+              )}
+            </div>
+
+            {/* Insurance & Refresh */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div style={{ fontSize: '13px' }}>
                 <span style={{ color: '#6B7280' }}>Insurance:</span>{' '}
                 <strong>
-                  {ratesData.insuredValueCents
+                  {ratesData?.insuredValueCents
                     ? `$${(ratesData.insuredValueCents / 100).toFixed(2)}`
                     : 'None'}
                 </strong>
               </div>
+              <button
+                style={buttonStyle(false, loading)}
+                onClick={() => fetchRates(false)}
+                disabled={loading}
+              >
+                {loading ? 'Loading...' : 'Refresh Rates'}
+              </button>
             </div>
-          </div>
-        )}
-
-        {/* Weight override */}
-        <div style={sectionStyle}>
-          <label style={labelStyle}>Weight Override (oz)</label>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-            <input
-              type="number"
-              step="0.1"
-              min="0"
-              placeholder="Auto"
-              value={customWeightOz}
-              onChange={(e) => setCustomWeightOz(e.target.value)}
-              style={inputStyle}
-              disabled={loading}
-            />
-            <button
-              style={buttonStyle(false, loading)}
-              onClick={fetchRates}
-              disabled={loading}
-            >
-              {loading ? 'Loading...' : 'Refresh Rates'}
-            </button>
           </div>
         </div>
 
         {/* Rates list */}
         <div style={sectionStyle}>
-          <label style={labelStyle}>Select a Rate</label>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+            <label style={{ ...labelStyle, marginBottom: 0 }}>Select a Rate</label>
+            {rates.length > 0 && rates.some((r) => r.recommended) && (
+              <button
+                style={{
+                  padding: '6px 12px',
+                  borderRadius: '4px',
+                  border: '1px solid #059669',
+                  backgroundColor: '#ECFDF5',
+                  color: '#059669',
+                  cursor: 'pointer',
+                  fontSize: '12px',
+                  fontWeight: 500,
+                }}
+                onClick={handleAutoPick}
+                disabled={loading}
+              >
+                Auto-Pick Best Rate
+              </button>
+            )}
+          </div>
           {loading ? (
             <div style={{ textAlign: 'center', padding: '20px', color: '#6B7280' }}>
               Fetching rates...
             </div>
           ) : rates.length === 0 ? (
             <div style={{ textAlign: 'center', padding: '20px', color: '#6B7280' }}>
-              No rates available. Try adjusting the weight.
+              No rates available. Try adjusting the parcel settings.
             </div>
           ) : (
             rates.map((rate) => (
               <div
                 key={rate.id}
-                style={rateRowStyle(selectedRate?.id === rate.id)}
+                style={{
+                  ...rateRowStyle(selectedRate?.id === rate.id),
+                  position: 'relative',
+                }}
                 onClick={() => setSelectedRate(rate)}
               >
+                {rate.recommended && (
+                  <div
+                    style={{
+                      position: 'absolute',
+                      top: '-8px',
+                      right: '12px',
+                      backgroundColor: '#059669',
+                      color: '#fff',
+                      fontSize: '10px',
+                      fontWeight: 600,
+                      padding: '2px 8px',
+                      borderRadius: '10px',
+                      textTransform: 'uppercase',
+                    }}
+                  >
+                    Recommended
+                  </div>
+                )}
                 <div>
                   <div style={{ fontWeight: 500, color: '#111827' }}>
                     {rate.carrier} - {rate.service}
@@ -311,7 +514,7 @@ export default function RatesModal({
                   style={{
                     fontSize: '18px',
                     fontWeight: 600,
-                    color: '#2563EB',
+                    color: rate.recommended ? '#059669' : '#2563EB',
                   }}
                 >
                   {formatCurrency(rate.rate)}
@@ -320,6 +523,26 @@ export default function RatesModal({
             ))
           )}
         </div>
+
+        {/* Dirty state warning */}
+        {parcelDirty && (
+          <div
+            style={{
+              padding: '10px 12px',
+              backgroundColor: '#FEF3C7',
+              color: '#92400E',
+              borderRadius: '4px',
+              marginBottom: '12px',
+              fontSize: '13px',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+            }}
+          >
+            <span style={{ fontWeight: 500 }}>Parcel settings changed</span>
+            <span style={{ color: '#B45309' }}>— click "Refresh Rates" before purchasing</span>
+          </div>
+        )}
 
         {/* Actions */}
         <div
@@ -334,13 +557,102 @@ export default function RatesModal({
             Cancel
           </button>
           <button
-            style={buttonStyle(true, !selectedRate || purchasing)}
-            onClick={purchaseLabel}
-            disabled={!selectedRate || purchasing}
+            style={buttonStyle(true, !selectedRate || purchasing || parcelDirty)}
+            onClick={handleBuyClick}
+            disabled={!selectedRate || purchasing || parcelDirty}
+            title={parcelDirty ? 'Refresh rates after changing parcel settings' : ''}
           >
-            {purchasing ? 'Purchasing...' : 'Buy Label'}
+            Buy Label
           </button>
         </div>
+
+        {/* Confirmation Dialog */}
+        {showConfirm && selectedRate && (
+          <div
+            style={{
+              position: 'absolute',
+              top: 0,
+              left: 0,
+              right: 0,
+              bottom: 0,
+              backgroundColor: 'rgba(0, 0, 0, 0.6)',
+              display: 'flex',
+              justifyContent: 'center',
+              alignItems: 'center',
+              borderRadius: '8px',
+            }}
+            onClick={handleConfirmCancel}
+          >
+            <div
+              style={{
+                backgroundColor: '#fff',
+                padding: '24px',
+                borderRadius: '8px',
+                maxWidth: '400px',
+                width: '90%',
+                boxShadow: '0 4px 20px rgba(0,0,0,0.2)',
+              }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <h3 style={{ margin: '0 0 16px 0', fontSize: '16px', color: '#111827' }}>
+                Confirm Label Purchase
+              </h3>
+              <div
+                style={{
+                  backgroundColor: '#F9FAFB',
+                  padding: '16px',
+                  borderRadius: '6px',
+                  marginBottom: '16px',
+                  fontSize: '14px',
+                }}
+              >
+                <div style={{ marginBottom: '8px' }}>
+                  <span style={{ color: '#6B7280' }}>Carrier:</span>{' '}
+                  <strong>{selectedRate.carrier}</strong>
+                </div>
+                <div style={{ marginBottom: '8px' }}>
+                  <span style={{ color: '#6B7280' }}>Service:</span>{' '}
+                  <strong>{selectedRate.service}</strong>
+                </div>
+                <div style={{ marginBottom: '8px' }}>
+                  <span style={{ color: '#6B7280' }}>Cost:</span>{' '}
+                  <strong style={{ color: '#2563EB', fontSize: '16px' }}>
+                    {formatCurrency(selectedRate.rate)}
+                  </strong>
+                </div>
+                {ratesData?.insuredValueCents > 0 && (
+                  <div>
+                    <span style={{ color: '#6B7280' }}>Insurance:</span>{' '}
+                    <strong style={{ color: '#059669' }}>
+                      ${(ratesData.insuredValueCents / 100).toFixed(2)}
+                    </strong>
+                  </div>
+                )}
+              </div>
+              <p style={{ fontSize: '13px', color: '#6B7280', marginBottom: '16px' }}>
+                This will charge your EasyPost account. This action cannot be undone.
+              </p>
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
+                <button
+                  style={buttonStyle(false, false)}
+                  onClick={handleConfirmCancel}
+                >
+                  Back
+                </button>
+                <button
+                  style={{
+                    ...buttonStyle(true, purchasing),
+                    backgroundColor: purchasing ? '#9CA3AF' : '#059669',
+                  }}
+                  onClick={purchaseLabel}
+                  disabled={purchasing}
+                >
+                  {purchasing ? 'Purchasing...' : 'Confirm Purchase'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

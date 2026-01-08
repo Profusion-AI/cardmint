@@ -53,11 +53,12 @@ export default function MarketplaceShipmentActions({
     setLoading(true);
     try {
       const response = await fetch(
-        `/admin/api/fulfillment/marketplace/shipments/${shipment.id}/status`,
+        `/api/admin/api/fulfillment/marketplace/shipments/${shipment.id}/status`,
         {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ status: newStatus, notes }),
+          credentials: 'include',
         }
       );
 
@@ -105,22 +106,43 @@ export default function MarketplaceShipmentActions({
         </span>
       )}
 
-      {/* Label Purchased: Show "Download Label" + "Mark Shipped" */}
+      {/* Label Purchased: Show "Print Label (PDF)" + "Mark Shipped" */}
       {status === 'label_purchased' && (
         <>
-          {shipment.labelUrl && (
-            <a
-              href={shipment.labelUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              style={{
-                ...buttonStyle('default'),
-                textDecoration: 'none',
-                display: 'inline-block',
-              }}
-            >
-              Download Label
-            </a>
+          {shipment.id && (
+            <>
+              {/* Primary: Print-ready PDF - works with Fedora's native viewer */}
+              <a
+                href={`/api/admin/api/fulfillment/marketplace/shipments/${shipment.id}/label/optimized?format=pdf`}
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{
+                  ...buttonStyle('primary'),
+                  textDecoration: 'none',
+                  display: 'inline-block',
+                }}
+                title="Print-ready 4x6 PDF for PL-60 thermal printer (prints correctly from any viewer)"
+              >
+                Print Label
+              </a>
+              {/* Secondary: PNG for GIMP editing workflow */}
+              <a
+                href={`/api/admin/api/fulfillment/marketplace/shipments/${shipment.id}/label/optimized`}
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{
+                  ...buttonStyle('default'),
+                  textDecoration: 'none',
+                  display: 'inline-block',
+                  fontSize: '10px',
+                  padding: '4px 8px',
+                  opacity: 0.8,
+                }}
+                title="PNG for GIMP editing (812x1218 @ 203 DPI)"
+              >
+                PNG
+              </a>
+            </>
           )}
           <button
             style={buttonStyle('success')}

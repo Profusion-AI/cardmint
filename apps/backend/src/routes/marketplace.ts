@@ -30,11 +30,14 @@ import type { AppContext } from "../app/context.js";
 import { MarketplaceService } from "../services/marketplace/marketplaceService.js";
 import { TcgplayerImporter } from "../services/marketplace/tcgplayerImporter.js";
 import { EasypostTrackingLinker } from "../services/marketplace/easypostTrackingLinker.js";
+import { PullSheetImporter } from "../services/marketplace/pullSheetImporter.js";
 import { EasyPostService, type EasyPostAddress, type EasyPostParcel } from "../services/easyPostService.js";
 import { detectCsvFormat, extractHeadersFromCsv, getFormatDisplayName } from "../services/marketplace/csvFormatDetector.js";
 import { runtimeConfig } from "../config.js";
 import { requireAdminAuth } from "../middleware/adminAuth.js";
 import { PrintQueueRepository } from "../repositories/printQueueRepository.js";
+import { processLabelForPL60, getCachedLabel } from "../services/labelProcessingService.js";
+import { formatTcgplayerOrderNumber } from "../utils/orderNumberFormat.js";
 
 // Max CSV size (10MB)
 const MAX_CSV_SIZE = 10 * 1024 * 1024;
@@ -103,6 +106,7 @@ export function registerMarketplaceRoutes(app: Express, ctx: AppContext): void {
   const marketplaceService = new MarketplaceService(db, logger);
   const tcgplayerImporter = new TcgplayerImporter(marketplaceService, logger);
   const easypostTrackingLinker = new EasypostTrackingLinker(marketplaceService, logger);
+  const pullSheetImporter = new PullSheetImporter(marketplaceService, logger);
   const easyPostService = new EasyPostService(logger);
   const printQueueRepo = new PrintQueueRepository(db, logger);
 
@@ -362,6 +366,12 @@ export function registerMarketplaceRoutes(app: Express, ctx: AppContext): void {
           if (!dryRun && (result.imported > 0 || marketplaceService.hasUnmatchedTracking())) {
             reMatchResult = marketplaceService.reMatchUnmatchedTracking();
           }
+          break;
+
+        case "tcgplayer_pullsheet":
+          result = await pullSheetImporter.import(csvData, operatorId, fileName || null, dryRun);
+          // No re-match needed: Pull Sheet imports items, not orders
+          // Items will be attached to existing orders during import
           break;
 
         case "easypost_tracking":
@@ -784,21 +794,63 @@ export function registerMarketplaceRoutes(app: Express, ctx: AppContext): void {
    * POST /api/cm-admin/marketplace/shipments/:id/rates
    * Get EasyPost rates for a shipment.
    *
-   * Body: { customWeightOz?: number }
-   * Returns: { ok, shipmentId, easypostShipmentId, parcelPreset, parcelWeightOz, insuredValueCents, rates }
+   * Body: {
+   *   customWeightOz?: number,    // Override preset weight
+   *   parcelPreset?: string,      // Override auto-selected preset ("singlecard" | "multicard-bubble" | "multicard-box")
+   *   parcelLength?: number,      // Override preset length (inches)
+   *   parcelWidth?: number,       // Override preset width (inches)
+   *   parcelHeight?: number,      // Override preset height (inches)
+   * }
+   * Returns: { ok, shipmentId, easypostShipmentId, parcelPreset, parcelLength, parcelWidth, parcelHeight, parcelWeightOz, insuredValueCents, rates }
    */
   router.post("/shipments/:id/rates", async (req: Request, res: Response) => {
     const { operatorId, clientIp, userAgent } = (req as any).auditContext as AuditContext;
     const shipmentId = parseInt(req.params.id, 10);
-    const { customWeightOz } = req.body;
+    const { customWeightOz, parcelPreset: requestedPreset, parcelLength, parcelWidth, parcelHeight } = req.body;
 
     logger.info(
-      { operatorId, clientIp, userAgent, action: "get.rates", shipmentId, customWeightOz },
+      { operatorId, clientIp, userAgent, action: "get.rates", shipmentId, customWeightOz, requestedPreset, parcelLength, parcelWidth, parcelHeight },
       "marketplace.shipment.rates.start"
     );
 
     if (isNaN(shipmentId)) {
       return res.status(400).json({ error: "Invalid shipment ID" });
+    }
+
+    // Validate parcel preset if provided
+    const validPresets = Object.keys(runtimeConfig.parcelPresets);
+    if (requestedPreset && !validPresets.includes(requestedPreset)) {
+      return res.status(400).json({
+        error: "INVALID_PRESET",
+        message: `Invalid parcel preset '${requestedPreset}'. Valid presets: ${validPresets.join(", ")}`,
+      });
+    }
+
+    // Validate dimension bounds if provided (0.1" - 36")
+    const validateDimension = (val: number | undefined, name: string): string | null => {
+      if (val === undefined || val === null) return null;
+      if (typeof val !== "number" || isNaN(val)) return `${name} must be a number`;
+      if (val < 0.1 || val > 36) return `${name} must be between 0.1 and 36 inches`;
+      return null;
+    };
+    const lengthErr = validateDimension(parcelLength, "parcelLength");
+    const widthErr = validateDimension(parcelWidth, "parcelWidth");
+    const heightErr = validateDimension(parcelHeight, "parcelHeight");
+    if (lengthErr || widthErr || heightErr) {
+      return res.status(400).json({
+        error: "INVALID_DIMENSIONS",
+        message: lengthErr || widthErr || heightErr,
+      });
+    }
+
+    // Validate weight bounds if provided (0.1 - 1120 oz = 70 lbs)
+    if (customWeightOz !== undefined && customWeightOz !== null) {
+      if (typeof customWeightOz !== "number" || isNaN(customWeightOz)) {
+        return res.status(400).json({ error: "INVALID_WEIGHT", message: "customWeightOz must be a number" });
+      }
+      if (customWeightOz < 0.1 || customWeightOz > 1120) {
+        return res.status(400).json({ error: "INVALID_WEIGHT", message: "customWeightOz must be between 0.1 and 1120 oz" });
+      }
     }
 
     // 1. Get shipment with decrypted address and order
@@ -841,15 +893,29 @@ export function registerMarketplaceRoutes(app: Express, ctx: AppContext): void {
     // 4. Determine item count (per-shipment or fallback to order)
     const itemCount = marketplaceService.getShipmentItemCount(shipmentData, shipmentData.order);
 
-    // 5. Select parcel preset based on item count
-    const { key: parcelPresetKey, preset } = selectParcelPreset(itemCount);
+    // 5. Select parcel preset: use requestedPreset if provided, else auto-select by item count
+    let parcelPresetKey: string;
+    let preset: ParcelPreset;
+    if (requestedPreset) {
+      parcelPresetKey = requestedPreset;
+      preset = runtimeConfig.parcelPresets[requestedPreset as keyof typeof runtimeConfig.parcelPresets] as ParcelPreset;
+    } else {
+      const autoSelected = selectParcelPreset(itemCount);
+      parcelPresetKey = autoSelected.key;
+      preset = autoSelected.preset;
+    }
 
-    // 6. Calculate weight: use customWeightOz if provided, else preset base weight
+    // 6. Calculate dimensions: use custom if provided, else preset defaults
+    const finalLength = parcelLength ?? preset.lengthIn;
+    const finalWidth = parcelWidth ?? preset.widthIn;
+    const finalHeight = parcelHeight ?? preset.heightIn;
+
+    // 7. Calculate weight: use customWeightOz if provided, else preset base weight
     const parcelWeightOz = customWeightOz != null && customWeightOz > 0
       ? customWeightOz
       : preset.baseWeightOz;
 
-    // 7. Determine insurance: if order value >= $50, add coverage
+    // 8. Determine insurance: if order value >= $50, add coverage
     const orderValueCents = shipmentData.order.product_value_cents;
     const insuranceThresholdCents = 5000; // $50
     const maxInsuranceCents = 10000; // Cap at $100 coverage
@@ -858,15 +924,15 @@ export function registerMarketplaceRoutes(app: Express, ctx: AppContext): void {
       : null;
     const insuranceAmountDollars = insuredValueCents ? insuredValueCents / 100 : 0;
 
-    // 8. Build parcel object
+    // 9. Build parcel object with final dimensions
     const parcel: EasyPostParcel = {
-      length: preset.lengthIn,
-      width: preset.widthIn,
-      height: preset.heightIn,
+      length: finalLength,
+      width: finalWidth,
+      height: finalHeight,
       weight: parcelWeightOz,
     };
 
-    // 9. Build address object for EasyPost
+    // 10. Build address object for EasyPost
     const toAddress: EasyPostAddress = {
       name: shipmentData.decryptedAddress.name,
       street1: shipmentData.decryptedAddress.street1,
@@ -877,15 +943,38 @@ export function registerMarketplaceRoutes(app: Express, ctx: AppContext): void {
       country: shipmentData.decryptedAddress.country || "US",
     };
 
-    // 10. Check idempotency: if easypost_shipment_id exists and weight unchanged, return cached rates
-    // (For simplicity, we always create new shipment if customWeightOz differs from stored)
+    // 11. Check idempotency: if easypost_shipment_id exists and parcel params unchanged, return cached rates
+    // Create new shipment if any parcel override is provided (preset, dimensions, or weight)
     let easypostShipmentId = shipmentData.easypost_shipment_id;
     let rates;
 
+    const parcelOverrideProvided = requestedPreset || parcelLength || parcelWidth || parcelHeight || customWeightOz;
     const weightChanged = shipmentData.parcel_weight_oz != null &&
       Math.abs(shipmentData.parcel_weight_oz - parcelWeightOz) > 0.01;
 
-    if (easypostShipmentId && !weightChanged) {
+    // Helper to add recommended flag to rates (USPS Ground Advantage first, else cheapest USPS, else cheapest UPS)
+    const addRecommendedFlag = (rateList: Array<{ id: string; carrier: string; service: string; rate: string; deliveryDays?: number; deliveryDate?: string }>) => {
+      if (!rateList.length) return rateList;
+
+      // Find recommended rate: cheapest USPS Ground Advantage, else cheapest USPS, else cheapest UPS
+      let recommendedId: string | null = null;
+      // EasyPost returns "GroundAdvantage" (no space)
+      const uspsGroundAdvantage = rateList.filter(r => r.carrier === "USPS" && r.service.includes("GroundAdvantage"));
+      const uspsRates = rateList.filter(r => r.carrier === "USPS");
+      const upsRates = rateList.filter(r => r.carrier === "UPS");
+
+      if (uspsGroundAdvantage.length > 0) {
+        recommendedId = uspsGroundAdvantage.reduce((min, r) => parseFloat(r.rate) < parseFloat(min.rate) ? r : min).id;
+      } else if (uspsRates.length > 0) {
+        recommendedId = uspsRates.reduce((min, r) => parseFloat(r.rate) < parseFloat(min.rate) ? r : min).id;
+      } else if (upsRates.length > 0) {
+        recommendedId = upsRates.reduce((min, r) => parseFloat(r.rate) < parseFloat(min.rate) ? r : min).id;
+      }
+
+      return rateList.map(r => ({ ...r, recommended: r.id === recommendedId }));
+    };
+
+    if (easypostShipmentId && !weightChanged && !parcelOverrideProvided) {
       // Fetch existing shipment rates from EasyPost
       const existingShipment = await easyPostService.getShipment(easypostShipmentId);
       if (existingShipment && existingShipment.rates) {
@@ -902,30 +991,47 @@ export function registerMarketplaceRoutes(app: Express, ctx: AppContext): void {
           "marketplace.shipment.rates.cached"
         );
 
+        const mappedRates = rates.map((r) => ({
+          id: r.id,
+          carrier: r.carrier,
+          service: r.service,
+          rate: r.rate,
+          deliveryDays: (r.delivery_days ?? r.est_delivery_days) || undefined,
+          deliveryDate: r.delivery_date || undefined,
+        }));
+
         return res.json({
           ok: true,
           shipmentId,
           easypostShipmentId,
           parcelPreset: parcelPresetKey,
+          parcelLength: finalLength,
+          parcelWidth: finalWidth,
+          parcelHeight: finalHeight,
           parcelWeightOz,
           insuredValueCents,
-          rates: rates.map((r) => ({
-            id: r.id,
-            carrier: r.carrier,
-            service: r.service,
-            rate: r.rate,
-            deliveryDays: r.delivery_days ?? r.est_delivery_days,
-            deliveryDate: r.delivery_date,
-          })),
+          rates: addRecommendedFlag(mappedRates),
         });
       }
     }
 
-    // 11. Create new EasyPost shipment
+    // 12. Create new EasyPost shipment with order context for label custom fields
+    const orderNumber = formatTcgplayerOrderNumber(shipmentData.order.external_order_id);
+    const orderItems = marketplaceService.getItemsByOrderId(shipmentData.order.id);
+    const firstItemDescription = orderItems.length > 0
+      ? (orderItems.length > 1 ? `${orderItems[0].product_name} (+${orderItems.length - 1} more)` : orderItems[0].product_name)
+      : undefined;
+
     const result = await easyPostService.createMarketplaceShipment(
       toAddress,
       parcel,
-      insuranceAmountDollars
+      insuranceAmountDollars,
+      {
+        orderNumber,
+        productDescription: firstItemDescription,
+        invoiceNumber: orderNumber,
+        reference: `Shipment ${shipmentId}`,
+      }
     );
 
     if (!result.success || !result.shipment) {
@@ -942,7 +1048,7 @@ export function registerMarketplaceRoutes(app: Express, ctx: AppContext): void {
     easypostShipmentId = result.shipment.id;
     rates = result.rates || [];
 
-    // 12. Store audit fields on shipment
+    // 13. Store audit fields on shipment
     marketplaceService.updateShipmentEasypostShipment(
       shipmentId,
       easypostShipmentId,
@@ -958,6 +1064,9 @@ export function registerMarketplaceRoutes(app: Express, ctx: AppContext): void {
         shipmentId,
         easypostShipmentId,
         parcelPreset: parcelPresetKey,
+        parcelLength: finalLength,
+        parcelWidth: finalWidth,
+        parcelHeight: finalHeight,
         parcelWeightOz,
         insuredValueCents,
         ratesCount: rates.length,
@@ -965,21 +1074,26 @@ export function registerMarketplaceRoutes(app: Express, ctx: AppContext): void {
       "marketplace.shipment.rates.complete"
     );
 
+    const mappedRates = rates.map((r) => ({
+      id: r.id,
+      carrier: r.carrier,
+      service: r.service,
+      rate: r.rate,
+      deliveryDays: (r.delivery_days ?? r.est_delivery_days) || undefined,
+      deliveryDate: r.delivery_date || undefined,
+    }));
+
     res.json({
       ok: true,
       shipmentId,
       easypostShipmentId,
       parcelPreset: parcelPresetKey,
+      parcelLength: finalLength,
+      parcelWidth: finalWidth,
+      parcelHeight: finalHeight,
       parcelWeightOz,
       insuredValueCents,
-      rates: rates.map((r) => ({
-        id: r.id,
-        carrier: r.carrier,
-        service: r.service,
-        rate: r.rate,
-        deliveryDays: r.delivery_days ?? r.est_delivery_days,
-        deliveryDate: r.delivery_date,
-      })),
+      rates: addRecommendedFlag(mappedRates),
     });
   });
 
@@ -1084,9 +1198,15 @@ export function registerMarketplaceRoutes(app: Express, ctx: AppContext): void {
     // 4. Lock acquired - proceed with EasyPost call
     // Use try/finally to ensure lock is always released
     try {
+      // Per EasyPost API spec, insurance must be passed at buy time (not creation)
+      const insuranceAmountDollars = shipment.insured_value_cents
+        ? shipment.insured_value_cents / 100
+        : undefined;
+
       const labelResult = await easyPostService.purchaseMarketplaceLabel(
         shipment.easypost_shipment_id!,
-        rateId
+        rateId,
+        insuranceAmountDollars
       );
 
       if (!labelResult.success) {
@@ -1182,6 +1302,98 @@ export function registerMarketplaceRoutes(app: Express, ctx: AppContext): void {
     } finally {
       // 9. Always release lock
       marketplaceService.releaseLabelPurchaseLock(shipmentId);
+    }
+  });
+
+  /**
+   * GET /api/cm-admin/marketplace/shipments/:id/label/optimized
+   * Get a PL-60 optimized label for thermal printing.
+   *
+   * Returns optimized label (812x1218, grayscale) for 4x6 thermal labels at 203 DPI.
+   * Caches the result for fast subsequent access.
+   *
+   * Query params:
+   * - format: "png" (default), "pdf" (print-ready), or "info" (returns metadata)
+   *
+   * PDF format creates a 4x6 inch PDF with the label embedded, which prints correctly
+   * from native viewers (Fedora's image viewer ignores PNG DPI metadata).
+   */
+  router.get("/shipments/:id/label/optimized", async (req: Request, res: Response) => {
+    const { operatorId } = (req as any).auditContext as AuditContext;
+    const shipmentId = parseInt(req.params.id, 10);
+    const format = req.query.format as string || "png";
+
+    if (isNaN(shipmentId) || shipmentId <= 0) {
+      return res.status(400).json({ error: "BAD_REQUEST", message: "Invalid shipment ID" });
+    }
+
+    // Validate format parameter
+    if (!["png", "pdf", "info"].includes(format)) {
+      return res.status(400).json({
+        error: "BAD_REQUEST",
+        message: "Invalid format. Use 'png', 'pdf', or 'info'",
+      });
+    }
+
+    try {
+      // 1. Get shipment to find label URL
+      const shipment = marketplaceService.getShipmentById(shipmentId);
+      if (!shipment) {
+        return res.status(404).json({ error: "NOT_FOUND", message: "Shipment not found" });
+      }
+
+      if (!shipment.label_url) {
+        return res.status(400).json({
+          error: "NO_LABEL",
+          message: "No label has been purchased for this shipment yet",
+        });
+      }
+
+      // 2. If info requested, return metadata
+      if (format === "info") {
+        const cached = await getCachedLabel(shipmentId, "marketplace");
+        return res.json({
+          ok: true,
+          shipmentId,
+          hasLabel: true,
+          originalUrl: shipment.label_url,
+          optimizedCached: cached !== null,
+          targetWidth: 812,
+          targetHeight: 1218,
+          targetDpi: 203,
+          supportedFormats: ["png", "pdf"],
+        });
+      }
+
+      // 3. Process and return optimized label (PNG or PDF)
+      const outputFormat = format as "png" | "pdf";
+      const processed = await processLabelForPL60(shipment.label_url, shipmentId, "marketplace", outputFormat);
+
+      logger.info(
+        { operatorId, shipmentId, format: outputFormat, size: processed.optimizedBuffer.length },
+        "marketplace.shipment.label.optimized"
+      );
+
+      if (outputFormat === "pdf") {
+        res.setHeader("Content-Type", "application/pdf");
+        res.setHeader("Content-Disposition", `inline; filename="label_${shipmentId}_pl60.pdf"`);
+      } else {
+        res.setHeader("Content-Type", "image/png");
+        res.setHeader("Content-Disposition", `inline; filename="label_${shipmentId}_pl60.png"`);
+      }
+      res.setHeader("Content-Length", processed.optimizedBuffer.length);
+      res.setHeader("Cache-Control", "private, max-age=3600"); // Cache for 1 hour
+      res.send(processed.optimizedBuffer);
+    } catch (err) {
+      const error = err as Error;
+      logger.error(
+        { err: error.message, operatorId, shipmentId, format },
+        "marketplace.shipment.label.optimized.error"
+      );
+      res.status(500).json({
+        error: "LABEL_PROCESSING_FAILED",
+        message: error.message,
+      });
     }
   });
 

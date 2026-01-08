@@ -18,6 +18,7 @@ export default function UnifiedGrid({
   offset = 0,
   onPageChange,
   onRefresh,
+  onOrderClick,
 }) {
   const [ratesModalOpen, setRatesModalOpen] = useState(false);
   const [selectedShipment, setSelectedShipment] = useState(null);
@@ -184,9 +185,29 @@ export default function UnifiedGrid({
     return `$${(cents / 100).toFixed(2)}`;
   };
 
+  const formatTotalCurrency = (productCents, shippingCents) => {
+    if (productCents == null || shippingCents == null) return '—';
+    return formatCurrency(productCents + shippingCents);
+  };
+
   const formatDate = (timestamp) => {
     if (!timestamp) return '—';
     return new Date(timestamp * 1000).toLocaleDateString();
+  };
+
+  const getOrderDetailsUrl = (f) => {
+    if (!f) return null;
+
+    if (f.source === 'cardmint') {
+      const sessionId = f.sourceRef?.stripeSessionId;
+      if (!sessionId) return null;
+      return `/admin/fulfillment/orders/cardmint/${encodeURIComponent(sessionId)}`;
+    }
+
+    // Marketplace drill-in is order-based (not shipment-based)
+    const orderId = f.sourceRef?.marketplaceOrderId;
+    if (!orderId) return null;
+    return `/admin/fulfillment/orders/marketplace/${orderId}`;
   };
 
   const totalPages = Math.ceil(total / limit);
@@ -220,14 +241,14 @@ export default function UnifiedGrid({
       <table style={tableStyle}>
         <thead>
           <tr>
-            <th style={thStyle}>Source</th>
             <th style={thStyle}>Order #</th>
-            <th style={thStyle}>Customer</th>
-            <th style={thStyle}>Items</th>
-            <th style={thStyle}>Value</th>
+            <th style={thStyle}>Buyer Name</th>
+            <th style={thStyle}>Order Date</th>
             <th style={thStyle}>Status</th>
-            <th style={thStyle}>Tracking</th>
-            <th style={thStyle}>Created</th>
+            <th style={thStyle}>Shipping Type</th>
+            <th style={thStyle}>Product Amt</th>
+            <th style={thStyle}>Shipping Amt</th>
+            <th style={thStyle}>Total Amt</th>
             {hasMarketplaceShipments && <th style={thStyle}>Actions</th>}
           </tr>
         </thead>
@@ -235,33 +256,57 @@ export default function UnifiedGrid({
           {fulfillments.map((f) => (
             <tr key={f.id}>
               <td style={tdStyle}>
-                <span style={sourceTagStyle(f.source)}>{f.source}</span>
-                {f.isExternal && (
-                  <span style={{
-                    display: 'inline-block',
-                    marginLeft: '6px',
-                    padding: '2px 6px',
-                    borderRadius: '4px',
-                    fontSize: '10px',
-                    fontWeight: 600,
-                    backgroundColor: '#FFF3E0',
-                    color: '#E65100',
-                    border: '1px solid #FFB74D',
-                  }}>
-                    EXTERNAL
-                  </span>
-                )}
-              </td>
-              <td style={tdStyle}>
-                {f.orderNumber?.startsWith('Session:') ? (
-                  <div>
-                    <span style={{ color: '#6B7280', fontSize: '11px' }}>Stripe checkout</span>
-                    <br />
-                    <strong style={{ fontFamily: 'monospace', fontSize: '12px' }}>{f.orderNumber.replace('Session: ', '#')}</strong>
-                  </div>
-                ) : (
-                  <strong>{f.orderNumber || '—'}</strong>
-                )}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <span style={sourceTagStyle(f.source)}>{f.source}</span>
+                  {f.isExternal && (
+                    <span style={{
+                      display: 'inline-block',
+                      padding: '2px 6px',
+                      borderRadius: '4px',
+                      fontSize: '10px',
+                      fontWeight: 600,
+                      backgroundColor: '#FFF3E0',
+                      color: '#E65100',
+                      border: '1px solid #FFB74D',
+                    }}>
+                      EXTERNAL
+                    </span>
+                  )}
+                </div>
+                <div style={{ marginTop: '4px' }}>
+                  {(() => {
+                    const detailsUrl = getOrderDetailsUrl(f);
+                    const linkStyle = { color: '#1565C0', textDecoration: 'none', fontWeight: 600 };
+
+                    if (f.orderNumber?.startsWith('Session:')) {
+                      const display = f.orderNumber.replace('Session: ', '#');
+                      return detailsUrl ? (
+                        <a
+                          href={detailsUrl}
+                          onClick={() => onOrderClick?.()}
+                          style={{ ...linkStyle, fontFamily: 'monospace', fontSize: '12px' }}
+                        >
+                          {display}
+                        </a>
+                      ) : (
+                        <strong style={{ fontFamily: 'monospace', fontSize: '12px' }}>{display}</strong>
+                      );
+                    }
+
+                    const display = f.orderNumber || '—';
+                    return detailsUrl ? (
+                      <a
+                        href={detailsUrl}
+                        onClick={() => onOrderClick?.()}
+                        style={linkStyle}
+                      >
+                        {display}
+                      </a>
+                    ) : (
+                      <strong>{display}</strong>
+                    );
+                  })()}
+                </div>
               </td>
               <td style={tdStyle}>
                 {f.customerName ? (
@@ -272,12 +317,7 @@ export default function UnifiedGrid({
                       <span style={{ color: '#C62828', fontSize: '11px' }}>{customerData[f.id].error}</span>
                     ) : (
                       <div style={{ fontSize: '12px', lineHeight: '1.4' }}>
-                        <div style={{ fontWeight: 500 }}>{customerData[f.id].customerName}</div>
-                        {customerData[f.id].address && (
-                          <div style={{ color: '#6B7280', fontSize: '11px' }}>
-                            {customerData[f.id].address.city}, {customerData[f.id].address.state} {customerData[f.id].address.postalCode}
-                          </div>
-                        )}
+                        <div style={{ fontWeight: 500 }}>{customerData[f.id].customerName || '—'}</div>
                       </div>
                     )
                   ) : (
@@ -301,8 +341,7 @@ export default function UnifiedGrid({
                   <span style={{ color: '#9CA3AF', fontStyle: 'italic' }}>PII Protected</span>
                 )}
               </td>
-              <td style={tdStyle}>{f.itemCount}</td>
-              <td style={tdStyle}>{formatCurrency(f.valueCents)}</td>
+              <td style={tdStyle}>{formatDate(f.timeline?.createdAt)}</td>
               <td style={tdStyle}>
                 {f.isExternal ? (
                   <span style={statusTagStyle(f.status, true)}>External</span>
@@ -321,20 +360,11 @@ export default function UnifiedGrid({
                 )}
               </td>
               <td style={tdStyle}>
-                {f.shipping?.trackingNumber ? (
-                  <a
-                    href={f.shipping.trackingUrl || '#'}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    style={{ color: '#1565C0', textDecoration: 'none' }}
-                  >
-                    {f.shipping.trackingNumber}
-                  </a>
-                ) : (
-                  <span style={{ color: '#9CA3AF' }}>—</span>
-                )}
+                {f.shippingMethod || <span style={{ color: '#9CA3AF' }}>—</span>}
               </td>
-              <td style={tdStyle}>{formatDate(f.timeline?.createdAt)}</td>
+              <td style={tdStyle}>{formatCurrency(f.valueCents)}</td>
+              <td style={tdStyle}>{formatCurrency(f.shippingCostCents)}</td>
+              <td style={tdStyle}>{formatTotalCurrency(f.valueCents, f.shippingCostCents)}</td>
               {hasMarketplaceShipments && (
                 <td style={tdStyle}>
                   {(f.source === 'tcgplayer' || f.source === 'ebay') && f.sourceRef?.shipmentId ? (

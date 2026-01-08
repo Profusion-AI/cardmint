@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import UnifiedGrid from '../../../components/UnifiedGrid.js';
 import ImportModal from '../../../components/ImportModal.js';
 import UnmatchedTrackingPanel from '../../../components/UnmatchedTrackingPanel.js';
@@ -18,17 +18,48 @@ import PrintQueuePanel from '../../../components/PrintQueuePanel.js';
  * - CSV import modals
  * - Unmatched tracking resolution
  */
+const DASHBOARD_STATE_KEY = 'cardmint.fulfillment.dashboard.state.v1';
+const DASHBOARD_STATE_TTL_MS = 30 * 60 * 1000; // 30 minutes
+
+function readDashboardState() {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = window.sessionStorage.getItem(DASHBOARD_STATE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return null;
+    if (typeof parsed.savedAt !== 'number') return null;
+    if (Date.now() - parsed.savedAt > DASHBOARD_STATE_TTL_MS) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function writeDashboardState(state) {
+  if (typeof window === 'undefined') return;
+  try {
+    window.sessionStorage.setItem(DASHBOARD_STATE_KEY, JSON.stringify(state));
+  } catch {
+    // ignore
+  }
+}
+
 export default function FulfillmentDashboard() {
+  const savedState = readDashboardState();
+  const savedScrollYRef = useRef(typeof savedState?.scrollY === 'number' ? savedState.scrollY : null);
+  const didRestoreScrollRef = useRef(false);
+
   // State
-  const [activeSource, setActiveSource] = useState('all');
-  const [statusFilter, setStatusFilter] = useState('');
+  const [activeSource, setActiveSource] = useState(savedState?.activeSource || 'all');
+  const [statusFilter, setStatusFilter] = useState(savedState?.statusFilter || '');
   const [fulfillments, setFulfillments] = useState([]);
   const [counts, setCounts] = useState({ cardmint: 0, marketplace: 0 });
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [showImportModal, setShowImportModal] = useState(false);
-  const [pagination, setPagination] = useState({ limit: 20, offset: 0 });
+  const [pagination, setPagination] = useState(savedState?.pagination || { limit: 20, offset: 0 });
   const [toast, setToast] = useState({ show: false, message: '', fading: false });
   const [stats, setStats] = useState({ pendingLabels: 0, unmatchedTracking: 0, exceptions: 0, shippedToday: 0 });
   const [isRematching, setIsRematching] = useState(false);
@@ -94,6 +125,36 @@ export default function FulfillmentDashboard() {
   useEffect(() => {
     fetchFulfillments();
   }, [fetchFulfillments]);
+
+  // Restore scroll position once after returning from order details.
+  useEffect(() => {
+    if (loading) return;
+    if (didRestoreScrollRef.current) return;
+    if (savedScrollYRef.current == null) return;
+
+    const y = savedScrollYRef.current;
+    savedScrollYRef.current = null;
+    didRestoreScrollRef.current = true;
+
+    // Allow layout to settle before scrolling.
+    setTimeout(() => {
+      try {
+        window.scrollTo(0, y);
+      } catch {
+        // ignore
+      }
+    }, 0);
+  }, [loading]);
+
+  const saveDashboardState = useCallback(() => {
+    writeDashboardState({
+      activeSource,
+      statusFilter,
+      pagination,
+      scrollY: typeof window !== 'undefined' ? window.scrollY : 0,
+      savedAt: Date.now(),
+    });
+  }, [activeSource, statusFilter, pagination]);
 
   // Handlers
   const handleSourceChange = (source) => {
@@ -422,6 +483,8 @@ export default function FulfillmentDashboard() {
         limit={pagination.limit}
         offset={pagination.offset}
         onPageChange={handlePageChange}
+        onRefresh={fetchFulfillments}
+        onOrderClick={saveDashboardState}
       />
 
       {/* Import Modal (unified - auto-detects format) */}

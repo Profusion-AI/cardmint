@@ -14,6 +14,7 @@ import { PrintQueueRepository } from "../repositories/printQueueRepository.js";
 import { MarketplaceService } from "../services/marketplace/marketplaceService.js";
 import { runtimeConfig } from "../config.js";
 import type { ShippingMethod } from "../domain/shipping.js";
+import { formatTcgplayerOrderNumber } from "../utils/orderNumberFormat.js";
 
 export function registerPrintQueueRoutes(app: Express, ctx: AppContext): void {
   const { db, logger, stripeService, easyPostService } = ctx;
@@ -182,7 +183,9 @@ export function registerPrintQueueRoutes(app: Express, ctx: AppContext): void {
 
     const marketplaceLookup = db.prepare(`
       SELECT
-        mo.display_order_number as order_number,
+        mo.source as source,
+        mo.external_order_id as external_order_id,
+        mo.display_order_number as display_order_number,
         mo.customer_name as customer_name,
         ms.tracking_number as tracking_number
       FROM marketplace_shipments ms
@@ -203,13 +206,24 @@ export function registerPrintQueueRoutes(app: Express, ctx: AppContext): void {
     const items = result.rows.map((row) => {
       if (row.shipment_type === "marketplace") {
         const mp = marketplaceLookup.get(row.shipment_id) as
-          | { order_number: string; customer_name: string; tracking_number: string | null }
+          | {
+              source: string;
+              external_order_id: string;
+              display_order_number: string;
+              customer_name: string;
+              tracking_number: string | null;
+            }
           | undefined;
+        const orderNumber = mp
+          ? mp.source === "tcgplayer"
+            ? formatTcgplayerOrderNumber(mp.external_order_id)
+            : mp.display_order_number
+          : null;
         return {
           id: row.id,
           shipmentType: row.shipment_type,
           shipmentId: row.shipment_id,
-          orderNumber: mp?.order_number ?? null,
+          orderNumber,
           customerName: mp?.customer_name ?? null,
           trackingNumber: mp?.tracking_number ?? null,
           status: row.status,

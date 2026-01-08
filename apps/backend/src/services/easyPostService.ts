@@ -122,6 +122,21 @@ export interface CreateMarketplaceShipmentResult {
   errorCode?: string;
 }
 
+/**
+ * Options for marketplace shipment creation
+ * These are passed to EasyPost's options object for custom label fields
+ */
+export interface MarketplaceShipmentOptions {
+  /** Order number for print_custom_1 (e.g., "TCGP-2EE565-9698B") */
+  orderNumber?: string;
+  /** Product description for print_custom_2 (e.g., SKU or first item name) */
+  productDescription?: string;
+  /** Invoice number for matching key (defaults to orderNumber) */
+  invoiceNumber?: string;
+  /** Reference field for shipment (optional, used for CSV reconciliation) */
+  reference?: string;
+}
+
 export interface PurchaseLabelResult {
   success: boolean;
   shipment?: EasyPostShipment;
@@ -407,15 +422,18 @@ export class EasyPostService {
    * - Uses CardMint parcel presets (from config.ts) instead of per-card calculation
    * - Returns ALL USPS + UPS rates (operator chooses, not system)
    * - Supports insurance for orders >= $50
+   * - Supports custom label fields (order number, SKU) via EasyPost options
    *
    * @param toAddress - Customer shipping address (decrypted at call time)
    * @param parcel - Parcel dimensions and weight (from preset or custom)
    * @param insuranceAmount - Insurance coverage in dollars (0 for no insurance)
+   * @param labelOptions - Optional custom label fields (order number, SKU, invoice number)
    */
   async createMarketplaceShipment(
     toAddress: EasyPostAddress,
     parcel: EasyPostParcel,
-    insuranceAmount: number = 0
+    insuranceAmount: number = 0,
+    labelOptions?: MarketplaceShipmentOptions
   ): Promise<CreateMarketplaceShipmentResult> {
     if (!this.isConfigured()) {
       const status = this.getConfigStatus();
@@ -427,18 +445,38 @@ export class EasyPostService {
     }
 
     try {
-      // Build shipment options with insurance if needed
-      const shipmentOptions: Record<string, unknown> = {};
-      if (insuranceAmount > 0) {
-        shipmentOptions.insurance = insuranceAmount;
+      // Build EasyPost options object for label customization
+      // See: https://docs.easypost.com/docs/shipments/options
+      const shipmentOptions: Record<string, unknown> = {
+        label_format: "PNG",
+        label_size: "4x6",
+        currency: "USD",
+      };
+
+      // Set invoice_number for CSV reconciliation matching
+      if (labelOptions?.invoiceNumber || labelOptions?.orderNumber) {
+        shipmentOptions.invoice_number = labelOptions.invoiceNumber || labelOptions.orderNumber;
       }
 
+      // USPS custom print fields (appear on physical label)
+      // Truncate to 35 chars (EasyPost limit for custom fields)
+      if (labelOptions?.orderNumber) {
+        shipmentOptions.print_custom_1 = labelOptions.orderNumber.substring(0, 35);
+      }
+      if (labelOptions?.productDescription) {
+        shipmentOptions.print_custom_2 = labelOptions.productDescription.substring(0, 35);
+      }
+
+      // NOTE: Insurance is NOT passed at creation time per EasyPost API.
+      // It's passed at buy time via purchaseMarketplaceLabel().
+      // The insuranceAmount parameter is only used for logging/audit.
       const requestBody: Record<string, unknown> = {
         shipment: {
           to_address: toAddress,
           from_address: this.fromAddress,
           parcel,
-          ...(Object.keys(shipmentOptions).length > 0 && { options: shipmentOptions }),
+          options: shipmentOptions,
+          reference: labelOptions?.reference,
         },
       };
 
@@ -500,12 +538,17 @@ export class EasyPostService {
    * This is a simpler version of purchaseLabel() without method validation.
    * The operator has already chosen the rate, so we just buy it.
    *
+   * Per EasyPost docs: "insurance may be added during the purchase.
+   * To specify an amount to insure, pass the insurance attribute as a string."
+   *
    * @param shipmentId - EasyPost shipment ID
    * @param rateId - EasyPost rate ID chosen by operator
+   * @param insuranceAmountDollars - Optional insurance amount in USD
    */
   async purchaseMarketplaceLabel(
     shipmentId: string,
-    rateId: string
+    rateId: string,
+    insuranceAmountDollars?: number
   ): Promise<PurchaseLabelResult> {
     // Idempotency check: get current shipment status
     const existingShipment = await this.getShipment(shipmentId);
@@ -531,15 +574,23 @@ export class EasyPostService {
     }
 
     try {
+      // Build buy payload - insurance is passed as string per EasyPost docs
+      const buyPayload: Record<string, unknown> = {
+        rate: { id: rateId },
+      };
+      if (insuranceAmountDollars && insuranceAmountDollars > 0) {
+        buyPayload.insurance = insuranceAmountDollars.toFixed(2);
+      }
+
       const response = await this.apiRequest<EasyPostShipment>(
         "POST",
         `/shipments/${shipmentId}/buy`,
-        { rate: { id: rateId } }
+        buyPayload
       );
 
       if ("error" in response) {
         const err = response as EasyPostError;
-        this.logger.error({ err: err.error, shipmentId, rateId }, "EasyPost purchaseMarketplaceLabel failed");
+        this.logger.error({ err: err.error, shipmentId, rateId, insuranceAmountDollars }, "EasyPost purchaseMarketplaceLabel failed");
         return {
           success: false,
           error: err.error.message,

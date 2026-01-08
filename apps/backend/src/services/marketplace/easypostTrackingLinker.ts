@@ -24,6 +24,7 @@ import {
   MarketplaceService,
   type MarketplaceOrder,
   type MarketplaceShipment,
+  type ShippingAddress,
 } from "./marketplaceService";
 
 // ============================================================================
@@ -67,6 +68,13 @@ export interface EasypostTrackingRow {
   // Shipments Export specific
   to_name?: string;             // Customer name (Shipments Export)
   to_zip?: string;              // Direct ZIP (Shipments Export)
+  to_street1?: string;
+  to_street2?: string;
+  to_city?: string;
+  to_state?: string;
+  to_country?: string;
+  postage_label_created_at?: string;
+  options?: string;
   from_name?: string;
   from_zip?: string;
   rate?: string;
@@ -131,6 +139,33 @@ function extractZipFromDestination(destination: string): string | null {
   }
 
   return null;
+}
+
+function normalizeZip(zip: string | null | undefined): string | null {
+  if (!zip) return null;
+  return zip.split("-")[0].trim() || null;
+}
+
+function buildShipToAddress(row: EasypostTrackingRow): ShippingAddress | null {
+  const street1 = row.to_street1?.trim();
+  const city = row.to_city?.trim();
+  const state = row.to_state?.trim();
+  const zip = normalizeZip(row.to_zip);
+  const country = row.to_country?.trim() || "US";
+
+  if (!street1 || !city || !state || !zip) {
+    return null;
+  }
+
+  return {
+    name: row.to_name?.trim() || "",
+    street1,
+    street2: row.to_street2?.trim() || undefined,
+    city,
+    state,
+    zip,
+    country,
+  };
 }
 
 // ============================================================================
@@ -303,6 +338,43 @@ export class EasypostTrackingLinker {
   }
 
   /**
+   * Attempt to match by explicit order number first (if present in CSV).
+   * This is deterministic and preferred over fuzzy name matching.
+   */
+  matchByOrderNumber(orderNumber: string): MatchResult {
+    const trimmed = orderNumber.trim();
+    if (!trimmed) {
+      return { confidence: "unmatched", reason: "empty-order-number" };
+    }
+
+    const orders = this.marketplaceService.findOrdersByOrderNumber(trimmed);
+
+    if (orders.length === 0) {
+      return { confidence: "unmatched", reason: "order-number-no-match" };
+    }
+
+    if (orders.length > 1) {
+      return { confidence: "review", candidates: orders, reason: "multiple-order-number-matches" };
+    }
+
+    const order = orders[0];
+    const shipments = this.marketplaceService.getShipmentsByOrderId(order.id);
+    const eligibleShipments = shipments.filter(
+      (s) =>
+        (s.status === "pending" || s.status === "label_purchased" || s.status === "shipped") &&
+        !s.tracking_number
+    );
+
+    if (eligibleShipments.length === 0) {
+      return { confidence: "review", order, reason: "no-eligible-shipment" };
+    }
+
+    // Deterministic: lowest shipment_sequence first
+    const eligibleShipment = eligibleShipments.sort((a, b) => a.shipment_sequence - b.shipment_sequence)[0];
+    return { confidence: "auto", order, shipment: eligibleShipment };
+  }
+
+  /**
    * Import EasyPost tracking from CSV and link to orders
    */
   async link(
@@ -374,7 +446,7 @@ export class EasypostTrackingLinker {
         // - Tracking Export: signed_by, destination_location
         // - Shipments Export: to_name, to_zip
         const customerName = row.signed_by || row.to_name || "";
-        const destinationZip = row.to_zip || extractZipFromDestination(row.destination_location || "");
+        const destinationZip = normalizeZip(row.to_zip) || extractZipFromDestination(row.destination_location || "");
 
         if (!trackerId || !trackingNumber) {
           result.errors.push({
@@ -385,9 +457,25 @@ export class EasypostTrackingLinker {
           continue;
         }
 
-        // Attempt to match (pass EasyPost created_at for date-based matching)
+        // Attempt deterministic order-number match first, then fall back to fuzzy matching.
         const createdAtEasypost = parseEasypostDate(row.created_at);
-        const matchResult = this.matchTracking(customerName, destinationZip, createdAtEasypost);
+        const matchResult = row.reference?.trim()
+          ? this.matchByOrderNumber(row.reference)
+          : this.matchTracking(customerName, destinationZip, createdAtEasypost);
+
+        if (
+          row.reference?.trim() &&
+          matchResult.confidence === "review" &&
+          matchResult.reason === "multiple-order-number-matches"
+        ) {
+          this.logger.warn(
+            {
+              reference: row.reference.trim(),
+              candidateCount: matchResult.candidates?.length ?? 0,
+            },
+            "Multiple orders matched by EasyPost reference; queued for review"
+          );
+        }
 
         if (dryRun) {
           result.preview!.push({
@@ -404,15 +492,26 @@ export class EasypostTrackingLinker {
         switch (matchResult.confidence) {
           case "auto":
             if (!dryRun && matchResult.order && matchResult.shipment) {
+              const trackingUrl =
+                row.public_url ||
+                this.marketplaceService.generateTrackingUrl(trackingNumber, row.carrier || null);
+
               // Auto-link tracking to shipment
               this.marketplaceService.updateShipmentTracking(
                 matchResult.shipment.id,
                 trackingNumber,
-                row.public_url || null,
+                trackingUrl,
                 row.carrier || null,
+                row.service || null,
                 "auto",
                 "system"
               );
+
+              // Enrich address for Shipments Export rows (if present, and shipment has no address)
+              const shipToAddress = buildShipToAddress(row);
+              if (shipToAddress) {
+                this.marketplaceService.updateShipmentAddressIfMissing(matchResult.shipment.id, shipToAddress);
+              }
 
               // Update shipment status based on tracking status
               if (row.status === "delivered") {

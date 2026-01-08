@@ -20,6 +20,7 @@
   },
   "dependencies": {
     "@types/multer": "^2.0.0",
+    "@types/pdfkit": "^0.17.4",
     "axios": "^1.12.2",
     "better-sqlite3": "^9.0.0",
     "chokidar": "^4.0.3",
@@ -30,6 +31,7 @@
     "imagekit": "^6.0.0",
     "multer": "^2.0.2",
     "openai": "^6.7.0",
+    "pdfkit": "^0.17.2",
     "pino": "^9.2.0",
     "sharp": "^0.33.2",
     "stripe": "^14.0.0",

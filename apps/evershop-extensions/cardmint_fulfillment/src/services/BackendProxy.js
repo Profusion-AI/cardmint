@@ -163,8 +163,54 @@ export async function proxyPatch(path, body = {}) {
   }
 }
 
+/**
+ * Proxy a GET request to CardMint backend returning binary data (images, PDFs)
+ * @param {string} path - API path
+ * @returns {Promise<{ok: boolean, status: number, buffer?: Buffer, contentType?: string, error?: string}>}
+ */
+export async function proxyGetBinary(path) {
+  try {
+    const url = new URL(path, BACKEND_URL);
+
+    const response = await fetch(url.toString(), {
+      method: "GET",
+      headers: {
+        ...buildHeaders(),
+        Accept: "*/*", // Accept any content type
+      },
+    });
+
+    if (!response.ok) {
+      // Try to parse error as JSON
+      try {
+        const data = await response.json();
+        return {
+          ok: false,
+          status: response.status,
+          error: data.error || data.message || "Unknown error",
+        };
+      } catch {
+        return {
+          ok: false,
+          status: response.status,
+          error: `HTTP ${response.status}`,
+        };
+      }
+    }
+
+    const buffer = Buffer.from(await response.arrayBuffer());
+    const contentType = response.headers.get("content-type") || "application/octet-stream";
+
+    return { ok: true, status: response.status, buffer, contentType };
+  } catch (error) {
+    console.error("[BackendProxy] GET binary error:", error.message);
+    return { ok: false, status: 502, error: error.message };
+  }
+}
+
 export const backendProxy = {
   get: proxyGet,
   post: proxyPost,
   patch: proxyPatch,
+  getBinary: proxyGetBinary,
 };
