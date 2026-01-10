@@ -277,16 +277,20 @@ export class StripeService {
   }
 
   /**
-   * Create Checkout Session for multiple items with shipping and optional lot discount
+   * Create Checkout Session for multiple items with shipping and optional discounts
    * Mode: payment, quantity: 1 per item (unique 1-of-1 cards), expires in configured TTL
    * Discount applied via dynamic Stripe Coupon (negative line items not supported)
    * Includes shipping_options for deterministic shipping fee
+   *
+   * Discounts are stacked: lot discount applied first, promo discount applied to post-lot subtotal
+   * Both discounts are combined into a single Stripe coupon (Stripe doesn't allow multiple)
    */
   async createMultiItemCheckoutSession(
     items: StripeItemData[],
     stripePriceIds: string[],
     shippingQuote: ShippingQuote,
     lotDiscount: LotDiscountInfo | null,
+    promoDiscount: { code: string; discount_pct: number; discount_cents: number } | null,
     successUrl: string,
     cancelUrl: string
   ): Promise<MultiItemSessionResult> {
@@ -320,43 +324,84 @@ export class StripeService {
       adjustable_quantity: { enabled: false },
     }));
 
-    // Create dynamic coupon for lot discount if applicable
-    // Stripe does NOT support negative line items - must use coupons
-    // NOTE: This is separate from admin/marketing coupons:
-    //   - Lot Builder coupons: system-generated, one-time, auto-created at checkout
-    //   - Marketing coupons: admin-created in Stripe dashboard, applied via allow_promotion_codes
+    // Create dynamic coupon for combined discounts if applicable
+    // Stripe does NOT support negative line items or multiple coupons - must use single combined coupon
+    // Stacking: lot discount applied first, promo discount applied to post-lot subtotal
     let couponId: string | undefined;
-    if (lotDiscount && lotDiscount.discountAmountCents > 0) {
-      // Customer-facing name: "Bundle Savings" (not "coupon" to avoid confusion with promo codes)
+    const lotDiscountCents = lotDiscount?.discountAmountCents ?? 0;
+    const promoDiscountCents = promoDiscount?.discount_cents ?? 0;
+    const rawCombinedDiscountCents = lotDiscountCents + promoDiscountCents;
+
+    // Cap combined discount to not exceed subtotal (safety guard)
+    const subtotalCents = lotDiscount?.originalTotalCents ?? items.reduce((sum, item) => sum + item.price_cents, 0);
+    const combinedDiscountCents = Math.min(rawCombinedDiscountCents, subtotalCents);
+
+    if (combinedDiscountCents > 0) {
+      // Build customer-facing name based on which discounts are applied
+      let couponName: string;
+      let couponType: string;
+
+      if (lotDiscountCents > 0 && promoDiscountCents > 0) {
+        // Both discounts - show combined
+        couponName = `Bundle + Promo Savings ($${(combinedDiscountCents / 100).toFixed(2)} off)`;
+        couponType = "combined";
+      } else if (promoDiscountCents > 0) {
+        // Promo only
+        couponName = `Promo ${promoDiscount!.code} (${promoDiscount!.discount_pct}% off)`;
+        couponType = "promo";
+      } else {
+        // Lot only
+        couponName = `Bundle Savings (${lotDiscount!.discountPct}% off)`;
+        couponType = "lot_builder";
+      }
+
+      const couponMetadata: Record<string, string> = {
+        coupon_type: couponType,
+        source: "system_generated",
+        created_at: new Date().toISOString(),
+      };
+
+      // Add lot discount info if present
+      if (lotDiscount) {
+        couponMetadata.lot_discount_cents = lotDiscountCents.toString();
+        couponMetadata.lot_discount_pct = lotDiscount.discountPct.toString();
+        couponMetadata.lot_reason_code = lotDiscount.reasonCode;
+        couponMetadata.lot_reason_text = lotDiscount.reasonText.slice(0, 200);
+      }
+
+      // Add promo discount info if present
+      if (promoDiscount) {
+        couponMetadata.promo_code = promoDiscount.code;
+        couponMetadata.promo_discount_cents = promoDiscountCents.toString();
+        couponMetadata.promo_discount_pct = promoDiscount.discount_pct.toString();
+      }
+
       const coupon = await stripe.coupons.create({
-        amount_off: lotDiscount.discountAmountCents,
+        amount_off: combinedDiscountCents,
         currency: "usd",
         duration: "once",
-        name: `Bundle Savings (${lotDiscount.discountPct}% off)`,
-        metadata: {
-          coupon_type: "lot_builder",  // Internal: Distinguish from admin/marketing coupons
-          source: "system_generated",
-          reason_code: lotDiscount.reasonCode,
-          reason_text: lotDiscount.reasonText.slice(0, 500), // Stripe limit
-          created_at: new Date().toISOString(),
-        },
+        name: couponName,
+        metadata: couponMetadata,
       });
       couponId = coupon.id;
 
       this.logger.info(
         {
           couponId,
-          discountPct: lotDiscount.discountPct,
-          discountAmountCents: lotDiscount.discountAmountCents,
-          reasonCode: lotDiscount.reasonCode,
+          combinedDiscountCents,
+          lotDiscountCents,
+          promoDiscountCents,
+          promoCode: promoDiscount?.code ?? null,
+          lotReasonCode: lotDiscount?.reasonCode ?? null,
         },
-        "Created Stripe coupon for lot discount"
+        "Created Stripe coupon for combined discounts"
       );
     }
 
     // Calculate totals for metadata (used by webhook for fulfillment record)
-    const originalTotalCents = lotDiscount?.originalTotalCents ?? items.reduce((sum, item) => sum + item.price_cents, 0);
-    const finalTotalCents = lotDiscount?.finalTotalCents ?? originalTotalCents;
+    // subtotalCents is already calculated above (pre-discount total)
+    // Final subtotal is original minus all discounts (lot + promo)
+    const finalTotalCents = subtotalCents - combinedDiscountCents;
 
     // Prepare metadata with shipping info
     const metadata: Record<string, string> = {
@@ -366,17 +411,26 @@ export class StripeService {
       shipping_cost_cents: shippingQuote.priceCents.toString(),
       requires_manual_review: shippingQuote.requiresManualReview ? "1" : "0",
       // Store both pre-discount and post-discount totals for operational clarity
-      original_subtotal_cents: originalTotalCents.toString(),
+      original_subtotal_cents: subtotalCents.toString(),
       final_subtotal_cents: finalTotalCents.toString(),
+      // Combined discount for quick reference
+      combined_discount_cents: combinedDiscountCents.toString(),
     };
 
     if (lotDiscount) {
       metadata.lot_discount_pct = lotDiscount.discountPct.toString();
+      metadata.lot_discount_cents = lotDiscountCents.toString();
       metadata.lot_reason_code = lotDiscount.reasonCode;
     }
 
+    if (promoDiscount) {
+      metadata.promo_code = promoDiscount.code;
+      metadata.promo_discount_pct = promoDiscount.discount_pct.toString();
+      metadata.promo_discount_cents = promoDiscountCents.toString();
+    }
+
     if (couponId) {
-      metadata.lot_coupon_id = couponId;
+      metadata.stripe_coupon_id = couponId;
     }
 
     // Aggregate product_uids for correlation (first product_uid as representative)
@@ -432,7 +486,17 @@ export class StripeService {
     const session = await stripe.checkout.sessions.create(sessionParams);
 
     this.logger.info(
-      { sessionId: session.id, itemUids, expiresAt, lotDiscount: lotDiscount?.discountPct ?? null, couponId, shippingMethod: shippingQuote.method },
+      {
+        sessionId: session.id,
+        itemUids,
+        expiresAt,
+        lotDiscountPct: lotDiscount?.discountPct ?? null,
+        promoCode: promoDiscount?.code ?? null,
+        promoDiscountPct: promoDiscount?.discount_pct ?? null,
+        combinedDiscountCents,
+        couponId,
+        shippingMethod: shippingQuote.method,
+      },
       "Multi-item Stripe checkout session created with shipping"
     );
 
@@ -516,6 +580,17 @@ export class StripeService {
     const stripe = this.ensureStripe();
     return stripe.checkout.sessions.retrieve(sessionId, {
       expand: ["payment_intent"],
+    });
+  }
+
+  /**
+   * List checkout session line items (expanded to include Product metadata/images).
+   */
+  async listCheckoutSessionLineItems(sessionId: string): Promise<Stripe.ApiList<Stripe.LineItem>> {
+    const stripe = this.ensureStripe();
+    return stripe.checkout.sessions.listLineItems(sessionId, {
+      expand: ["data.price.product"],
+      limit: 100,
     });
   }
 

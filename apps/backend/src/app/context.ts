@@ -56,6 +56,7 @@ import { createResendService, ResendService } from "../services/resendService";
 import { createEmailOutboxWorker, EmailOutboxWorker } from "../services/emailOutboxWorker";
 import { createAutoFulfillmentWorker, AutoFulfillmentWorker } from "../services/autoFulfillmentWorker";
 import { createMarketplaceAutoFulfillmentWorker, MarketplaceAutoFulfillmentWorker } from "../services/marketplace/marketplaceAutoFulfillmentWorker";
+import { CouponService } from "../services/couponService";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MASTER_SETLIST_PATH = path.resolve(__dirname, "../../../../data/mastersetlist.csv");
@@ -98,6 +99,7 @@ export interface AppContext {
   emailOutboxWorker: EmailOutboxWorker;
   autoFulfillmentWorker: AutoFulfillmentWorker;
   marketplaceAutoFulfillmentWorker: MarketplaceAutoFulfillmentWorker;
+  couponService: CouponService;
 
   // Shutdown state and helpers
   isShuttingDown: () => boolean;
@@ -934,6 +936,9 @@ export async function createContext(): Promise<AppContext> {
   );
   marketplaceAutoFulfillmentWorker.start();
 
+  // Coupon validation service (Jan 2026 - EverShop coupon integration)
+  const couponService = new CouponService(logger);
+
   // Cleanup expired/aborted idempotency keys on startup
   const cleanup = importSafeguards.cleanupExpiredKeys();
   if (cleanup.deleted > 0 || cleanup.aborted > 0) {
@@ -980,6 +985,7 @@ export async function createContext(): Promise<AppContext> {
     emailOutboxWorker,
     autoFulfillmentWorker,
     marketplaceAutoFulfillmentWorker,
+    couponService,
 
     isShuttingDown: () => shuttingDown,
     setShuttingDown: (value: boolean) => {

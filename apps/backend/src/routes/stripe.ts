@@ -331,12 +331,83 @@ export function registerStripeRoutes(app: Express, ctx: AppContext): void {
   });
 
   /**
+   * POST /api/coupon/validate
+   * Validate a coupon code against EverShop Postgres
+   * Returns discount info if valid, or error reason if invalid
+   *
+   * Used by SPA cart UI for instant feedback before checkout
+   */
+  const handleCouponValidate = async (req: Request, res: Response) => {
+    const { coupon_code, subtotal_cents } = req.body;
+
+    // Validate input
+    if (!coupon_code || typeof coupon_code !== "string") {
+      return res.status(400).json({
+        ok: false,
+        error: "BAD_REQUEST",
+        message: "coupon_code is required",
+      });
+    }
+
+    if (typeof subtotal_cents !== "number" || subtotal_cents < 0) {
+      return res.status(400).json({
+        ok: false,
+        error: "BAD_REQUEST",
+        message: "subtotal_cents must be a non-negative number",
+      });
+    }
+
+    // Rate limit: 10 requests per minute per IP
+    const clientIp = (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.ip || "unknown";
+    const rateLimitResult = checkRateLimit(clientIp, 10);
+    if (!rateLimitResult.allowed) {
+      return res.status(429).json({
+        ok: false,
+        error: "RATE_LIMITED",
+        message: "Too many requests, please try again later",
+        retry_after: rateLimitResult.retryAfter,
+      });
+    }
+
+    try {
+      const result = await ctx.couponService.validateCoupon(coupon_code, subtotal_cents);
+
+      if (result.valid) {
+        return res.json({
+          ok: true,
+          valid: true,
+          coupon: result.coupon,
+        });
+      } else {
+        return res.json({
+          ok: true,
+          valid: false,
+          reason: result.reason,
+          message: result.message,
+        });
+      }
+    } catch (error) {
+      log.error({ err: error, coupon_code }, "Error validating coupon");
+      return res.status(503).json({
+        ok: false,
+        error: "SERVICE_UNAVAILABLE",
+        message: "Unable to validate coupon at this time",
+      });
+    }
+  };
+
+  // Public coupon validate endpoint (legacy path)
+  app.post("/api/coupon/validate", handleCouponValidate);
+  // Preferred path: routes through the existing /api/checkout/ nginx proxy on prod
+  app.post("/api/checkout/coupon/validate", handleCouponValidate);
+
+  /**
    * POST /api/checkout/session/multi
    * Create Stripe checkout session for multiple items (Lot Builder)
    * Accepts array of product_uids, calculates lot discount, reserves all atomically
    */
   app.post("/api/checkout/session/multi", async (req: Request, res: Response) => {
-    const { product_uids, success_url, cancel_url, cart_session_id } = req.body;
+    const { product_uids, success_url, cancel_url, cart_session_id, coupon_code } = req.body;
 
     // Validate input
     if (!Array.isArray(product_uids) || product_uids.length === 0) {
@@ -478,6 +549,63 @@ export function registerStripeRoutes(app: Express, ctx: AppContext): void {
         "Lot discount calculated"
       );
 
+      // Step 2.5: Validate promo coupon if provided
+      // Promo discount is calculated on post-lot subtotal (stacking)
+      let promoDiscount: {
+        code: string;
+        discount_pct: number;
+        discount_cents: number;
+      } | null = null;
+
+      if (coupon_code && typeof coupon_code === "string" && coupon_code.trim()) {
+        // Eligibility checks should be based on the pre-discount subtotal (EverShop semantics),
+        // while the promo discount stacks on the post-lot subtotal.
+        const rawSubtotalCents = lotResult.subtotalBeforeDiscountCents;
+        const postLotSubtotalCents = lotResult.finalTotalCents;
+
+        try {
+          const couponResult = await ctx.couponService.validateCoupon(
+            coupon_code,
+            rawSubtotalCents,
+            postLotSubtotalCents
+          );
+
+          if (!couponResult.valid) {
+            // Coupon was explicitly provided by the client; fail fast so UX can surface the reason.
+            return res.status(400).json({
+              error: "INVALID_COUPON",
+              reason: couponResult.reason,
+              message: couponResult.message,
+            });
+          }
+
+          promoDiscount = {
+            code: couponResult.coupon.code,
+            discount_pct: couponResult.coupon.discount_pct,
+            discount_cents: couponResult.coupon.discount_cents,
+          };
+
+          logger.info(
+            {
+              couponCode: promoDiscount.code,
+              discountPct: promoDiscount.discount_pct,
+              discountCents: promoDiscount.discount_cents,
+            },
+            "Promo coupon validated"
+          );
+        } catch (error) {
+          // EverShop Postgres might be unreachable; don't silently ignore a requested discount.
+          logger.warn(
+            { err: error, couponCode: coupon_code },
+            "Coupon validation error - blocking checkout"
+          );
+          return res.status(503).json({
+            error: "COUPON_VALIDATION_UNAVAILABLE",
+            message: "Unable to validate coupon at this time. Please try again.",
+          });
+        }
+      }
+
       // Step 3: Ensure Stripe products/prices exist for all items
       const stripeItems: Array<{
         itemData: NonNullable<ReturnType<typeof inventoryService.getItemForCheckout>>;
@@ -575,6 +703,7 @@ export function registerStripeRoutes(app: Express, ctx: AppContext): void {
         stripeItems.map((s) => s.stripePriceId),
         multiShippingQuote,
         lotDiscountInfo,
+        promoDiscount,
         effectiveSuccessUrl,
         effectiveCancelUrl
       );
@@ -645,6 +774,11 @@ export function registerStripeRoutes(app: Express, ctx: AppContext): void {
         "Multi-item checkout session created"
       );
 
+      // Calculate combined discount for response
+      const lotDiscountCents = lotDiscountInfo?.discountAmountCents ?? 0;
+      const promoDiscountCents = promoDiscount?.discount_cents ?? 0;
+      const combinedDiscountCents = lotDiscountCents + promoDiscountCents;
+
       res.json({
         ok: true,
         checkout_url: session.checkoutUrl,
@@ -652,6 +786,8 @@ export function registerStripeRoutes(app: Express, ctx: AppContext): void {
         expires_at: session.expiresAt,
         item_count: items.length,
         lot_discount: lotDiscountInfo,
+        promo_discount: promoDiscount,
+        combined_discount_cents: combinedDiscountCents,
       });
     } catch (error) {
       logger.error({ err: error, product_uids }, "Failed to create multi-item checkout");
@@ -1246,7 +1382,7 @@ async function handleCheckoutCompleted(
   ctx: AppContext,
   stripeEventId: string
 ): Promise<string | null> {
-  const { logger, stripeService, inventoryService, klaviyoService, db, emailOutboxRepo } = ctx;
+  const { logger, stripeService, inventoryService, klaviyoService, db, emailOutboxRepo, couponService } = ctx;
   const sessionId = session.id;
 
   // Check if this is a multi-item checkout (Lot Builder)
@@ -1792,6 +1928,51 @@ async function handleCheckoutCompleted(
       { err: orderErr, sessionId },
       "Failed to create order record (non-fatal)"
     );
+  }
+
+  // Increment coupon usage if a promo code was applied (idempotent check)
+  // Idempotency is keyed by stripe_session_id to avoid double-counting on webhook retries.
+  if (metadata.promo_code) {
+    try {
+      const promoCode = metadata.promo_code;
+      const now = Math.floor(Date.now() / 1000);
+
+      // Claim this session for coupon usage increment (first writer wins)
+      const claim = db
+        .prepare(
+          `INSERT OR IGNORE INTO coupon_redemptions (stripe_session_id, promo_code, created_at)
+           VALUES (?, ?, ?)`
+        )
+        .run(sessionId, promoCode, now);
+
+      if (claim.changes === 0) {
+        logger.debug(
+          { sessionId, promoCode },
+          "checkout.session.completed: skipping coupon increment (already redeemed)"
+        );
+      } else {
+        const ok = await couponService.incrementUsage(promoCode);
+        if (ok) {
+          logger.info(
+            { sessionId, promoCode },
+            "checkout.session.completed: coupon usage incremented"
+          );
+        } else {
+          // Allow a future webhook retry to attempt again if EverShop is temporarily unreachable.
+          db.prepare(`DELETE FROM coupon_redemptions WHERE stripe_session_id = ?`).run(sessionId);
+          logger.warn(
+            { sessionId, promoCode },
+            "checkout.session.completed: coupon increment failed (will retry on next webhook delivery)"
+          );
+        }
+      }
+    } catch (couponErr) {
+      // Non-fatal: usage tracking failure shouldn't block the webhook
+      logger.error(
+        { err: couponErr, sessionId, promoCode: metadata.promo_code },
+        "Failed to increment coupon usage (non-fatal)"
+      );
+    }
   }
 
   // Return first item_uid for idempotency record (or null if none processed)
