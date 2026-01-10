@@ -285,4 +285,156 @@ export function registerStockDisplayRoutes(app: Express, ctx: AppContext): void 
       res.status(500).json({ e: 1 });
     }
   });
+
+  /**
+   * GET /api/orders-summary/compact
+   *
+   * V2 Orders Dashboard endpoint for ESP32 display.
+   * Returns order counts, values, to-ship backlog, and last 3 orders.
+   * Combines data from Stripe (fulfillment) and marketplace (tcgplayer) sources.
+   *
+   * Response fields:
+   *   o  - Orders count: [all, 24h, 72h]
+   *   v  - Order values in cents: [all, 24h, 72h]
+   *   tr - Top-right metrics: [visits24h, supportOpen] (STUBBED)
+   *   br - Bottom-right: [toShip, lateOver24h]
+   *   l  - Last 3 orders: [[firstName, lastName, cents], ...]
+   *   t  - Current server timestamp
+   */
+  app.get("/api/orders-summary/compact", requireDisplayToken, (_req: Request, res: Response) => {
+    try {
+      const now = Math.floor(Date.now() / 1000);
+      const twentyFourHoursAgo = now - 86400;
+      const seventyTwoHoursAgo = now - 259200;
+
+      // Count Stripe orders (from fulfillment table)
+      const stripeOrders = db
+        .prepare(
+          `SELECT
+             COUNT(*) as total,
+             SUM(CASE WHEN created_at >= ? THEN 1 ELSE 0 END) as last24h,
+             SUM(CASE WHEN created_at >= ? THEN 1 ELSE 0 END) as last72h,
+             SUM(final_subtotal_cents) as totalValue,
+             SUM(CASE WHEN created_at >= ? THEN final_subtotal_cents ELSE 0 END) as value24h,
+             SUM(CASE WHEN created_at >= ? THEN final_subtotal_cents ELSE 0 END) as value72h
+           FROM fulfillment`
+        )
+        .get(twentyFourHoursAgo, seventyTwoHoursAgo, twentyFourHoursAgo, seventyTwoHoursAgo) as {
+        total: number;
+        last24h: number;
+        last72h: number;
+        totalValue: number;
+        value24h: number;
+        value72h: number;
+      };
+
+      // Count marketplace orders
+      const marketplaceOrders = db
+        .prepare(
+          `SELECT
+             COUNT(*) as total,
+             SUM(CASE WHEN order_date >= ? THEN 1 ELSE 0 END) as last24h,
+             SUM(CASE WHEN order_date >= ? THEN 1 ELSE 0 END) as last72h,
+             SUM(product_value_cents) as totalValue,
+             SUM(CASE WHEN order_date >= ? THEN product_value_cents ELSE 0 END) as value24h,
+             SUM(CASE WHEN order_date >= ? THEN product_value_cents ELSE 0 END) as value72h
+           FROM marketplace_orders
+           WHERE status != 'cancelled'`
+        )
+        .get(twentyFourHoursAgo, seventyTwoHoursAgo, twentyFourHoursAgo, seventyTwoHoursAgo) as {
+        total: number;
+        last24h: number;
+        last72h: number;
+        totalValue: number;
+        value24h: number;
+        value72h: number;
+      };
+
+      // To Ship: Stripe orders not yet shipped
+      const stripeToShip = db
+        .prepare(
+          `SELECT
+             COUNT(*) as toShip,
+             SUM(CASE WHEN created_at < ? THEN 1 ELSE 0 END) as late
+           FROM fulfillment
+           WHERE status NOT IN ('shipped', 'delivered', 'exception')`
+        )
+        .get(twentyFourHoursAgo) as { toShip: number; late: number };
+
+      // To Ship: Marketplace shipments without label
+      const marketplaceToShip = db
+        .prepare(
+          `SELECT
+             COUNT(*) as toShip,
+             SUM(CASE WHEN ms.created_at < ? THEN 1 ELSE 0 END) as late
+           FROM marketplace_shipments ms
+           JOIN marketplace_orders mo ON ms.marketplace_order_id = mo.id
+           WHERE ms.status IN ('pending')
+             AND mo.status != 'cancelled'`
+        )
+        .get(twentyFourHoursAgo) as { toShip: number; late: number };
+
+      // Last 3 orders (combined from both sources)
+      const lastOrders = db
+        .prepare(
+          `SELECT firstName, lastName, valueCents, orderDate FROM (
+             -- Stripe orders: parse customer name from stripe session metadata
+             SELECT
+               'Customer' as firstName,
+               '' as lastName,
+               final_subtotal_cents as valueCents,
+               created_at as orderDate
+             FROM fulfillment
+             ORDER BY created_at DESC
+             LIMIT 3
+           ) UNION ALL SELECT firstName, lastName, valueCents, orderDate FROM (
+             -- Marketplace orders: parse customer_name
+             SELECT
+               SUBSTR(customer_name, 1, INSTR(customer_name || ' ', ' ') - 1) as firstName,
+               SUBSTR(customer_name, INSTR(customer_name || ' ', ' ') + 1) as lastName,
+               product_value_cents as valueCents,
+               order_date as orderDate
+             FROM marketplace_orders
+             WHERE status != 'cancelled'
+             ORDER BY order_date DESC
+             LIMIT 3
+           )
+           ORDER BY orderDate DESC
+           LIMIT 3`
+        )
+        .all() as { firstName: string; lastName: string; valueCents: number; orderDate: number }[];
+
+      // Combine counts
+      const ordersAll = (stripeOrders.total || 0) + (marketplaceOrders.total || 0);
+      const orders24h = (stripeOrders.last24h || 0) + (marketplaceOrders.last24h || 0);
+      const orders72h = (stripeOrders.last72h || 0) + (marketplaceOrders.last72h || 0);
+
+      const valueAll = (stripeOrders.totalValue || 0) + (marketplaceOrders.totalValue || 0);
+      const value24h = (stripeOrders.value24h || 0) + (marketplaceOrders.value24h || 0);
+      const value72h = (stripeOrders.value72h || 0) + (marketplaceOrders.value72h || 0);
+
+      const toShipTotal = (stripeToShip.toShip || 0) + (marketplaceToShip.toShip || 0);
+      const lateTotal = (stripeToShip.late || 0) + (marketplaceToShip.late || 0);
+
+      // Format last orders as compact array
+      const lastOrdersCompact = lastOrders.map((o) => [
+        o.firstName || "Customer",
+        o.lastName || "",
+        o.valueCents || 0,
+      ]);
+
+      res.setHeader("Cache-Control", "public, max-age=30");
+      res.json({
+        o: [ordersAll, orders24h, orders72h],
+        v: [valueAll, value24h, value72h],
+        tr: [0, 0], // Stubbed: visits24h, supportOpen
+        br: [toShipTotal, lateTotal],
+        l: lastOrdersCompact,
+        t: now,
+      });
+    } catch (error) {
+      logger.error({ err: error }, "Failed to fetch orders summary");
+      res.status(500).json({ e: 1 });
+    }
+  });
 }

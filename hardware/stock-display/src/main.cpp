@@ -1,12 +1,12 @@
 /**
- * CardMint Stock Display
+ * CardMint Orders Dashboard V2
  *
- * ESP32-2432S028R firmware for displaying real-time inventory stats.
- * Connects to WiFi, polls CardMint backend, renders on 320x240 TFT.
+ * ESP32-2432S028R firmware for displaying real-time order metrics.
+ * Shows combined Stripe + marketplace orders with tap-to-cycle interactions.
  *
  * Hardware: ESP32-2432S028R (Cheap Yellow Display)
  * Display: ILI9341 320x240 TFT
- * Touch: XPT2046 capacitive touch for info row toggle
+ * Touch: XPT2046 capacitive touch for region interactions
  */
 
 #include <Arduino.h>
@@ -23,12 +23,9 @@
 // Configuration - Load from config.h or use build-time defines
 // ============================================================================
 
-// Check for config.h (copy config.h.template and customize)
 #if __has_include("config.h")
   #include "config.h"
 #else
-  // Fallback defaults - override via platformio.ini build_flags:
-  // -DWIFI_SSID=\"your_ssid\" -DWIFI_PASSWORD=\"your_password\"
   #ifndef WIFI_SSID
     #define WIFI_SSID "your_wifi_ssid"
   #endif
@@ -36,292 +33,349 @@
     #define WIFI_PASSWORD "your_wifi_password"
   #endif
   #ifndef API_URL
-    #define API_URL "https://cardmintshop.com/api/stock-summary/compact"
+    #define API_URL "https://cardmintshop.com/api/orders-summary/compact"
   #endif
   #ifndef REFRESH_INTERVAL_MS
-    #define REFRESH_INTERVAL_MS 60000
+    #define REFRESH_INTERVAL_MS 30000
   #endif
   #ifndef DISPLAY_TOKEN
     #define DISPLAY_TOKEN ""
   #endif
 #endif
 
-// Convert defines to const char* for compatibility
 const char* wifi_ssid = WIFI_SSID;
 const char* wifi_password = WIFI_PASSWORD;
 const char* api_url = API_URL;
 const char* display_token = DISPLAY_TOKEN;
-const unsigned long refresh_interval_ms = REFRESH_INTERVAL_MS;
+const uint32_t refresh_interval_ms = REFRESH_INTERVAL_MS;
 
-// NTP time configuration (Central Time with automatic DST)
-// POSIX TZ string: CST6CDT,M3.2.0/2,M11.1.0/2
-// - CST6 = Central Standard Time, UTC-6
-// - CDT = Central Daylight Time
-// - M3.2.0/2 = DST starts 2nd Sunday of March at 2:00 AM
-// - M11.1.0/2 = DST ends 1st Sunday of November at 2:00 AM
+// Stale threshold: 2 minutes (120 seconds)
+const uint32_t STALE_THRESHOLD_SEC = 120;
+
+// NTP configuration (Central Time with DST)
 const char* NTP_SERVER = "pool.ntp.org";
 const char* TIMEZONE = "CST6CDT,M3.2.0/2,M11.1.0/2";
 
 // ============================================================================
-// Premium Dashboard Color Palette (RGB565)
+// Color Palette (RGB565)
 // ============================================================================
 
-// Base tones - sophisticated dark theme
 #define COLOR_BG             0x0841  // Near-black (#080808)
 #define COLOR_HEADER         0x1926  // Deep blue-gray (#1C2430)
-#define COLOR_SURFACE        0x2104  // Elevated surface for boxes (#202020)
+#define COLOR_SURFACE        0x2104  // Elevated surface (#202020)
 #define COLOR_BORDER         0x3186  // Subtle borders (#303030)
 #define COLOR_DIVIDER        0x2945  // Divider lines (#282828)
 
-// Text hierarchy
 #define COLOR_TEXT           0xFFFF  // Primary text (white)
-#define COLOR_TEXT_SECONDARY 0xB596  // Labels - warm gray (#B0A890)
-#define COLOR_TEXT_MUTED     0x6B4D  // Footer - muted (#686860)
+#define COLOR_TEXT_SECONDARY 0xB596  // Labels - warm gray
+#define COLOR_TEXT_MUTED     0x6B4D  // Footer - muted
 
-// Semantic accent colors
-#define COLOR_MINT           0x2E8B  // CardMint brand teal (#2DD4B8)
-#define COLOR_GOLD           0xFEA0  // Value/money (#FFD400)
-#define COLOR_CORAL          0xFB08  // Alerts/today (#FF6040)
-#define COLOR_SKY            0x5D9F  // Reserved (#5EBFFF)
-#define COLOR_SUCCESS        0x2DC6  // WiFi OK (#2DD46B)
+#define COLOR_MINT           0x2E8B  // CardMint brand teal
+#define COLOR_GOLD           0xFEA0  // Value/money
+#define COLOR_CORAL          0xFB08  // Alerts/late
+#define COLOR_SKY            0x5D9F  // Info
+#define COLOR_SUCCESS        0x2DC6  // WiFi OK
 
 // Semantic aliases
-#define COLOR_VALUE          COLOR_MINT
-#define COLOR_RESERVED       COLOR_SKY
-#define COLOR_SOLD           COLOR_GOLD
-#define COLOR_ERROR          COLOR_CORAL
+#define COLOR_ORDERS         COLOR_MINT
+#define COLOR_VALUE          COLOR_GOLD
+#define COLOR_TOSHIP         COLOR_SKY
+#define COLOR_LATE           COLOR_CORAL
+#define COLOR_STALE          COLOR_CORAL
 
 // ============================================================================
-// Layout Constants (optimized for 320x240 display)
+// Layout Constants (320x240 display)
 // ============================================================================
 
-#define HEADER_HEIGHT    32
-#define BOX_HEIGHT       80
-#define BOX_WIDTH        150
-#define BOX_GAP          10
-#define BOX_START_X      5
-#define BOX_START_Y      32
-#define INFO_ROW_Y       192
-#define INFO_ROW_HEIGHT  28
-#define FOOTER_Y         220
-#define FOOTER_HEIGHT    20
+#define HEADER_HEIGHT    28
+#define BOX_HEIGHT       70
+#define BOX_WIDTH        155
+#define BOX_GAP          5
+#define BOX_START_X      2
+#define BOX_START_Y      30
+#define INFO_ROW_Y       172
+#define INFO_ROW_HEIGHT  44
+#define FOOTER_Y         218
+#define FOOTER_HEIGHT    22
 
 // ============================================================================
-// Touch SPI Pins (CYD uses separate SPI bus for touch)
+// Touch SPI Pins (CYD uses separate SPI bus)
 // ============================================================================
 #define TOUCH_SPI_MOSI  32
 #define TOUCH_SPI_MISO  39
 #define TOUCH_SPI_SCK   25
+
+// Touch calibration
+#define TOUCH_X_MIN   200
+#define TOUCH_X_MAX  3800
+#define TOUCH_Y_MIN   280
+#define TOUCH_Y_MAX  3850
 
 // ============================================================================
 // Global Objects
 // ============================================================================
 
 TFT_eSPI tft = TFT_eSPI();
-
-// CYD touch controller is on HSPI (separate from display VSPI)
 SPIClass touchSPI(HSPI);
 XPT2046_Touchscreen touch(TOUCH_CS, TOUCH_IRQ);
 
-unsigned long lastRefresh = 0;
-unsigned long lastClockUpdate = 0;
+uint32_t lastRefresh = 0;
+uint32_t lastClockUpdate = 0;
+uint32_t lastSuccessfulFetch = 0;
 bool wifiConnected = false;
 bool timeConfigured = false;
 int lastHttpError = 0;
-bool showAddedMode = false;  // Toggle state for info row (false=Last Sale, true=Added)
-unsigned long lastTouchTime = 0;  // Debounce
 
-// Stock data with enhanced fields
-struct StockData {
-    int inStock;
-    int reserved;
-    int sold;
-    int soldToday;
-    int addedToday;        // Items added today
-    int valueCents;        // Total inventory value in cents
-    unsigned long lastSale; // Last sale timestamp (unix epoch)
-    unsigned long timestamp;
+// Time window mode for orders (0=All, 1=24h, 2=72h)
+uint8_t ordersTimeWindow = 0;
+
+// Top-right toggle (0=Visits, 1=Support)
+uint8_t topRightMode = 0;
+
+// Info row: which of last 3 orders to show (0, 1, 2)
+uint8_t lastOrderIndex = 0;
+
+uint32_t lastTouchTime = 0;
+
+// Orders data structure
+struct OrdersData {
+    uint32_t orders[3];      // [all, 24h, 72h]
+    uint32_t values[3];      // [all, 24h, 72h] in cents
+    uint32_t visits24h;      // Stubbed
+    uint32_t supportOpen;    // Stubbed
+    uint32_t toShip;
+    uint32_t lateOver24h;
+    char lastOrders[3][32];  // "FirstName LastName"
+    uint32_t lastOrderValues[3]; // cents
+    uint32_t timestamp;
     bool valid;
-} stockData = {0, 0, 0, 0, 0, 0, 0, 0, false};
+} ordersData = {{0}, {0}, 0, 0, 0, 0, {""}, {0}, 0, false};
 
 // ============================================================================
 // Display Functions
 // ============================================================================
 
-String getCurrentTimeStr() {
-    if (!timeConfigured) return "--:--";
+void getCurrentTimeStr(char* buf, size_t len) {
+    if (!timeConfigured) {
+        snprintf(buf, len, "--:--:--");
+        return;
+    }
     struct tm timeinfo;
-    if (!getLocalTime(&timeinfo, 100)) return "--:--";
-    char buf[6];
-    strftime(buf, sizeof(buf), "%H:%M", &timeinfo);
-    return String(buf);
+    if (!getLocalTime(&timeinfo, 100)) {
+        snprintf(buf, len, "--:--:--");
+        return;
+    }
+    strftime(buf, len, "%H:%M:%S", &timeinfo);
+}
+
+void getCurrentDateStr(char* buf, size_t len) {
+    if (!timeConfigured) {
+        snprintf(buf, len, "--- --");
+        return;
+    }
+    struct tm timeinfo;
+    if (!getLocalTime(&timeinfo, 100)) {
+        snprintf(buf, len, "--- --");
+        return;
+    }
+    strftime(buf, len, "%b %d", &timeinfo);
+}
+
+bool isDataStale() {
+    if (!ordersData.valid || lastSuccessfulFetch == 0) return true;
+    uint32_t now = millis();
+    uint32_t elapsed = (now - lastSuccessfulFetch) / 1000;
+    return elapsed > STALE_THRESHOLD_SEC;
+}
+
+uint32_t getStaleSeconds() {
+    if (lastSuccessfulFetch == 0) return 999;
+    uint32_t now = millis();
+    return (now - lastSuccessfulFetch) / 1000;
 }
 
 void drawHeader() {
     tft.fillRect(0, 0, 320, HEADER_HEIGHT, COLOR_HEADER);
     tft.drawFastHLine(0, HEADER_HEIGHT - 1, 320, COLOR_BORDER);
 
-    // Brand text in mint accent
+    // Brand
     tft.setTextColor(COLOR_MINT, COLOR_HEADER);
-    tft.setTextSize(1);
-    tft.setFreeFont(&FreeSansBold12pt7b);
-    tft.setCursor(10, 23);
+    tft.setFreeFont(&FreeSansBold9pt7b);
+    tft.setCursor(8, 19);
     tft.print("CardMint");
 
-    // Clock in secondary color
+    // Clock
+    char timeBuf[12];
+    getCurrentTimeStr(timeBuf, sizeof(timeBuf));
     tft.setTextColor(COLOR_TEXT_SECONDARY, COLOR_HEADER);
     tft.setFreeFont(&FreeSans9pt7b);
-    tft.setCursor(200, 21);
-    tft.print(getCurrentTimeStr());
+    tft.setCursor(200, 19);
+    tft.print(timeBuf);
+
+    // WiFi indicator
+    uint16_t wifiColor = wifiConnected ? COLOR_SUCCESS : COLOR_CORAL;
+    tft.fillCircle(300, 14, 5, wifiColor);
 }
 
-void drawWifiStatus() {
-    int x = 295;  // Shifted right to make room for clock
-    int y = 14;
-    uint16_t color = wifiConnected ? COLOR_SUCCESS : COLOR_CORAL;
-    tft.fillCircle(x, y, 6, color);
-    // Subtle outer ring for depth
-    tft.drawCircle(x, y, 8, wifiConnected ? 0x1664 : 0x6000);
-}
+void drawStatBox(int x, int y, int w, int h, const char* label, uint32_t value,
+                 uint16_t valueColor, bool isMonetary, const char* sublabel) {
+    // Clear and draw box
+    tft.fillRoundRect(x, y, w, h, 3, COLOR_SURFACE);
+    tft.drawRoundRect(x, y, w, h, 3, COLOR_BORDER);
 
-void drawStatBox(int x, int y, int w, int h, const char* label, int value, uint16_t valueColor) {
-    // Elevated surface with subtle border
-    tft.fillRoundRect(x, y, w, h, 4, COLOR_SURFACE);
-    tft.drawRoundRect(x, y, w, h, 4, COLOR_BORDER);
-
-    // Label in muted secondary color
+    // Label
     tft.setTextColor(COLOR_TEXT_SECONDARY, COLOR_SURFACE);
     tft.setFreeFont(&FreeSans9pt7b);
-    tft.setCursor(x + 8, y + 18);
+    tft.setCursor(x + 6, y + 16);
     tft.print(label);
 
-    // Value in bold accent color
+    // Value
     tft.setTextColor(valueColor, COLOR_SURFACE);
-    tft.setFreeFont(&FreeSansBold24pt7b);
-    tft.setCursor(x + 8, y + h - 12);
-    tft.print(value);
+    tft.setFreeFont(&FreeSansBold18pt7b);
+    tft.setCursor(x + 6, y + h - 18);
+
+    if (isMonetary) {
+        uint32_t dollars = value / 100;
+        if (dollars >= 1000) {
+            tft.printf("$%u,%03u", dollars / 1000, dollars % 1000);
+        } else {
+            tft.printf("$%u", dollars);
+        }
+    } else {
+        tft.print(value);
+    }
+
+    // Sublabel (time window indicator)
+    if (sublabel && strlen(sublabel) > 0) {
+        tft.setTextColor(COLOR_TEXT_MUTED, COLOR_SURFACE);
+        tft.setFreeFont(&FreeSans9pt7b);
+        tft.setCursor(x + 6, y + h - 4);
+        tft.print(sublabel);
+    }
 }
 
-void drawStockDisplay() {
-    // Clear content area (from header to info row)
-    tft.fillRect(0, HEADER_HEIGHT, 320, INFO_ROW_Y - HEADER_HEIGHT, COLOR_BG);
+const char* getTimeWindowLabel() {
+    switch (ordersTimeWindow) {
+        case 1: return "(24h)";
+        case 2: return "(72h)";
+        default: return "(All)";
+    }
+}
 
-    if (!stockData.valid) {
-        tft.setTextColor(COLOR_ERROR, COLOR_BG);
+void drawOrdersDisplay() {
+    // Clear content area
+    tft.fillRect(0, BOX_START_Y, 320, INFO_ROW_Y - BOX_START_Y, COLOR_BG);
+
+    if (!ordersData.valid) {
+        tft.setTextColor(COLOR_CORAL, COLOR_BG);
         tft.setFreeFont(&FreeSans12pt7b);
-        tft.setCursor(60, 120);
+        tft.setCursor(60, 100);
         tft.print("No data available");
         return;
     }
 
-    // Main stats grid (2x2) with optimized dimensions
-    // Row 1: y=32 to y=112 (80px)
-    // Row 2: y=112 to y=192 (80px)
+    // Top-Left: Orders count (tappable for time window)
     drawStatBox(BOX_START_X, BOX_START_Y, BOX_WIDTH, BOX_HEIGHT,
-                "IN STOCK", stockData.inStock, COLOR_VALUE);
+                "ORDERS", ordersData.orders[ordersTimeWindow],
+                COLOR_ORDERS, false, getTimeWindowLabel());
 
+    // Top-Right: Visits or Support (tappable to toggle)
+    const char* trLabel = topRightMode == 0 ? "Visits 24h" : "Support";
+    uint32_t trValue = topRightMode == 0 ? ordersData.visits24h : ordersData.supportOpen;
     drawStatBox(BOX_START_X + BOX_WIDTH + BOX_GAP, BOX_START_Y, BOX_WIDTH, BOX_HEIGHT,
-                "RESERVED", stockData.reserved, COLOR_RESERVED);
+                trLabel, trValue, COLOR_TEXT_SECONDARY, false, "[stubbed]");
 
-    drawStatBox(BOX_START_X, BOX_START_Y + BOX_HEIGHT, BOX_WIDTH, BOX_HEIGHT,
-                "TOTAL SOLD", stockData.sold, COLOR_SOLD);
+    // Bottom-Left: Order Value (synced with time window)
+    drawStatBox(BOX_START_X, BOX_START_Y + BOX_HEIGHT + 2, BOX_WIDTH, BOX_HEIGHT,
+                "Order Value", ordersData.values[ordersTimeWindow],
+                COLOR_VALUE, true, getTimeWindowLabel());
 
-    drawStatBox(BOX_START_X + BOX_WIDTH + BOX_GAP, BOX_START_Y + BOX_HEIGHT, BOX_WIDTH, BOX_HEIGHT,
-                "TODAY", stockData.soldToday, COLOR_CORAL);
+    // Bottom-Right: To Ship with late count
+    char toShipSublabel[16];
+    if (ordersData.lateOver24h > 0) {
+        snprintf(toShipSublabel, sizeof(toShipSublabel), "(%u!)", ordersData.lateOver24h);
+    } else {
+        toShipSublabel[0] = '\0';
+    }
+    uint16_t toShipColor = ordersData.lateOver24h > 0 ? COLOR_LATE : COLOR_TOSHIP;
+    drawStatBox(BOX_START_X + BOX_WIDTH + BOX_GAP, BOX_START_Y + BOX_HEIGHT + 2, BOX_WIDTH, BOX_HEIGHT,
+                "To Ship", ordersData.toShip, toShipColor, false, toShipSublabel);
 }
 
 void drawInfoRow() {
-    // Info row background (touchable area)
     tft.fillRect(0, INFO_ROW_Y, 320, INFO_ROW_HEIGHT, COLOR_BG);
     tft.drawFastHLine(0, INFO_ROW_Y, 320, COLOR_DIVIDER);
 
-    if (!stockData.valid) return;
+    if (!ordersData.valid) return;
+
+    // Check if we have any orders to show
+    bool hasOrders = strlen(ordersData.lastOrders[0]) > 0;
 
     tft.setFreeFont(&FreeSans9pt7b);
+    tft.setCursor(10, INFO_ROW_Y + 18);
+    tft.setTextColor(COLOR_TEXT_SECONDARY, COLOR_BG);
+    tft.print("Last: ");
 
-    // Left side: Inventory Value in gold (money association)
-    tft.setTextColor(COLOR_GOLD, COLOR_BG);
-    tft.setCursor(10, INFO_ROW_Y + 20);
+    if (hasOrders && lastOrderIndex < 3 && strlen(ordersData.lastOrders[lastOrderIndex]) > 0) {
+        tft.setTextColor(COLOR_TEXT, COLOR_BG);
+        tft.print(ordersData.lastOrders[lastOrderIndex]);
 
-    // Format value as $X,XXX (dollars from cents)
-    int dollars = stockData.valueCents / 100;
-    if (dollars >= 1000) {
-        tft.printf("Value: $%d,%03d", dollars / 1000, dollars % 1000);
-    } else {
-        tft.printf("Value: $%d", dollars);
-    }
-
-    // Mode indicator dot
-    tft.fillCircle(180, INFO_ROW_Y + INFO_ROW_HEIGHT/2, 3,
-                   showAddedMode ? COLOR_MINT : COLOR_TEXT_MUTED);
-
-    // Right side: Toggle between Last Sale and Added Today
-    tft.setCursor(195, INFO_ROW_Y + 20);
-
-    if (showAddedMode) {
-        // Show "Added: XXX" (3 digits, capped at 999)
-        tft.setTextColor(COLOR_MINT, COLOR_BG);
-        tft.printf("Added: %03d", min(stockData.addedToday, 999));
-    } else {
-        // Show "Last: Xh ago" or similar
-        tft.setTextColor(COLOR_TEXT_SECONDARY, COLOR_BG);
-        if (stockData.lastSale == 0) {
-            tft.print("Last: --");
-        } else {
-            unsigned long now = stockData.timestamp;
-            unsigned long diff = now - stockData.lastSale;
-            if (diff < 60) {
-                tft.printf("Last: %lus", diff);
-            } else if (diff < 3600) {
-                tft.printf("Last: %lum", diff / 60);
-            } else if (diff < 86400) {
-                tft.printf("Last: %luh", diff / 3600);
-            } else {
-                tft.printf("Last: %lud", diff / 86400);
-            }
+        // Value
+        uint32_t val = ordersData.lastOrderValues[lastOrderIndex];
+        if (val > 0) {
+            tft.setTextColor(COLOR_VALUE, COLOR_BG);
+            tft.printf(" $%u.%02u", val / 100, val % 100);
         }
+    } else {
+        tft.setTextColor(COLOR_TEXT_MUTED, COLOR_BG);
+        tft.print("--");
     }
 
-    // Subtle touch indicator (small dots at edges)
-    tft.fillCircle(3, INFO_ROW_Y + INFO_ROW_HEIGHT/2, 2, COLOR_BORDER);
-    tft.fillCircle(317, INFO_ROW_Y + INFO_ROW_HEIGHT/2, 2, COLOR_BORDER);
+    // Order index indicator (dots)
+    int dotX = 280;
+    int dotY = INFO_ROW_Y + INFO_ROW_HEIGHT / 2;
+    for (int i = 0; i < 3; i++) {
+        uint16_t dotColor = (i == lastOrderIndex) ? COLOR_MINT : COLOR_BORDER;
+        tft.fillCircle(dotX + i * 10, dotY, 3, dotColor);
+    }
+
+    // Touch hint
+    tft.fillCircle(3, INFO_ROW_Y + INFO_ROW_HEIGHT / 2, 2, COLOR_BORDER);
+    tft.fillCircle(317, INFO_ROW_Y + INFO_ROW_HEIGHT / 2, 2, COLOR_BORDER);
 }
 
 void drawFooter() {
     tft.fillRect(0, FOOTER_Y, 320, FOOTER_HEIGHT, COLOR_BG);
     tft.drawFastHLine(0, FOOTER_Y, 320, COLOR_DIVIDER);
 
-    tft.setTextColor(COLOR_TEXT_MUTED, COLOR_BG);
     tft.setFreeFont(&FreeSans9pt7b);
 
-    // Last update timestamp (HH:MM DD MMM YYYY)
-    tft.setCursor(10, FOOTER_Y + 15);
-    if (stockData.valid && timeConfigured) {
-        struct tm timeinfo;
-        if (getLocalTime(&timeinfo, 100)) {
-            char buf[20];
-            strftime(buf, sizeof(buf), "%H:%M %d %b %Y", &timeinfo);
-            tft.print(buf);
-        } else {
-            tft.print("--:-- -- --- ----");
-        }
-    } else {
-        tft.print("Waiting for data...");
-    }
+    // Time and date
+    char timeBuf[12], dateBuf[12];
+    getCurrentTimeStr(timeBuf, sizeof(timeBuf));
+    getCurrentDateStr(dateBuf, sizeof(dateBuf));
 
-    // WiFi indicator text
-    tft.setCursor(230, FOOTER_Y + 15);
-    tft.print(wifiConnected ? "WiFi OK" : "No WiFi");
+    tft.setTextColor(COLOR_TEXT_MUTED, COLOR_BG);
+    tft.setCursor(10, FOOTER_Y + 15);
+    tft.printf("%s CST   %s", timeBuf, dateBuf);
+
+    // Stale indicator
+    if (isDataStale()) {
+        uint32_t staleSec = getStaleSeconds();
+        tft.setTextColor(COLOR_STALE, COLOR_BG);
+        tft.setCursor(230, FOOTER_Y + 15);
+        tft.printf("STALE %u", staleSec);
+    }
 }
 
 void drawConnecting() {
     tft.fillScreen(COLOR_BG);
     drawHeader();
 
-    tft.setTextColor(COLOR_VALUE, COLOR_BG);
+    tft.setTextColor(COLOR_ORDERS, COLOR_BG);
     tft.setFreeFont(&FreeSans12pt7b);
     tft.setCursor(60, 110);
-    tft.print("Connecting to WiFi...");
+    tft.print("Connecting...");
 
     tft.setTextColor(COLOR_TEXT_SECONDARY, COLOR_BG);
     tft.setFreeFont(&FreeSans9pt7b);
@@ -329,38 +383,29 @@ void drawConnecting() {
     tft.print(wifi_ssid);
 }
 
-void drawError(const char* message, int httpCode = 0) {
-    tft.fillRect(0, HEADER_HEIGHT, 320, INFO_ROW_Y - HEADER_HEIGHT, COLOR_BG);
+void drawError(const char* message, int httpCode) {
+    tft.fillRect(0, BOX_START_Y, 320, INFO_ROW_Y - BOX_START_Y, COLOR_BG);
 
-    tft.setTextColor(COLOR_ERROR, COLOR_BG);
+    tft.setTextColor(COLOR_CORAL, COLOR_BG);
     tft.setFreeFont(&FreeSans12pt7b);
-    tft.setCursor(20, 70);
+    tft.setCursor(20, 60);
     tft.print("Error:");
 
     tft.setTextColor(COLOR_TEXT_SECONDARY, COLOR_BG);
     tft.setFreeFont(&FreeSans9pt7b);
-    tft.setCursor(20, 95);
+    tft.setCursor(20, 85);
     tft.print(message);
 
-    // Show HTTP code if available
     if (httpCode != 0) {
-        tft.setCursor(20, 120);
-        tft.print("HTTP: ");
-        tft.print(httpCode);
+        tft.setCursor(20, 110);
+        tft.printf("HTTP: %d", httpCode);
     }
 
-    // Show ESP32 IP for debugging
     if (WiFi.status() == WL_CONNECTED) {
-        tft.setCursor(20, 145);
+        tft.setCursor(20, 135);
         tft.print("IP: ");
         tft.print(WiFi.localIP().toString());
     }
-
-    // Show target URL (truncated if needed)
-    tft.setTextColor(COLOR_TEXT_MUTED, COLOR_BG);
-    tft.setCursor(20, 170);
-    tft.print("-> ");
-    tft.print(api_url);
 }
 
 // ============================================================================
@@ -377,9 +422,8 @@ bool connectWiFi() {
         Serial.print(".");
         attempts++;
 
-        // Animate connection indicator
         int dotX = 160 + (attempts % 3) * 15;
-        tft.fillCircle(dotX, 160, 5, COLOR_VALUE);
+        tft.fillCircle(dotX, 160, 5, COLOR_ORDERS);
         if (attempts > 0) {
             tft.fillCircle(dotX - 15, 160, 5, COLOR_BG);
         }
@@ -391,20 +435,19 @@ bool connectWiFi() {
         Serial.println(WiFi.localIP());
         wifiConnected = true;
 
-        // Configure NTP time with timezone - use configTzTime for reliable TZ handling
         configTzTime(TIMEZONE, NTP_SERVER);
-        Serial.println("NTP time configured for Central timezone (DST-aware)");
+        Serial.println("NTP configured for Central Time");
         timeConfigured = true;
 
         return true;
     }
 
-    Serial.println("\nWiFi connection failed!");
+    Serial.println("\nWiFi failed!");
     wifiConnected = false;
     return false;
 }
 
-bool fetchStockData() {
+bool fetchOrdersData() {
     if (WiFi.status() != WL_CONNECTED) {
         wifiConnected = false;
         return false;
@@ -412,9 +455,8 @@ bool fetchStockData() {
 
     wifiConnected = true;
 
-    // Use WiFiClientSecure for HTTPS
     WiFiClientSecure client;
-    client.setInsecure();  // Skip certificate verification (embedded device)
+    client.setInsecure();
 
     HTTPClient http;
 
@@ -422,9 +464,8 @@ bool fetchStockData() {
     Serial.println(api_url);
 
     http.begin(client, api_url);
-    http.setTimeout(10000);  // 10 second timeout
+    http.setTimeout(10000);
 
-    // Add display token header if configured (required for prod)
     if (strlen(display_token) > 0) {
         http.addHeader("X-CardMint-Display-Token", display_token);
     }
@@ -435,38 +476,77 @@ bool fetchStockData() {
         String payload = http.getString();
         Serial.println("Response: " + payload);
 
-        // Parse compact JSON: {s, r, d, td, at, v, ls, t}
         JsonDocument doc;
         DeserializationError error = deserializeJson(doc, payload);
 
         if (error) {
-            Serial.print("JSON parse error: ");
+            Serial.print("JSON error: ");
             Serial.println(error.c_str());
             http.end();
             return false;
         }
 
-        // Check for error response
         if (doc["e"].is<int>()) {
-            Serial.println("API returned error");
+            Serial.println("API error response");
             http.end();
             return false;
         }
 
-        stockData.inStock = doc["s"] | 0;
-        stockData.reserved = doc["r"] | 0;
-        stockData.sold = doc["d"] | 0;
-        stockData.soldToday = doc["td"] | 0;
-        stockData.addedToday = doc["at"] | 0;
-        stockData.valueCents = doc["v"] | 0;
-        stockData.lastSale = doc["ls"] | 0;
-        stockData.timestamp = doc["t"] | 0;
-        stockData.valid = true;
+        // Parse orders array: o[all, 24h, 72h]
+        JsonArray oArr = doc["o"].as<JsonArray>();
+        if (oArr) {
+            ordersData.orders[0] = oArr[0] | 0;
+            ordersData.orders[1] = oArr[1] | 0;
+            ordersData.orders[2] = oArr[2] | 0;
+        }
 
-        Serial.printf("Stock: %d, Reserved: %d, Sold: %d, Today: %d, Added: %d, Value: $%.2f\n",
-                      stockData.inStock, stockData.reserved,
-                      stockData.sold, stockData.soldToday,
-                      stockData.addedToday, stockData.valueCents / 100.0);
+        // Parse values array: v[all, 24h, 72h]
+        JsonArray vArr = doc["v"].as<JsonArray>();
+        if (vArr) {
+            ordersData.values[0] = vArr[0] | 0;
+            ordersData.values[1] = vArr[1] | 0;
+            ordersData.values[2] = vArr[2] | 0;
+        }
+
+        // Parse top-right: tr[visits, support]
+        JsonArray trArr = doc["tr"].as<JsonArray>();
+        if (trArr) {
+            ordersData.visits24h = trArr[0] | 0;
+            ordersData.supportOpen = trArr[1] | 0;
+        }
+
+        // Parse bottom-right: br[toShip, late]
+        JsonArray brArr = doc["br"].as<JsonArray>();
+        if (brArr) {
+            ordersData.toShip = brArr[0] | 0;
+            ordersData.lateOver24h = brArr[1] | 0;
+        }
+
+        // Parse last orders: l[[first, last, cents], ...]
+        JsonArray lArr = doc["l"].as<JsonArray>();
+        if (lArr) {
+            for (int i = 0; i < 3 && i < lArr.size(); i++) {
+                JsonArray order = lArr[i].as<JsonArray>();
+                if (order && order.size() >= 3) {
+                    const char* firstName = order[0] | "";
+                    const char* lastName = order[1] | "";
+                    snprintf(ordersData.lastOrders[i], sizeof(ordersData.lastOrders[i]),
+                             "%s %s", firstName, lastName);
+                    ordersData.lastOrderValues[i] = order[2] | 0;
+                } else {
+                    ordersData.lastOrders[i][0] = '\0';
+                    ordersData.lastOrderValues[i] = 0;
+                }
+            }
+        }
+
+        ordersData.timestamp = doc["t"] | 0;
+        ordersData.valid = true;
+        lastSuccessfulFetch = millis();
+
+        Serial.printf("Orders: %u/%u/%u, ToShip: %u, Late: %u\n",
+                      ordersData.orders[0], ordersData.orders[1], ordersData.orders[2],
+                      ordersData.toShip, ordersData.lateOver24h);
 
         http.end();
         return true;
@@ -482,37 +562,44 @@ bool fetchStockData() {
 // Touch Handling
 // ============================================================================
 
-// Touch calibration for ESP32-2432S028R (CYD) with XPT2046
-// These values map the raw touch coordinates to screen pixels.
-// Calibrate by touching corners and reading raw values from serial output.
-// Format: map(raw, RAW_MIN, RAW_MAX, SCREEN_MIN, SCREEN_MAX)
-#define TOUCH_X_MIN   200   // Raw X at left edge
-#define TOUCH_X_MAX  3800   // Raw X at right edge
-#define TOUCH_Y_MIN   280   // Raw Y at top edge
-#define TOUCH_Y_MAX  3850   // Raw Y at bottom edge
-
 void checkTouch() {
     if (!touch.touched()) return;
 
-    // Debounce: ignore touches within 300ms of last touch
-    unsigned long now = millis();
+    uint32_t now = millis();
     if (now - lastTouchTime < 300) return;
 
     TS_Point p = touch.getPoint();
 
-    // Map raw touch coordinates to screen coordinates
-    // Clamp to screen bounds to handle edge touches
     int touchX = constrain(map(p.x, TOUCH_X_MIN, TOUCH_X_MAX, 0, 320), 0, 319);
     int touchY = constrain(map(p.y, TOUCH_Y_MIN, TOUCH_Y_MAX, 0, 240), 0, 239);
 
-    Serial.printf("Touch raw(%d,%d) -> screen(%d,%d)\n", p.x, p.y, touchX, touchY);
+    Serial.printf("Touch: (%d, %d)\n", touchX, touchY);
 
-    // Check if touch is in info row area (y=192-220)
+    // Top-Left box: Cycle orders time window
+    if (touchX < 160 && touchY >= BOX_START_Y && touchY < BOX_START_Y + BOX_HEIGHT) {
+        ordersTimeWindow = (ordersTimeWindow + 1) % 3;
+        drawOrdersDisplay();
+        lastTouchTime = now;
+        Serial.printf("Time window: %d\n", ordersTimeWindow);
+        return;
+    }
+
+    // Top-Right box: Toggle visits/support
+    if (touchX >= 160 && touchY >= BOX_START_Y && touchY < BOX_START_Y + BOX_HEIGHT) {
+        topRightMode = (topRightMode + 1) % 2;
+        drawOrdersDisplay();
+        lastTouchTime = now;
+        Serial.printf("Top-right mode: %d\n", topRightMode);
+        return;
+    }
+
+    // Info row: Cycle through last orders
     if (touchY >= INFO_ROW_Y && touchY < INFO_ROW_Y + INFO_ROW_HEIGHT) {
-        showAddedMode = !showAddedMode;
+        lastOrderIndex = (lastOrderIndex + 1) % 3;
         drawInfoRow();
         lastTouchTime = now;
-        Serial.printf("Toggle info row mode: %s\n", showAddedMode ? "Added" : "Last Sale");
+        Serial.printf("Last order index: %d\n", lastOrderIndex);
+        return;
     }
 }
 
@@ -523,42 +610,32 @@ void checkTouch() {
 void setup() {
     Serial.begin(115200);
     delay(100);
-    Serial.println("\n\n=== CardMint Stock Display v2 ===");
+    Serial.println("\n\n=== CardMint Orders Dashboard V2 ===");
     Serial.print("API URL: ");
     Serial.println(api_url);
 
-    // Initialize display
     tft.init();
-
-    // Turn on backlight first
     pinMode(TFT_BL, OUTPUT);
     digitalWrite(TFT_BL, HIGH);
-
-    // Set rotation for landscape mode (R=1 confirmed working for CYD)
     tft.setRotation(1);
-    Serial.printf("Display: %dx%d (rotation 1)\n", tft.width(), tft.height());
+    Serial.printf("Display: %dx%d\n", tft.width(), tft.height());
 
     tft.fillScreen(COLOR_BG);
 
-    // Initialize touch controller on separate SPI bus (HSPI)
-    // CYD has XPT2046 on different pins than the display
+    // Initialize touch
     touchSPI.begin(TOUCH_SPI_SCK, TOUCH_SPI_MISO, TOUCH_SPI_MOSI, TOUCH_CS);
     touch.begin(touchSPI);
-    touch.setRotation(1);  // Match display rotation (landscape)
-    Serial.println("Touch controller initialized on HSPI");
+    touch.setRotation(1);
+    Serial.println("Touch initialized");
 
-    // Show connecting screen
     drawConnecting();
 
-    // Connect to WiFi (also configures NTP)
     if (connectWiFi()) {
         tft.fillScreen(COLOR_BG);
         drawHeader();
-        drawWifiStatus();
 
-        // Initial data fetch
-        if (fetchStockData()) {
-            drawStockDisplay();
+        if (fetchOrdersData()) {
+            drawOrdersDisplay();
             drawInfoRow();
         } else {
             drawError("Failed to fetch data", lastHttpError);
@@ -566,62 +643,50 @@ void setup() {
         drawFooter();
         lastRefresh = millis();
     } else {
-        drawError("WiFi connection failed");
+        drawError("WiFi connection failed", 0);
         drawFooter();
     }
 }
 
 void loop() {
-    unsigned long now = millis();
+    uint32_t now = millis();
 
-    // Check for touch input
     checkTouch();
 
     // Refresh data periodically
     if (now - lastRefresh >= refresh_interval_ms) {
-        Serial.println("Refreshing data...");
+        Serial.println("Refreshing...");
 
-        // Check WiFi connection
         if (WiFi.status() != WL_CONNECTED) {
-            Serial.println("WiFi disconnected, reconnecting...");
+            Serial.println("WiFi lost, reconnecting...");
             wifiConnected = false;
-            drawWifiStatus();
+            drawHeader();
 
             if (!connectWiFi()) {
-                drawError("WiFi reconnection failed");
+                drawError("WiFi reconnect failed", 0);
                 drawFooter();
                 lastRefresh = now;
                 return;
             }
         }
 
-        // Fetch and display data
-        if (fetchStockData()) {
-            drawStockDisplay();
+        if (fetchOrdersData()) {
+            drawOrdersDisplay();
             drawInfoRow();
-        } else {
-            // Keep showing old data but update footer
-            Serial.println("Fetch failed, keeping old data");
         }
+        // Keep old data visible on fetch failure
 
-        drawWifiStatus();
+        drawHeader();
         drawFooter();
         lastRefresh = now;
     }
 
-    // Update clock every minute
-    if (now - lastClockUpdate >= 60000) {
+    // Update clock every 10 seconds
+    if (now - lastClockUpdate >= 10000) {
         drawHeader();
-        drawWifiStatus();
+        drawFooter();
         lastClockUpdate = now;
     }
 
-    // Update footer every minute (shows timestamp, not relative time)
-    static unsigned long lastFooterUpdate = 0;
-    if (now - lastFooterUpdate >= 60000) {
-        drawFooter();
-        lastFooterUpdate = now;
-    }
-
-    delay(50);  // Small delay, faster for touch responsiveness
+    delay(50);
 }
