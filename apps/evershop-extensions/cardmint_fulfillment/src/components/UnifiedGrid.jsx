@@ -19,6 +19,7 @@ export default function UnifiedGrid({
   onPageChange,
   onRefresh,
   onOrderClick,
+  onOpenImportModal,
 }) {
   const [ratesModalOpen, setRatesModalOpen] = useState(false);
   const [selectedShipment, setSelectedShipment] = useState(null);
@@ -114,7 +115,7 @@ export default function UnifiedGrid({
   });
 
   const statusTagStyle = (status, isExternal = false) => {
-    // External fulfillment gets a distinct neutral gray badge
+    // Order List (no address yet) gets a distinct amber badge
     if (isExternal) {
       return {
         display: 'inline-block',
@@ -122,8 +123,8 @@ export default function UnifiedGrid({
         borderRadius: '12px',
         fontSize: '11px',
         fontWeight: 500,
-        backgroundColor: '#E5E7EB',
-        color: '#6B7280',
+        backgroundColor: '#FFF3E0',
+        color: '#E65100',
       };
     }
 
@@ -190,9 +191,63 @@ export default function UnifiedGrid({
     return formatCurrency(productCents + shippingCents);
   };
 
-  const formatDate = (timestamp) => {
+  const formatOrderDateTime = (timestamp, includeTime) => {
     if (!timestamp) return '—';
-    return new Date(timestamp * 1000).toLocaleDateString();
+    const date = new Date(timestamp * 1000);
+    if (!includeTime) return date.toLocaleDateString();
+    return date.toLocaleString(undefined, {
+      year: 'numeric',
+      month: 'short',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  };
+
+  // Marketplace imports use CST-normalized midnight for date-only values (UTC 06:00:00).
+  // Show time only when the import provided a time-of-day (e.g., ordertimes.csv).
+  const hasKnownOrderTime = (timestamp) => {
+    if (!timestamp) return false;
+    const date = new Date(timestamp * 1000);
+    return !(date.getUTCHours() === 6 && date.getUTCMinutes() === 0 && date.getUTCSeconds() === 0);
+  };
+
+  const formatProductWithShipping = (productCents, shippingCents) => {
+    if (productCents == null) return '—';
+    const product = formatCurrency(productCents);
+    if (shippingCents == null) return product;
+    return `${product} (${formatCurrency(shippingCents)})`;
+  };
+
+  const formatTrackingAndCarrier = (shipping) => {
+    const trackingNumber = shipping?.trackingNumber;
+    const carrier = shipping?.carrier;
+
+    if (!trackingNumber && !carrier) return '—';
+
+    const trackingDisplay = trackingNumber || '—';
+    const carrierDisplay = carrier ? ` — ${carrier}` : '';
+
+    if (shipping?.trackingUrl && trackingNumber) {
+      return (
+        <a
+          href={shipping.trackingUrl}
+          target="_blank"
+          rel="noreferrer"
+          style={{ color: '#1565C0', textDecoration: 'none', fontFamily: 'monospace', fontSize: '12px' }}
+        >
+          {trackingDisplay}
+          <span style={{ fontFamily: 'inherit' }}>{carrierDisplay}</span>
+        </a>
+      );
+    }
+
+    return (
+      <span style={{ fontFamily: 'monospace', fontSize: '12px' }}>
+        {trackingDisplay}
+        <span style={{ fontFamily: 'inherit' }}>{carrierDisplay}</span>
+      </span>
+    );
   };
 
   const getOrderDetailsUrl = (f) => {
@@ -243,11 +298,10 @@ export default function UnifiedGrid({
           <tr>
             <th style={thStyle}>Order #</th>
             <th style={thStyle}>Buyer Name</th>
-            <th style={thStyle}>Order Date</th>
+            <th style={thStyle}>Order Date/Time (if known)</th>
             <th style={thStyle}>Status</th>
-            <th style={thStyle}>Shipping Type</th>
-            <th style={thStyle}>Product Amt</th>
-            <th style={thStyle}>Shipping Amt</th>
+            <th style={thStyle}>Tracking Number – Carrier</th>
+            <th style={thStyle}>Product Amt (shipping fee)</th>
             <th style={thStyle}>Total Amt</th>
             {hasMarketplaceShipments && <th style={thStyle}>Actions</th>}
           </tr>
@@ -269,7 +323,7 @@ export default function UnifiedGrid({
                       color: '#E65100',
                       border: '1px solid #FFB74D',
                     }}>
-                      EXTERNAL
+                      NEEDS SHIPPING EXPORT
                     </span>
                   )}
                 </div>
@@ -341,10 +395,24 @@ export default function UnifiedGrid({
                   <span style={{ color: '#9CA3AF', fontStyle: 'italic' }}>PII Protected</span>
                 )}
               </td>
-              <td style={tdStyle}>{formatDate(f.timeline?.createdAt)}</td>
+              <td style={tdStyle}>
+                {formatOrderDateTime(
+                  f.timeline?.createdAt,
+                  f.source === 'cardmint' || hasKnownOrderTime(f.timeline?.createdAt)
+                )}
+              </td>
               <td style={tdStyle}>
                 {f.isExternal ? (
-                  <span style={statusTagStyle(f.status, true)}>External</span>
+                  <span
+                    style={statusTagStyle(f.status, true)}
+                    title={
+                      f.source === 'tcgplayer'
+                        ? 'Missing address from TCGPlayer Order List export. Import TCGPlayer Shipping Export CSV to enable label purchase.'
+                        : 'External fulfillment (label purchase disabled)'
+                    }
+                  >
+                    {f.source === 'tcgplayer' ? 'Needs Shipping Export' : 'External'}
+                  </span>
                 ) : (
                   <span style={statusTagStyle(f.status)}>{f.status.replace('_', ' ')}</span>
                 )}
@@ -359,11 +427,8 @@ export default function UnifiedGrid({
                   </div>
                 )}
               </td>
-              <td style={tdStyle}>
-                {f.shippingMethod || <span style={{ color: '#9CA3AF' }}>—</span>}
-              </td>
-              <td style={tdStyle}>{formatCurrency(f.valueCents)}</td>
-              <td style={tdStyle}>{formatCurrency(f.shippingCostCents)}</td>
+              <td style={tdStyle}>{formatTrackingAndCarrier(f.shipping)}</td>
+              <td style={tdStyle}>{formatProductWithShipping(f.valueCents, f.shippingCostCents)}</td>
               <td style={tdStyle}>{formatTotalCurrency(f.valueCents, f.shippingCostCents)}</td>
               {hasMarketplaceShipments && (
                 <td style={tdStyle}>
@@ -371,6 +436,8 @@ export default function UnifiedGrid({
                     <MarketplaceShipmentActions
                       shipment={{
                         id: f.sourceRef.shipmentId,
+                        source: f.source,
+                        importFormat: f.importFormat,
                         status: f.status,
                         labelUrl: f.shipping?.labelUrl,
                         trackingNumber: f.shipping?.trackingNumber,
@@ -380,6 +447,7 @@ export default function UnifiedGrid({
                       }}
                       onOpenRatesModal={handleOpenRatesModal}
                       onStatusChange={handleStatusChange}
+                      onOpenImportModal={onOpenImportModal}
                     />
                   ) : (
                     <span style={{ color: '#9CA3AF' }}>—</span>

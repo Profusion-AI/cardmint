@@ -1,0 +1,6 @@
+{
+  "methods": ["GET"],
+  "path": "/fulfillment/orders/:source/:id",
+  "access": "private"
+}
+

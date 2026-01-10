@@ -867,11 +867,13 @@ export function registerMarketplaceRoutes(app: Express, ctx: AppContext): void {
       });
     }
 
-    // 2b. GUARDRAIL: Block external fulfillment orders (Codex #7)
-    if (shipmentData.is_external === 1) {
+    // 2b. Order List imports have no address; prompt to import Shipping Export CSV.
+    // (If address exists, allow rates even if flag is stale.)
+    if (shipmentData.is_external === 1 && !shipmentData.decryptedAddress) {
       return res.status(400).json({
-        error: "EXTERNAL_FULFILLMENT",
-        message: "Cannot purchase labels for external fulfillment orders. These are fulfilled via TCGPlayer.",
+        error: "MISSING_SHIPPING_EXPORT",
+        message:
+          "Missing shipping address (TCGPlayer Order List export has no address). Import the TCGPlayer Shipping Export CSV for this order to enable label purchase.",
       });
     }
 
@@ -1029,7 +1031,6 @@ export function registerMarketplaceRoutes(app: Express, ctx: AppContext): void {
       {
         orderNumber,
         productDescription: firstItemDescription,
-        invoiceNumber: orderNumber,
         reference: `Shipment ${shipmentId}`,
       }
     );
@@ -1133,11 +1134,13 @@ export function registerMarketplaceRoutes(app: Express, ctx: AppContext): void {
       return res.status(404).json({ error: "Shipment not found" });
     }
 
-    // 1b. GUARDRAIL: Block external fulfillment orders (Codex #7)
-    if (shipment.is_external === 1) {
+    // 1b. Order List imports have no address; prompt to import Shipping Export CSV.
+    // If rates were already fetched (easypost_shipment_id exists), allow purchase.
+    if (shipment.is_external === 1 && !shipment.easypost_shipment_id) {
       return res.status(400).json({
-        error: "EXTERNAL_FULFILLMENT",
-        message: "Cannot purchase labels for external fulfillment orders. These are fulfilled via TCGPlayer.",
+        error: "MISSING_SHIPPING_EXPORT",
+        message:
+          "Missing shipping address (TCGPlayer Order List export has no address). Import the TCGPlayer Shipping Export CSV for this order to enable label purchase.",
       });
     }
 

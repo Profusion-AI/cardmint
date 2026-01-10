@@ -131,8 +131,6 @@ export interface MarketplaceShipmentOptions {
   orderNumber?: string;
   /** Product description for print_custom_2 (e.g., SKU or first item name) */
   productDescription?: string;
-  /** Invoice number for matching key (defaults to orderNumber) */
-  invoiceNumber?: string;
   /** Reference field for shipment (optional, used for CSV reconciliation) */
   reference?: string;
 }
@@ -453,12 +451,9 @@ export class EasyPostService {
         currency: "USD",
       };
 
-      // Set invoice_number for CSV reconciliation matching
-      if (labelOptions?.invoiceNumber || labelOptions?.orderNumber) {
-        shipmentOptions.invoice_number = labelOptions.invoiceNumber || labelOptions.orderNumber;
-      }
-
       // USPS custom print fields (appear on physical label)
+      // NOTE: invoice_number removed - it duplicates order number on label.
+      // Order tracking via print_custom_1 and reference field is sufficient.
       // Truncate to 35 chars (EasyPost limit for custom fields)
       if (labelOptions?.orderNumber) {
         shipmentOptions.print_custom_1 = labelOptions.orderNumber.substring(0, 35);

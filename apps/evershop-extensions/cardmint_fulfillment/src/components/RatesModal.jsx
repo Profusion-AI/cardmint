@@ -173,7 +173,7 @@ export default function RatesModal({
       const data = await response.json();
 
       if (!data.ok) {
-        setError(data.error || data.message || 'Failed to fetch rates');
+        setError(data.message || data.error || 'Failed to fetch rates');
         return;
       }
 
@@ -266,7 +266,7 @@ export default function RatesModal({
       const data = await response.json();
 
       if (!data.ok) {
-        setError(data.error || data.message || 'Failed to purchase label');
+        setError(data.message || data.error || 'Failed to purchase label');
         return;
       }
 

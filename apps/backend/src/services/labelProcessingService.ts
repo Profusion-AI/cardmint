@@ -7,7 +7,7 @@
  * - 4" x 6" labels
  * - 203 DPI resolution
  * - 812 x 1218 pixels
- * - Grayscale (thermal printers are monochrome)
+ * - 1-bit black/white (thermal printers are monochrome, avoids CUPS dithering artifacts)
  *
  * Output formats:
  * - PNG: For GIMP workflow (respects DPI metadata)
@@ -34,7 +34,7 @@ const PDF_HEIGHT_PTS = 6 * 72;  // 432 pts = 6 inches
 
 // Cache directory for processed labels
 const LABEL_CACHE_DIR = runtimeConfig.labelCacheDir || "/var/lib/cardmint/label-cache";
-const LABEL_CACHE_VERSION = "v3"; // Bump to invalidate cached labels when processing changes
+const LABEL_CACHE_VERSION = "v4"; // Bump to invalidate cached labels when processing changes
 
 export type LabelOutputFormat = "png" | "pdf";
 
@@ -129,8 +129,8 @@ export async function processLabelForPL60(
 
   // Process with sharp:
   // 1. Resize to 812x1218 (fit within, maintaining aspect ratio)
-  // 2. Convert to grayscale (thermal printers are monochrome)
-  // 3. Ensure PNG format
+  // 2. Convert to 1-bit black/white (bypasses CUPS dithering that causes jagged lines)
+  // 3. Ensure PNG format with correct DPI metadata
   const pngBuffer = await sharp(originalBuffer)
     .resize(PL60_WIDTH, PL60_HEIGHT, {
       fit: "contain",
@@ -138,8 +138,9 @@ export async function processLabelForPL60(
       position: "centre",
     })
     .flatten({ background: { r: 255, g: 255, b: 255 } })
-    .grayscale() // Convert to grayscale for thermal printing
-    // Critical: set correct output density so OS print dialogs don't rescale (causes jagged/stair-step artifacts)
+    .grayscale() // Convert to grayscale first
+    .threshold(128) // Then threshold to pure 1-bit black/white (50% cutoff)
+    // Critical: set correct output density so OS print dialogs don't rescale
     .withMetadata({ density: PL60_DPI })
     .png({
       compressionLevel: 6,

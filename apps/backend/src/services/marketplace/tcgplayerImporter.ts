@@ -39,8 +39,8 @@ export interface TcgplayerCsvRow {
   "Item Count": string;
   "Value Of Products": string;
   "Shipping Fee Paid": string;
-  "Tracking #": string;
-  Carrier: string;
+  "Tracking #": string | undefined;
+  Carrier: string | undefined;
 }
 
 /**
@@ -50,14 +50,20 @@ export interface TcgplayerCsvRow {
 export interface TcgplayerOrderListRow {
   "Order #": string;
   "Buyer Name": string;
-  "Order Date": string; // "Saturday, 03 January 2026"
+  // TCGPlayer Order List uses long dates like "Saturday, 03 January 2026"
+  // Some variants include a datetime column like: "1/7/2026, 11:47:55 PM" (see ordertimes.csv)
+  "Order Date": string | undefined;
+  "Order Date0": string | undefined;
   Status: string;
   "Shipping Type": string;
   "Product Amt": string;
   "Shipping Amt": string;
   "Total Amt": string;
   "Buyer Paid": string;
-  "Carrier Information": string;
+  "Carrier Information": string | undefined;
+  // Some TCGPlayer variants include explicit tracking columns (similar to Shipping Export).
+  "Tracking #": string | undefined;
+  Carrier: string | undefined;
 }
 
 export interface ImportResult {
@@ -66,6 +72,7 @@ export interface ImportResult {
   imported: number;
   skipped: number;
   upgraded: number; // Order List → Shipping Export upgrades
+  updated: number; // Existing order/shipment updated (e.g., tracking/order time)
   errors: Array<{ row: number; orderId: string; error: string }>;
   preview?: Array<{
     orderId: string;
@@ -185,6 +192,82 @@ function parseLongDate(dateStr: string): number {
   return Math.floor(utcDate / 1000);
 }
 
+/**
+ * Parse US date+time format as CST timestamp.
+ *
+ * Format examples:
+ * - "1/7/2026, 11:47:55 PM"
+ * - "12/30/2025 8:24:29 PM"
+ */
+function parseDateTime(dateStr: string): number {
+  if (!dateStr) {
+    throw new Error("Empty date string");
+  }
+
+  const match = dateStr.match(
+    /^(\d{1,2})\/(\d{1,2})\/(\d{4})\s*,?\s*(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)$/i
+  );
+  if (!match) {
+    throw new Error(`Invalid date-time format: ${dateStr}`);
+  }
+
+  const month = parseInt(match[1], 10);
+  const day = parseInt(match[2], 10);
+  const year = parseInt(match[3], 10);
+  let hour = parseInt(match[4], 10);
+  const minute = parseInt(match[5], 10);
+  const second = match[6] ? parseInt(match[6], 10) : 0;
+  const ampm = match[7].toUpperCase();
+
+  if (month < 1 || month > 12 || day < 1 || day > 31) {
+    throw new Error(`Invalid date values: ${dateStr}`);
+  }
+  if (hour < 1 || hour > 12 || minute < 0 || minute > 59 || second < 0 || second > 59) {
+    throw new Error(`Invalid time values: ${dateStr}`);
+  }
+
+  // Convert to 24-hour clock
+  if (ampm === "AM") {
+    hour = hour === 12 ? 0 : hour;
+  } else {
+    hour = hour === 12 ? 12 : hour + 12;
+  }
+
+  // Interpret as CST (UTC-6): add 6 hours to get UTC
+  const utcDate = Date.UTC(year, month - 1, day, hour + 6, minute, second, 0);
+  return Math.floor(utcDate / 1000);
+}
+
+function parseOrderListDate(dateStr: string): number {
+  const trimmed = dateStr?.trim();
+  if (!trimmed) {
+    throw new Error("Empty date string");
+  }
+
+  // Try long date first (standard Order List format)
+  try {
+    return parseLongDate(trimmed);
+  } catch {
+    // Fall through
+  }
+
+  // Try date+time (ordertimes.csv-style)
+  try {
+    return parseDateTime(trimmed);
+  } catch {
+    // Fall through
+  }
+
+  // Fallback to date-only parsing (e.g., "12/30/2025")
+  return parseDate(trimmed);
+}
+
+function isCstMidnightTimestamp(timestamp: number): boolean {
+  if (!timestamp) return false;
+  const d = new Date(timestamp * 1000);
+  return d.getUTCHours() === 6 && d.getUTCMinutes() === 0 && d.getUTCSeconds() === 0;
+}
+
 function parseWeight(weightStr: string): number {
   // TCGPlayer provides weight in oz as decimal (e.g., "0.07")
   const weight = parseFloat(weightStr);
@@ -209,6 +292,93 @@ function parseItemCount(countStr: string): number {
     return 1;
   }
   return count;
+}
+
+function normalizeTrackingNumber(raw: string | undefined): string | null {
+  if (!raw) return null;
+  const cleaned = raw.trim().replace(/[\s-]/g, "");
+  return cleaned.length > 0 ? cleaned : null;
+}
+
+function normalizeCarrier(raw: string | undefined): string | null {
+  if (!raw) return null;
+  const cleaned = raw.trim();
+  return cleaned.length > 0 ? cleaned : null;
+}
+
+function parseTrackingFromCarrierInformation(
+  carrierInfo: string | undefined
+): { trackingNumber: string | null; carrier: string | null } {
+  if (!carrierInfo) {
+    return { trackingNumber: null, carrier: null };
+  }
+  const info = carrierInfo.trim();
+  if (!info) {
+    return { trackingNumber: null, carrier: null };
+  }
+
+  // Detect carrier by keyword (common carriers only)
+  const carrierMatch = info.match(/\b(usps|ups|fedex|dhl)\b/i);
+  const carrier = carrierMatch ? carrierMatch[1].toUpperCase() : null;
+
+  // Prefer explicit "Tracking" patterns when present
+  const explicit = info.match(/tracking\s*(?:#|number)?\s*[:#]?\s*([A-Za-z0-9-]{8,})/i);
+  if (explicit?.[1]) {
+    return {
+      trackingNumber: normalizeTrackingNumber(explicit[1]),
+      carrier,
+    };
+  }
+
+  // Try to extract a long digit sequence even if formatted with spaces/hyphens
+  const digitsRun = info.match(/\b(\d[\d\s-]{7,}\d)\b/);
+  if (digitsRun?.[1]) {
+    return {
+      trackingNumber: normalizeTrackingNumber(digitsRun[1]),
+      carrier,
+    };
+  }
+
+  // Fallback: pick the longest reasonable alphanumeric token
+  const tokens = info
+    .replace(/[()]/g, " ")
+    .split(/[\s,;|]+/)
+    .map((t) => t.trim().replace(/^[^A-Za-z0-9]+|[^A-Za-z0-9]+$/g, ""))
+    .filter(Boolean)
+    .filter((t) => !/^(tracking|carrier|info|information)$/i.test(t));
+
+  const candidate = tokens
+    .filter((t) => t.length >= 8 && /[0-9]/.test(t))
+    .sort((a, b) => b.length - a.length)[0];
+
+  return {
+    trackingNumber: normalizeTrackingNumber(candidate),
+    carrier,
+  };
+}
+
+function extractTrackingFromShippingExportRow(row: TcgplayerCsvRow): {
+  trackingNumber: string | null;
+  carrier: string | null;
+} {
+  return {
+    trackingNumber: normalizeTrackingNumber(row["Tracking #"]),
+    carrier: normalizeCarrier(row.Carrier),
+  };
+}
+
+function extractTrackingFromOrderListRow(row: TcgplayerOrderListRow): {
+  trackingNumber: string | null;
+  carrier: string | null;
+} {
+  const trackingNumber = normalizeTrackingNumber(row["Tracking #"]);
+  const carrier = normalizeCarrier(row.Carrier);
+
+  if (trackingNumber || carrier) {
+    return { trackingNumber, carrier };
+  }
+
+  return parseTrackingFromCarrierInformation(row["Carrier Information"]);
 }
 
 function rowToOrderInput(row: TcgplayerCsvRow): CreateOrderInput {
@@ -247,6 +417,69 @@ export class TcgplayerImporter {
   constructor(marketplaceService: MarketplaceService, logger: Logger) {
     this.marketplaceService = marketplaceService;
     this.logger = logger.child({ service: "TcgplayerImporter" });
+  }
+
+  private maybeUpdateShipmentTrackingFromImport(
+    orderId: number,
+    trackingNumber: string | null,
+    carrier: string | null,
+    importedBy: string
+  ): boolean {
+    if (!trackingNumber) {
+      return false;
+    }
+
+    const shipments = this.marketplaceService.getShipmentsByOrderId(orderId);
+    if (!shipments || shipments.length === 0) {
+      return false;
+    }
+
+    // Default to the first (sequence=1) shipment; avoid overriding existing tracking.
+    const target = shipments.find((s) => s.shipment_sequence === 1) ?? shipments[0];
+    if (!target || target.tracking_number) {
+      return false;
+    }
+
+    const trackingUrl = this.marketplaceService.generateTrackingUrl(trackingNumber, carrier);
+    this.marketplaceService.updateShipmentTracking(
+      target.id,
+      trackingNumber,
+      trackingUrl,
+      carrier,
+      null,
+      "manual",
+      `import:${importedBy}`
+    );
+
+    return true;
+  }
+
+  private maybeUpdateOrderDateFromImport(
+    orderId: number,
+    existingOrderDate: number,
+    importedOrderDate: number,
+    importedBy: string
+  ): boolean {
+    if (!orderId || !existingOrderDate || !importedOrderDate) {
+      return false;
+    }
+
+    if (existingOrderDate === importedOrderDate) {
+      return false;
+    }
+
+    // Only "upgrade" when we can confidently detect added precision:
+    // existing was date-only (CST midnight) and import provides a time-of-day.
+    if (isCstMidnightTimestamp(existingOrderDate) && !isCstMidnightTimestamp(importedOrderDate)) {
+      this.marketplaceService.updateOrderDate(orderId, importedOrderDate);
+      this.logger.info(
+        { orderId, previousOrderDate: existingOrderDate, newOrderDate: importedOrderDate, importedBy },
+        "Updated marketplace order_date from date-only to date-time"
+      );
+      return true;
+    }
+
+    return false;
   }
 
   /**
@@ -308,6 +541,7 @@ export class TcgplayerImporter {
       imported: 0,
       skipped: 0,
       upgraded: 0,
+      updated: 0,
       errors: [],
       preview: dryRun ? [] : undefined,
     };
@@ -319,6 +553,7 @@ export class TcgplayerImporter {
 
       try {
         const orderId = row["Order #"];
+        const tracking = extractTrackingFromShippingExportRow(row);
 
         if (!orderId) {
           result.errors.push({
@@ -370,14 +605,32 @@ export class TcgplayerImporter {
                 input.shipping_address!,
                 input.product_weight_oz
               );
+              const updatedTracking = this.maybeUpdateShipmentTrackingFromImport(
+                existingOrder.id,
+                tracking.trackingNumber,
+                tracking.carrier,
+                importedBy
+              );
               result.upgraded++;
               this.logger.info(
-                { orderId, existingOrderId: existingOrder.id },
+                { orderId, existingOrderId: existingOrder.id, updatedTracking },
                 "Upgraded Order List to Shipping Export"
               );
             } else {
+              const updatedTracking = this.maybeUpdateShipmentTrackingFromImport(
+                existingOrder.id,
+                tracking.trackingNumber,
+                tracking.carrier,
+                importedBy
+              );
+              if (updatedTracking) {
+                result.updated++;
+              }
               result.skipped++;
-              this.logger.debug({ orderId }, "Skipping existing order (already shipping_export)");
+              this.logger.debug(
+                { orderId, existingOrderId: existingOrder.id, updatedTracking },
+                "Skipping existing order (already shipping_export)"
+              );
             }
             continue;
           }
@@ -386,7 +639,13 @@ export class TcgplayerImporter {
           input.import_batch_id = batchId;
           input.import_format = "shipping_export";
 
-          this.marketplaceService.createOrder(input);
+          const created = this.marketplaceService.createOrder(input);
+          this.maybeUpdateShipmentTrackingFromImport(
+            created.orderId,
+            tracking.trackingNumber,
+            tracking.carrier,
+            importedBy
+          );
           result.imported++;
         }
       } catch (error) {
@@ -492,6 +751,7 @@ export class TcgplayerImporter {
       imported: 0,
       skipped: 0,
       upgraded: 0,
+      updated: 0,
       errors: [],
       preview: dryRun ? [] : undefined,
     };
@@ -503,6 +763,7 @@ export class TcgplayerImporter {
 
       try {
         const orderId = row["Order #"];
+        const tracking = extractTrackingFromOrderListRow(row);
 
         if (!orderId) {
           result.errors.push({
@@ -518,7 +779,8 @@ export class TcgplayerImporter {
         const exists = !!existingOrder;
 
         // Parse order data
-        const orderDate = parseLongDate(row["Order Date"]);
+        const rawOrderDate = row["Order Date"] || row["Order Date0"] || "";
+        const orderDate = parseOrderListDate(rawOrderDate);
         const customerName = row["Buyer Name"]?.trim() || "";
         const productValueCents = parseCurrency(row["Product Amt"]);
         const shippingFeeCents = parseCurrency(row["Shipping Amt"]);
@@ -534,7 +796,7 @@ export class TcgplayerImporter {
             displayOrderNumber: displayNumber,
             itemCount: 1, // Order List doesn't include item count
             valueCents: productValueCents,
-            orderDate: row["Order Date"],
+            orderDate: rawOrderDate,
             status: exists ? "exists" : "new",
           });
 
@@ -546,13 +808,31 @@ export class TcgplayerImporter {
         } else {
           // Actual import
           if (exists) {
+            const updatedTracking = this.maybeUpdateShipmentTrackingFromImport(
+              existingOrder!.id,
+              tracking.trackingNumber,
+              tracking.carrier,
+              importedBy
+            );
+            const updatedOrderDate = this.maybeUpdateOrderDateFromImport(
+              existingOrder!.id,
+              existingOrder!.order_date,
+              orderDate,
+              importedBy
+            );
+            if (updatedTracking || updatedOrderDate) {
+              result.updated++;
+            }
             result.skipped++;
-            this.logger.debug({ orderId }, "Skipping existing order");
+            this.logger.debug(
+              { orderId, existingOrderId: existingOrder!.id, updatedTracking, updatedOrderDate },
+              "Skipping existing order"
+            );
             continue;
           }
 
           // Create order with external flag (no address, no label capability)
-          this.marketplaceService.createOrder({
+          const created = this.marketplaceService.createOrder({
             source: "tcgplayer",
             external_order_id: orderId,
             customer_name: customerName,
@@ -565,6 +845,13 @@ export class TcgplayerImporter {
             is_external: true, // External fulfillment - no CardMint label
             // No shipping_address - Order List doesn't include it
           });
+
+          this.maybeUpdateShipmentTrackingFromImport(
+            created.orderId,
+            tracking.trackingNumber,
+            tracking.carrier,
+            importedBy
+          );
 
           result.imported++;
         }

@@ -12,6 +12,7 @@ export default function MarketplaceShipmentActions({
   shipment,
   onOpenRatesModal,
   onStatusChange,
+  onOpenImportModal,
 }) {
   const [loading, setLoading] = useState(false);
 
@@ -90,20 +91,38 @@ export default function MarketplaceShipmentActions({
         </button>
       )}
 
-      {/* External fulfillment: Show "TCGPlayer Fulfillment" indicator */}
+      {/* Order List import (no address): Prompt for Shipping Export upload */}
       {status === 'pending' && shipment.isExternal && (
-        <span
-          style={{
-            padding: '4px 8px',
-            backgroundColor: '#E5E7EB',
-            color: '#6B7280',
-            borderRadius: '4px',
-            fontSize: '11px',
-            fontWeight: 500,
-          }}
-        >
-          TCGPlayer Fulfillment
-        </span>
+        <>
+          <span
+            style={{
+              padding: '4px 8px',
+              backgroundColor: '#FFF3E0',
+              color: '#E65100',
+              borderRadius: '4px',
+              fontSize: '11px',
+              fontWeight: 600,
+              border: '1px solid #FFB74D',
+            }}
+            title={
+              shipment.source === 'tcgplayer' || shipment.importFormat === 'orderlist'
+                ? 'This order came from a TCGPlayer Order List export (no shipping address). Import the TCGPlayer Shipping Export CSV to add the address and enable label purchase.'
+                : 'External fulfillment (label purchase disabled)'
+            }
+          >
+            Needs Shipping Export
+          </span>
+          {onOpenImportModal && (
+            <button
+              style={buttonStyle('warning')}
+              onClick={() => onOpenImportModal()}
+              disabled={loading}
+              title="Open CSV importer (upload TCGPlayer Shipping Export)"
+            >
+              Import Shipping Export
+            </button>
+          )}
+        </>
       )}
 
       {/* Label Purchased: Show "Print Label (PDF)" + "Mark Shipped" */}

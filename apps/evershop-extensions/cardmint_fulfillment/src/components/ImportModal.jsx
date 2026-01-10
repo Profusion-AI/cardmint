@@ -59,6 +59,7 @@ export default function ImportModal({ type = 'unified', onClose }) {
     // Refresh if any data was changed
     const changedCount = (data.imported ?? 0) +
                          (data.upgraded ?? 0) +
+                         (data.updated ?? 0) +
                          (data.autoLinked ?? 0) +
                          (data.queued ?? 0) +
                          (data.unmatched ?? 0) +
@@ -405,7 +406,7 @@ export default function ImportModal({ type = 'unified', onClose }) {
                 </div>
               )}
 
-              {/* Warning for Order List imports (no address = no CardMint label) */}
+              {/* Warning for Order List imports (no address until Shipping Export is uploaded) */}
               {result.format === 'tcgplayer_orderlist' && (
                 <div style={{
                   padding: '12px',
@@ -415,10 +416,10 @@ export default function ImportModal({ type = 'unified', onClose }) {
                   border: '1px solid #FFB74D',
                 }}>
                   <div style={{ fontWeight: 600, color: '#E65100', marginBottom: '4px' }}>
-                    External Fulfillment Only
+                    Missing Shipping Export (Address Required)
                   </div>
                   <div style={{ fontSize: '13px', color: '#6B7280' }}>
-                    Order List imports do not include shipping addresses. These orders cannot have labels purchased through CardMint — fulfill through TCGPlayer.
+                    TCGPlayer Order List exports do not include shipping addresses. To purchase labels in CardMint, also import the TCGPlayer <strong>Shipping Export</strong> CSV for these orders (it will upgrade existing rows automatically).
                   </div>
                 </div>
               )}
@@ -431,6 +432,9 @@ export default function ImportModal({ type = 'unified', onClose }) {
                 )}
                 {result.upgraded > 0 && (
                   <div style={{ color: '#1565C0' }}>Upgraded: {result.upgraded} (Order List → Shipping Export)</div>
+                )}
+                {result.updated > 0 && (
+                  <div style={{ color: '#1565C0' }}>Updated existing: {result.updated}</div>
                 )}
                 {result.reMatched > 0 && (
                   <div style={{ color: '#1565C0' }}>+ {result.reMatched} tracking entries auto-matched</div>

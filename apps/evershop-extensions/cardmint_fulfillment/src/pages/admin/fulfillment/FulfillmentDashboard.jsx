@@ -485,6 +485,7 @@ export default function FulfillmentDashboard() {
         onPageChange={handlePageChange}
         onRefresh={fetchFulfillments}
         onOrderClick={saveDashboardState}
+        onOpenImportModal={handleImportClick}
       />
 
       {/* Import Modal (unified - auto-detects format) */}

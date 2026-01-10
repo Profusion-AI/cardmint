@@ -225,6 +225,7 @@ export class MarketplaceService {
     listOrdersBySourceAndStatus: Statement;
     countOrders: Statement;
     updateOrderStatus: Statement;
+    updateOrderDate: Statement;
     insertShipment: Statement;
     getShipmentsByOrderId: Statement;
     getShipmentById: Statement;
@@ -419,6 +420,12 @@ export class MarketplaceService {
         UPDATE marketplace_orders SET status = ? WHERE id = ?
       `),
 
+      updateOrderDate: this.db.prepare(`
+        UPDATE marketplace_orders
+        SET order_date = ?, updated_at = strftime('%s', 'now')
+        WHERE id = ?
+      `),
+
       insertShipment: this.db.prepare(`
         INSERT INTO marketplace_shipments (
           marketplace_order_id, shipment_sequence, shipping_address_encrypted, shipping_zip, address_expires_at, is_external
@@ -605,8 +612,12 @@ export class MarketplaceService {
    */
   generateDisplayOrderNumber(source: "tcgplayer" | "ebay", orderDate: number): string {
     const prefix = source === "tcgplayer" ? "TCG" : "EBAY";
-    const date = new Date(orderDate * 1000);
-    const dateStr = date.toISOString().slice(0, 10).replace(/-/g, "");
+
+    // Use CST (fixed UTC-6) for the date component so that times after ~6pm CST
+    // don't roll into the next UTC day in the YYYYMMDD portion.
+    const CST_OFFSET_SECONDS = 6 * 3600;
+    const cstDate = new Date((orderDate - CST_OFFSET_SECONDS) * 1000);
+    const dateStr = cstDate.toISOString().slice(0, 10).replace(/-/g, "");
     const pattern = `${prefix}-${dateStr}-%`;
 
     const result = this.statements.getNextDisplayOrderNumber.get(pattern) as { max_seq: number | null };
@@ -795,6 +806,10 @@ export class MarketplaceService {
 
   updateOrderStatus(orderId: number, status: MarketplaceOrder["status"]): void {
     this.statements.updateOrderStatus.run(status, orderId);
+  }
+
+  updateOrderDate(orderId: number, orderDate: number): void {
+    this.statements.updateOrderDate.run(orderDate, orderId);
   }
 
   // ============================================================================
