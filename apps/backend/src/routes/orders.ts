@@ -20,6 +20,12 @@ interface OrderRow {
   subtotal_cents: number;
   shipping_cents: number;
   total_cents: number;
+  // Analytics fields (P0.4.3)
+  original_subtotal_cents: number | null;
+  discount_cents: number | null;
+  promo_code: string | null;
+  coupon_source: string | null;
+  tax_cents: number | null;
   status: string;
   created_at: number;
 }
@@ -32,6 +38,13 @@ interface OrderResponse {
     subtotalCents: number;
     shippingCents: number;
     totalCents: number;
+    // Analytics fields (P0.4.3)
+    originalSubtotalCents: number | null;
+    discountCents: number;
+    promoCode: string | null;
+    couponSource: string | null;
+    taxCents: number;
+    currency: string;
     status: string;
     createdAt: string;
   };
@@ -65,7 +78,9 @@ export function registerOrderRoutes(app: Express, ctx: AppContext): void {
       const row = db
         .prepare(
           `SELECT order_uid, order_number, stripe_session_id, item_count,
-                  subtotal_cents, shipping_cents, total_cents, status, created_at
+                  subtotal_cents, shipping_cents, total_cents,
+                  original_subtotal_cents, discount_cents, promo_code, coupon_source, tax_cents,
+                  status, created_at
            FROM orders
            WHERE stripe_session_id = ?`
         )
@@ -90,6 +105,13 @@ export function registerOrderRoutes(app: Express, ctx: AppContext): void {
           subtotalCents: row.subtotal_cents,
           shippingCents: row.shipping_cents,
           totalCents: row.total_cents,
+          // Analytics fields (P0.4.3) - null-safe with defaults for older orders
+          originalSubtotalCents: row.original_subtotal_cents,
+          discountCents: row.discount_cents ?? 0,
+          promoCode: row.promo_code,
+          couponSource: row.coupon_source,
+          taxCents: row.tax_cents ?? 0,
+          currency: "USD",
           status: row.status,
           createdAt: new Date(row.created_at * 1000).toISOString(),
         },

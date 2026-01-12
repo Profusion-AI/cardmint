@@ -1767,6 +1767,22 @@ async function handleCheckoutCompleted(
       // Total: calculated from subtotal+shipping, or Stripe session total as ultimate fallback
       const totalCents = (subtotalCents + shippingCents) || session.amount_total || 0;
 
+      // Analytics fields: discount/coupon tracking (P0.4.3)
+      const originalSubtotalCents = parseInt(metadata.original_subtotal_cents || "0", 10) || subtotalCents;
+      const discountCents = parseInt(metadata.combined_discount_cents || "0", 10) || 0;
+      const promoCode = metadata.promo_code || null;
+      const lotDiscountPct = parseInt(metadata.lot_discount_pct || "0", 10) || 0;
+      // Determine coupon source for analytics segmentation
+      let couponSource: string | null = null;
+      if (promoCode && lotDiscountPct > 0) {
+        couponSource = "COMBINED";
+      } else if (promoCode) {
+        couponSource = "PROMO";
+      } else if (lotDiscountPct > 0) {
+        couponSource = "LOT_BUILDER";
+      }
+      const taxCents = 0; // CardMint doesn't charge tax currently
+
       // Atomic order creation with transaction and retry on unique constraint violation
       const MAX_RETRIES = 3;
       let orderCreated = false;
@@ -1794,8 +1810,9 @@ async function handleCheckoutCompleted(
               `INSERT INTO orders (
                 order_uid, order_number, stripe_session_id, stripe_payment_intent_id,
                 item_count, subtotal_cents, shipping_cents, total_cents,
+                original_subtotal_cents, discount_cents, promo_code, coupon_source, tax_cents,
                 status, created_at, updated_at
-              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'confirmed', ?, ?)`
+              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmed', ?, ?)`
             ).run(
               orderUid,
               orderNumber,
@@ -1805,6 +1822,11 @@ async function handleCheckoutCompleted(
               subtotalCents,
               shippingCents,
               totalCents,
+              originalSubtotalCents,
+              discountCents,
+              promoCode,
+              couponSource,
+              taxCents,
               now,
               now
             );

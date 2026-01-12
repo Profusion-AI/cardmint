@@ -1,14 +1,12 @@
-import { posthogProxy } from "../../services/PostHogProxyService.js";
-import { getDistinctId } from "../../services/hashDistinctId.js";
+// DISABLED (Jan 2026, P0.4.2 analytics dedup decision):
+// Frontend (CheckoutSuccess.tsx) is the canonical emitter for checkout_completed.
+// Server-side emission here was causing duplicate events with different distinct_ids.
+// Re-enable only if frontend tracking proves unreliable.
+//
+// import { posthogProxy } from "../../services/PostHogProxyService.js";
+// import { getDistinctId } from "../../services/hashDistinctId.js";
 
-export default async function trackCheckoutCompleted(data) {
-  const distinctId = getDistinctId(data);
-  if (!distinctId) return;
-
-  await posthogProxy.captureEvent(distinctId, "checkout_completed", {
-    order_id: data.order_id,
-    order_number: data.order_number,
-    total: data.grand_total,
-    currency: data.currency,
-  });
+export default async function trackCheckoutCompleted(/* data */) {
+  // No-op: see comment above
+  return;
 }
