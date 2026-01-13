@@ -21,6 +21,7 @@
   "dependencies": {
     "@types/multer": "^2.0.0",
     "@types/pdfkit": "^0.17.4",
+    "@workos-inc/node": "^7.82.0",
     "axios": "^1.12.2",
     "better-sqlite3": "^9.0.0",
     "chokidar": "^4.0.3",

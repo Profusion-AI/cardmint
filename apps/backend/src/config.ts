@@ -225,6 +225,27 @@ const envSchema = z.object({
   // Stock display auth (ESP32 devices)
   DISPLAY_TOKEN: z.string().optional(),
   CARDMINT_DISPLAY_AUTH_MODE: z.enum(["static", "unkey", "dual"]).default("static"),
+  // WorkOS Identity (P1.2 - Community/Account Auth)
+  WORKOS_ENABLED: boolFromEnv(false),
+  WORKOS_CLIENT_ID: z.string().optional(),
+  WORKOS_API_KEY: z.string().optional(),
+  WORKOS_REDIRECT_URI: z.string().default("http://localhost:4000/api/auth/workos/callback"),
+  WORKOS_COOKIE_SECRET: z.string().optional(),
+  WORKOS_COOKIE_NAME: z.string().default("cm_session"),
+  WORKOS_COOKIE_MAX_AGE_SEC: z.coerce.number().default(604800), // 7 days
+  // Claim Order Flow (P1.3 - Email Link Primary)
+  CLAIM_ORDER_ENABLED: boolFromEnv(false),
+  CLAIM_TOKEN_TTL_MINUTES: z.coerce.number().default(30),
+  CLAIM_EMAIL_RATE_LIMIT_HOURLY: z.coerce.number().default(3),
+  CLAIM_EMAIL_RATE_LIMIT_DAILY: z.coerce.number().default(10),
+  CLAIM_ZIP_RATE_LIMIT_HOURLY: z.coerce.number().default(3),
+  CLAIM_ZIP_RATE_LIMIT_DAILY: z.coerce.number().default(10),
+  CLAIM_ZIP_LOCKOUT_HOURS: z.coerce.number().default(24),
+  // Cloudflare Turnstile (P1.3 ZIP Fallback)
+  TURNSTILE_SITE_KEY: z.string().optional(),
+  TURNSTILE_SECRET_KEY: z.string().optional(),
+  // Public-facing base URL for customer links (claim emails, etc.)
+  PUBLIC_BASE_URL: z.string().url().optional(),
 });
 
 const parsed = envSchema.parse(process.env);
@@ -486,6 +507,27 @@ export const runtimeConfig = {
   captureInternalKey: parsed.CAPTURE_INTERNAL_KEY ?? "",
   displayToken: parsed.DISPLAY_TOKEN ?? "",
   displayAuthMode: parsed.CARDMINT_DISPLAY_AUTH_MODE,
+  // WorkOS Identity (P1.2 - Community/Account Auth)
+  workosEnabled: parsed.WORKOS_ENABLED,
+  workosClientId: parsed.WORKOS_CLIENT_ID ?? "",
+  workosApiKey: parsed.WORKOS_API_KEY ?? "",
+  workosRedirectUri: parsed.WORKOS_REDIRECT_URI,
+  workosCookieSecret: parsed.WORKOS_COOKIE_SECRET ?? "",
+  workosCookieName: parsed.WORKOS_COOKIE_NAME,
+  workosCookieMaxAgeSec: parsed.WORKOS_COOKIE_MAX_AGE_SEC,
+  // Claim Order Flow (P1.3)
+  claimOrderEnabled: parsed.CLAIM_ORDER_ENABLED,
+  claimTokenTtlMinutes: parsed.CLAIM_TOKEN_TTL_MINUTES,
+  claimEmailRateLimitHourly: parsed.CLAIM_EMAIL_RATE_LIMIT_HOURLY,
+  claimEmailRateLimitDaily: parsed.CLAIM_EMAIL_RATE_LIMIT_DAILY,
+  claimZipRateLimitHourly: parsed.CLAIM_ZIP_RATE_LIMIT_HOURLY,
+  claimZipRateLimitDaily: parsed.CLAIM_ZIP_RATE_LIMIT_DAILY,
+  claimZipLockoutHours: parsed.CLAIM_ZIP_LOCKOUT_HOURS,
+  // Cloudflare Turnstile (P1.3 ZIP Fallback)
+  turnstileSiteKey: parsed.TURNSTILE_SITE_KEY ?? "",
+  turnstileSecretKey: parsed.TURNSTILE_SECRET_KEY ?? "",
+  // Public-facing base URL for customer links (claim emails, etc.)
+  publicBaseUrl: parsed.PUBLIC_BASE_URL,
 };
 
 // Log API key detection status

@@ -37,6 +37,9 @@ import { registerCalibrationRoutes } from "../routes/calibration";
 import { registerOrderRoutes } from "../routes/orders";
 import { registerMarketplaceRoutes } from "../routes/marketplace";
 import { registerPrintQueueRoutes } from "../routes/printQueue";
+import { registerAuthRoutes } from "../routes/auth";
+import { registerAccountRoutes } from "../routes/account";
+import { registerClaimRoutes } from "../routes/claim";
 
 /**
  * Create and configure the Express application.
@@ -75,7 +78,7 @@ export function createApp(ctx: AppContext): Express {
         res.header("Access-Control-Allow-Origin", "http://127.0.0.1:5173");
       }
       res.header("Access-Control-Allow-Methods", "GET, POST, PATCH, PUT, DELETE, OPTIONS");
-      res.header("Access-Control-Allow-Headers", "Content-Type, Authorization");
+      res.header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-CSRF-Token");
       res.header("Access-Control-Allow-Credentials", "true");
 
       if (req.method === "OPTIONS") {
@@ -120,6 +123,11 @@ export function createApp(ctx: AppContext): Express {
   registerOrderRoutes(app, ctx);
   registerMarketplaceRoutes(app, ctx);
   registerPrintQueueRoutes(app, ctx);
+  // WorkOS auth routes (P1.2) - must be registered and accessible even when /admin/* is gated
+  registerAuthRoutes(app, ctx);
+  registerAccountRoutes(app, ctx);
+  // Claim order routes (P1.3) - email link claim flow
+  registerClaimRoutes(app, ctx);
 
   return app;
 }

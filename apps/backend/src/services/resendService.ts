@@ -18,6 +18,15 @@ import type { Logger } from "pino";
 import { runtimeConfig } from "../config.js";
 import type { OrderConfirmationData, OrderConfirmedTrackingData } from "../repositories/emailOutboxRepository.js";
 
+/**
+ * Template data for claim order email (P1.3)
+ */
+export interface ClaimEmailData {
+  orderNumber: string;
+  claimUrl: string;
+  expiresInMinutes: number;
+}
+
 // Resend types (we don't import the SDK directly to allow for mocking)
 interface ResendEmailResponse {
   id?: string;
@@ -376,6 +385,101 @@ Shipping: ${formatCents(data.shippingCents)}
 Total: ${formatCents(data.totalCents)}
 
 Questions about your order? Contact us at support@cardmintshop.com
+
+This is an automated message from noreply@cardmintshop.com
+CardMint
+`;
+
+    return { subject, html, text };
+  }
+
+  /**
+   * Build claim order email (P1.3)
+   * Sent when customer requests to claim an order to their account.
+   */
+  buildClaimEmail(data: ClaimEmailData): {
+    subject: string;
+    html: string;
+    text: string;
+  } {
+    const subject = `Claim your CardMint order ${data.orderNumber}`;
+
+    const html = `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+</head>
+<body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #f5f5f5;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #f5f5f5; padding: 40px 20px;">
+    <tr>
+      <td align="center">
+        <table width="600" cellpadding="0" cellspacing="0" style="background-color: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.08);">
+          <!-- Header -->
+          <tr>
+            <td style="background-color: #1a1a2e; padding: 24px 32px; text-align: center;">
+              <h1 style="margin: 0; color: #ffffff; font-size: 24px; font-weight: 600;">CardMint</h1>
+            </td>
+          </tr>
+
+          <!-- Content -->
+          <tr>
+            <td style="padding: 32px;">
+              <h2 style="margin: 0 0 8px; color: #1a1a2e; font-size: 20px;">Claim Your Order</h2>
+              <p style="margin: 0 0 24px; color: #666; font-size: 14px;">Order ${escapeHtml(data.orderNumber)}</p>
+
+              <p style="margin: 0 0 24px; color: #444; font-size: 14px; line-height: 1.6;">
+                Click the button below to claim this order to your CardMint account. This link will expire in ${data.expiresInMinutes} minutes.
+              </p>
+
+              <!-- CTA Button -->
+              <div style="text-align: center; margin: 32px 0;">
+                <a href="${escapeHtml(data.claimUrl)}" style="display: inline-block; background-color: #1a1a2e; color: #ffffff; font-size: 16px; font-weight: 600; text-decoration: none; padding: 16px 48px; border-radius: 8px;">
+                  Claim Order
+                </a>
+              </div>
+
+              <p style="margin: 24px 0 0; color: #888; font-size: 12px; line-height: 1.6;">
+                If you didn't request this email, you can safely ignore it. This link can only be used once and will expire automatically.
+              </p>
+
+              <p style="margin: 16px 0 0; color: #aaa; font-size: 11px; line-height: 1.4; word-break: break-all;">
+                Or copy this link: ${escapeHtml(data.claimUrl)}
+              </p>
+            </td>
+          </tr>
+
+          <!-- Footer -->
+          <tr>
+            <td style="background-color: #f8f9fa; padding: 24px 32px; text-align: center; border-top: 1px solid #eee;">
+              <p style="margin: 0 0 8px; color: #888; font-size: 12px;">Questions? Contact us at:</p>
+              <a href="mailto:support@cardmintshop.com" style="color: #1a1a2e; font-size: 14px;">support@cardmintshop.com</a>
+              <p style="margin: 16px 0 0; color: #888; font-size: 11px;">This is an automated message from noreply@cardmintshop.com</p>
+              <p style="margin: 4px 0 0; color: #ccc; font-size: 11px;">CardMint</p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>`;
+
+    const text = `
+Claim Your CardMint Order
+
+Order: ${data.orderNumber}
+
+Click the link below to claim this order to your CardMint account.
+This link will expire in ${data.expiresInMinutes} minutes.
+
+${data.claimUrl}
+
+If you didn't request this email, you can safely ignore it.
+This link can only be used once and will expire automatically.
+
+Questions? Contact us at support@cardmintshop.com
 
 This is an automated message from noreply@cardmintshop.com
 CardMint
