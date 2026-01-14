@@ -60,20 +60,115 @@ const logger = {
   },
 };
 
-// In-memory state store for OAuth state validation
-// Simple implementation; production could use Redis for multi-instance
-const stateStore = new Map<string, { createdAt: number; returnTo?: string }>();
-const STATE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+// OAuth state validation must survive restarts and cannot rely on in-memory stores.
+// Use a short-lived, signed HttpOnly cookie to correlate the callback with the login request.
+const OAUTH_STATE_COOKIE_NAME = "cm_workos_oauth_state";
+const OAUTH_STATE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 
-// Clean up expired states periodically
-setInterval(() => {
-  const now = Date.now();
-  for (const [state, data] of stateStore) {
-    if (now - data.createdAt > STATE_TTL_MS) {
-      stateStore.delete(state);
-    }
+type OAuthStatePayload = {
+  state: string;
+  createdAtMs: number;
+  returnTo?: string;
+};
+
+function parseCookieHeader(cookieHeader: string | undefined): Record<string, string> {
+  if (!cookieHeader) return {};
+
+  return cookieHeader.split(";").reduce(
+    (acc, cookie) => {
+      const [name, ...valueParts] = cookie.trim().split("=");
+      if (name) {
+        acc[name] = valueParts.join("=");
+      }
+      return acc;
+    },
+    {} as Record<string, string>
+  );
+}
+
+function signCookieValue(value: string, secret: string): string {
+  return crypto.createHmac("sha256", secret).update(value).digest("base64url");
+}
+
+function setOAuthStateCookie(res: Response, payload: OAuthStatePayload): void {
+  const secret = runtimeConfig.workosCookieSecret;
+  if (!secret) {
+    return;
   }
-}, 60_000); // Every minute
+
+  const encodedPayload = Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
+  const signature = signCookieValue(encodedPayload, secret);
+  const cookieValue = `${encodedPayload}.${signature}`;
+
+  const isProduction = runtimeConfig.cardmintEnv === "production";
+  const cookieOptions = [
+    `${OAUTH_STATE_COOKIE_NAME}=${cookieValue}`,
+    `Max-Age=${Math.floor(OAUTH_STATE_TTL_MS / 1000)}`,
+    "Path=/api/auth/workos",
+    "HttpOnly",
+    "SameSite=Lax",
+  ];
+
+  if (isProduction) {
+    cookieOptions.push("Secure");
+  }
+
+  res.append("Set-Cookie", cookieOptions.join("; "));
+}
+
+function clearOAuthStateCookie(res: Response): void {
+  const isProduction = runtimeConfig.cardmintEnv === "production";
+  const cookieOptions = [
+    `${OAUTH_STATE_COOKIE_NAME}=`,
+    "Max-Age=0",
+    "Path=/api/auth/workos",
+    "HttpOnly",
+    "SameSite=Lax",
+  ];
+
+  if (isProduction) {
+    cookieOptions.push("Secure");
+  }
+
+  res.append("Set-Cookie", cookieOptions.join("; "));
+}
+
+function getOAuthStateFromRequest(req: Request): OAuthStatePayload | null {
+  const secret = runtimeConfig.workosCookieSecret;
+  if (!secret) return null;
+
+  const cookies = parseCookieHeader(req.headers.cookie);
+  const raw = cookies[OAUTH_STATE_COOKIE_NAME];
+  if (!raw) return null;
+
+  const [encodedPayload, signature] = raw.split(".");
+  if (!encodedPayload || !signature) return null;
+
+  const expectedSig = signCookieValue(encodedPayload, secret);
+  if (signature.length !== expectedSig.length) {
+    return null;
+  }
+
+  if (!crypto.timingSafeEqual(Buffer.from(signature, "utf8"), Buffer.from(expectedSig, "utf8"))) {
+    return null;
+  }
+
+  try {
+    const json = Buffer.from(encodedPayload, "base64url").toString("utf8");
+    const payload = JSON.parse(json) as OAuthStatePayload;
+
+    if (!payload?.state || typeof payload.state !== "string") return null;
+    if (!payload.createdAtMs || typeof payload.createdAtMs !== "number") return null;
+
+    if (Date.now() - payload.createdAtMs > OAUTH_STATE_TTL_MS) {
+      return null;
+    }
+
+    return payload;
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Generate a secure state parameter for OAuth.
@@ -96,6 +191,37 @@ export function registerAuthRoutes(app: Express, ctx: AppContext): void {
       enabled: runtimeConfig.workosEnabled,
       configured: isWorkOSConfigured(),
     });
+  });
+
+  /**
+   * GET /api/auth/workos/nginx-auth
+   * Internal helper for nginx `auth_request` to gate protected routes (e.g. /admin/*).
+   *
+   * Returns:
+   * - 204 if a valid, non-expired WorkOS session cookie is present
+   * - 401 otherwise
+   *
+   * This endpoint intentionally avoids redirects or JSON bodies so nginx can make a simple allow/deny decision.
+   */
+  app.get("/api/auth/workos/nginx-auth", (req: Request, res: Response) => {
+    res.setHeader("Cache-Control", "no-store");
+
+    if (!runtimeConfig.workosEnabled || !isWorkOSConfigured()) {
+      return res.sendStatus(401);
+    }
+
+    const session = getSessionFromRequest(req);
+    if (!session) {
+      return res.sendStatus(401);
+    }
+
+    const now = Math.floor(Date.now() / 1000);
+    const bufferSeconds = 60;
+    if (session.expiresAt <= now + bufferSeconds) {
+      return res.sendStatus(401);
+    }
+
+    return res.sendStatus(204);
   });
 
   /**
@@ -135,10 +261,11 @@ export function registerAuthRoutes(app: Express, ctx: AppContext): void {
     const returnTo = req.query.return_to as string | undefined;
     const screenHint = (req.query.screen_hint as string) || "sign-in";
 
-    // Generate and store state
+    // Generate and persist state for callback validation
     const state = generateState();
-    stateStore.set(state, {
-      createdAt: Date.now(),
+    setOAuthStateCookie(res, {
+      state,
+      createdAtMs: Date.now(),
       returnTo: validateReturnTo(returnTo),
     });
 
@@ -171,38 +298,38 @@ export function registerAuthRoutes(app: Express, ctx: AppContext): void {
 
     // Handle OAuth errors
     if (error) {
-      logger.warn(
-        { error, error_description },
-        "OAuth callback received error from WorkOS"
-      );
-      return res.redirect(`/login?error=${encodeURIComponent(String(error))}`);
+      logger.warn({ error }, "OAuth callback received error from WorkOS");
+      clearOAuthStateCookie(res);
+      return res.redirect(`/?auth_error=${encodeURIComponent(String(error))}`);
     }
 
     // Validate state
     if (!state || typeof state !== "string") {
       logger.warn({}, "OAuth callback missing state parameter");
-      return res.redirect("/login?error=invalid_state");
+      clearOAuthStateCookie(res);
+      return res.redirect("/?auth_error=invalid_state");
     }
 
-    const storedState = stateStore.get(state);
-    if (!storedState) {
-      logger.warn({}, "OAuth callback state not found or expired");
-      return res.redirect("/login?error=invalid_state");
+    const storedState = getOAuthStateFromRequest(req);
+    if (!storedState || storedState.state !== state) {
+      logger.warn({}, "OAuth callback state not found, mismatched, or expired");
+      clearOAuthStateCookie(res);
+      return res.redirect("/?auth_error=invalid_state");
     }
 
     // Consume state (single use)
-    stateStore.delete(state);
+    clearOAuthStateCookie(res);
 
     // Validate code
     if (!code || typeof code !== "string") {
       logger.warn({}, "OAuth callback missing authorization code");
-      return res.redirect("/login?error=missing_code");
+      return res.redirect("/?auth_error=missing_code");
     }
 
     // Exchange code for tokens
     const workos = await getWorkOS();
     if (!workos) {
-      return res.redirect("/login?error=auth_unavailable");
+      return res.redirect("/?auth_error=auth_unavailable");
     }
 
     try {
@@ -242,14 +369,14 @@ export function registerAuthRoutes(app: Express, ctx: AppContext): void {
       );
 
       // Redirect to return URL or default
-      const returnTo = storedState.returnTo || "/account";
+      const returnTo = storedState.returnTo || "/";
       res.redirect(returnTo);
     } catch (err) {
       logger.error(
         { err: err instanceof Error ? err.message : String(err) },
         "Failed to exchange authorization code"
       );
-      return res.redirect("/login?error=auth_failed");
+      return res.redirect("/?auth_error=auth_failed");
     }
   });
 

@@ -5,7 +5,7 @@
 -- Create privacy_requests table for audit logging
 CREATE TABLE IF NOT EXISTS privacy_requests (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  email_hash TEXT NOT NULL,              -- Base64 encoded email (for audit without storing PII)
+  email_hash TEXT NOT NULL,              -- SHA-256 hash of normalized email (non-reversible, for audit)
   request_type TEXT NOT NULL,            -- 'deletion', 'export', 'correction'
   ip_address TEXT,                       -- IP for rate limiting / fraud detection
   requested_at INTEGER NOT NULL,         -- Unix timestamp

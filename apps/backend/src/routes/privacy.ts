@@ -10,6 +10,8 @@
 
 import type { Express, Request, Response } from "express";
 import type { AppContext } from "../app/context";
+import { runtimeConfig } from "../config";
+import crypto from "crypto";
 
 interface PrivacyDeleteBody {
   email?: string;
@@ -110,8 +112,8 @@ export function registerPrivacyRoutes(app: Express, ctx: AppContext): void {
         INSERT INTO privacy_requests (email_hash, request_type, ip_address, requested_at, status)
         VALUES (?, 'deletion', ?, ?, 'processing')
       `);
-      // Store hashed email for audit (not the actual email)
-      const emailHash = Buffer.from(email).toString("base64");
+      // Store SHA-256 hash of email for audit (non-reversible)
+      const emailHash = crypto.createHash("sha256").update(email.normalize("NFC").toLowerCase()).digest("hex");
       logStmt.run(emailHash, ip, now);
 
       // 3. Request Klaviyo profile deletion
@@ -221,12 +223,22 @@ export function registerPrivacyRoutes(app: Express, ctx: AppContext): void {
    * GET /api/privacy/export
    *
    * Request a copy of all personal data (GDPR Art. 15 / CCPA right to know).
-   * Returns a JSON export of subscriber data.
    *
-   * NOTE: In production, this should require email verification
-   * to prevent unauthorized access to personal data.
+   * SEC-001 FIX: This endpoint is disabled by default (PRIVACY_EXPORT_ENABLED=false).
+   * When enabled, it returns a uniform response without exposing PII inline.
+   * Data is delivered via email to prevent enumeration attacks.
    */
   app.get("/api/privacy/export", (req: Request, res: Response) => {
+    // SEC-001: Kill-switch — disabled by default
+    if (!runtimeConfig.privacyExportEnabled) {
+      logger.info({}, "privacy.export.disabled");
+      return res.status(503).json({
+        ok: false,
+        error: "SERVICE_UNAVAILABLE",
+        message: "DSAR data export requests must be submitted via email to privacy@cardmintshop.com",
+      });
+    }
+
     const email = (req.query.email as string)?.trim().toLowerCase();
 
     // Get IP for rate limiting
@@ -262,53 +274,18 @@ export function registerPrivacyRoutes(app: Express, ctx: AppContext): void {
     }
 
     try {
-      // Get subscriber data
-      const subscriberStmt = db.prepare(`
-        SELECT email, source, created_at, unsubscribed_at
-        FROM email_subscribers
-        WHERE email = ? AND deleted_at IS NULL
-      `);
-      const subscriber = subscriberStmt.get(email) as {
-        email: string;
-        source: string;
-        created_at: number;
-        unsubscribed_at: number | null;
-      } | undefined;
+      // SEC-001: Log request with SHA-256 hash prefix (non-reversible)
+      const emailHash = crypto.createHash("sha256").update(email.normalize("NFC").toLowerCase()).digest("hex").substring(0, 12);
+      logger.info({ emailHash }, "privacy.export.requested");
 
-      if (!subscriber) {
-        // Don't reveal whether email exists
-        return res.json({
-          ok: true,
-          message: "If this email is in our system, you will receive an export via email.",
-          data: null,
-        });
-      }
-
-      logger.info({ email: email.substring(0, 3) + "***" }, "privacy.export.processed");
-
+      // SEC-001: Always return identical response — no enumeration oracle
+      // If email exists, an export will be sent via email (future enhancement).
+      // Currently: uniform acknowledgment without inline PII.
       res.json({
         ok: true,
-        message: "Your data export is ready.",
-        data: {
-          email: subscriber.email,
-          source: subscriber.source,
-          subscribed_at: new Date(subscriber.created_at * 1000).toISOString(),
-          unsubscribed_at: subscriber.unsubscribed_at
-            ? new Date(subscriber.unsubscribed_at * 1000).toISOString()
-            : null,
-          data_categories: [
-            "Email address",
-            "Subscription source",
-            "Subscription date",
-          ],
-          third_parties: [
-            {
-              name: "Klaviyo",
-              purpose: "Email marketing",
-              data_shared: ["Email address", "Browsing activity (if consented)"],
-            },
-          ],
-        },
+        message:
+          "If this email is in our system, you will receive a data export via email within 48 hours. " +
+          "For immediate assistance, contact privacy@cardmintshop.com",
       });
     } catch (error) {
       logger.error({ error }, "privacy.export.failed");

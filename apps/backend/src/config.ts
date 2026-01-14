@@ -246,6 +246,8 @@ const envSchema = z.object({
   TURNSTILE_SECRET_KEY: z.string().optional(),
   // Public-facing base URL for customer links (claim emails, etc.)
   PUBLIC_BASE_URL: z.string().url().optional(),
+  // Privacy DSAR endpoints (SEC-001 - disabled by default)
+  PRIVACY_EXPORT_ENABLED: boolFromEnv(false),
 });
 
 const parsed = envSchema.parse(process.env);
@@ -528,6 +530,8 @@ export const runtimeConfig = {
   turnstileSecretKey: parsed.TURNSTILE_SECRET_KEY ?? "",
   // Public-facing base URL for customer links (claim emails, etc.)
   publicBaseUrl: parsed.PUBLIC_BASE_URL,
+  // Privacy DSAR endpoints (SEC-001 - disabled by default)
+  privacyExportEnabled: parsed.PRIVACY_EXPORT_ENABLED,
 };
 
 // Log API key detection status
