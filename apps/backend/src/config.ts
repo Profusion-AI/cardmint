@@ -172,6 +172,15 @@ const envSchema = z.object({
   // EasyPost shipping labels (Dec 2025)
   EASYPOST_API_KEY: z.string().optional(),
   EASYPOST_TEST_MODE: boolFromEnv(true), // Default to test mode for safety
+  // USPS Tracking API (Jan 2026)
+  USPS_CLIENT_ID: z.string().optional(),
+  USPS_CLIENT_SECRET: z.string().optional(),
+  USPS_OAUTH_SCOPE: z.string().optional(),
+  USPS_OAUTH_TOKEN_URL: z.string().optional(),
+  USPS_TRACKING_BASE_URL: z.string().optional(),
+  USPS_TRACKING_TIMEOUT_MS: z.coerce.number().default(15000),
+  USPS_TRACKING_REFRESH_MINUTES: z.coerce.number().default(15),
+  USPS_TRACKING_CONCURRENCY: z.coerce.number().default(3),
   // Ship-from address (CardMint return address)
   EASYPOST_FROM_NAME: z.string().default("CardMint"),
   EASYPOST_FROM_COMPANY: z.string().optional(),
@@ -432,6 +441,15 @@ export const runtimeConfig = {
   // EasyPost shipping labels (Dec 2025)
   easypostApiKey: parsed.EASYPOST_API_KEY ?? "",
   easypostTestMode: parsed.EASYPOST_TEST_MODE,
+  // USPS Tracking API (Jan 2026)
+  uspsClientId: parsed.USPS_CLIENT_ID ?? "",
+  uspsClientSecret: parsed.USPS_CLIENT_SECRET ?? "",
+  uspsOauthScope: parsed.USPS_OAUTH_SCOPE ?? "",
+  uspsOauthTokenUrl: parsed.USPS_OAUTH_TOKEN_URL ?? "",
+  uspsTrackingBaseUrl: parsed.USPS_TRACKING_BASE_URL ?? "",
+  uspsTrackingTimeoutMs: parsed.USPS_TRACKING_TIMEOUT_MS,
+  uspsTrackingRefreshMinutes: parsed.USPS_TRACKING_REFRESH_MINUTES,
+  uspsTrackingConcurrency: parsed.USPS_TRACKING_CONCURRENCY,
   easypostFromAddress: {
     name: parsed.EASYPOST_FROM_NAME,
     company: parsed.EASYPOST_FROM_COMPANY ?? "",

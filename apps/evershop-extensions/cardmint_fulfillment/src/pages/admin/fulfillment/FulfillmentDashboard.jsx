@@ -196,7 +196,7 @@ export default function FulfillmentDashboard() {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({}),
+        body: JSON.stringify({ includeUspsFallback: true }),
       });
       const data = await response.json();
       if (!response.ok || !data.ok) {
@@ -208,16 +208,29 @@ export default function FulfillmentDashboard() {
       setUnmatchedRefreshTrigger(prev => prev + 1);
       // Build detailed toast message
       const parts = [];
-      if (data.refreshed > 0) {
-        parts.push(`Checked ${data.refreshed} tracking entries`);
+      const checked = Number.isFinite(data.checked) ? data.checked : (data.refreshed || 0);
+      if (checked > 0) {
+        parts.push(`Checked ${checked} tracking entries`);
       }
       if (data.statusUpdated > 0) {
         parts.push(`${data.statusUpdated} status${data.statusUpdated > 1 ? 'es' : ''} updated`);
       }
+      if (data.autoResolved > 0) {
+        parts.push(`${data.autoResolved} matched by tracking number`);
+      }
       if (data.matched > 0) {
         parts.push(`${data.matched} matched to orders`);
       }
-      const message = parts.length > 0 ? parts.join(', ') : 'No updates needed';
+      const errorCount = (data.refreshErrors || 0) + (data.uspsErrors || 0);
+      if (errorCount > 0) {
+        parts.push(`${errorCount} error${errorCount > 1 ? 's' : ''}`);
+      }
+      const message =
+        parts.length === 1 && errorCount > 0
+          ? `Refresh completed with ${errorCount} error${errorCount > 1 ? 's' : ''}`
+          : parts.length > 0
+            ? parts.join(', ')
+            : 'No updates needed';
       setToast({ show: true, message, fading: false });
       setTimeout(() => setToast(t => ({ ...t, fading: true })), 4500);
       setTimeout(() => setToast({ show: false, message: '', fading: false }), 5000);

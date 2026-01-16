@@ -7,10 +7,12 @@
 
 import type { Database, Statement } from "better-sqlite3";
 import type { Logger } from "pino";
+import { runtimeConfig } from "../../config.js";
 import { encryptJson, decryptJson } from "../../utils/encryption";
 import { normalizeNameForMatching } from "../../utils/nameNormalization.js";
 import { parseTcgplayerOrderNumber } from "../../utils/orderNumberFormat.js";
 import type { EasyPostService } from "../easyPostService.js";
+import type { UspsTrackingService } from "../uspsTrackingService.js";
 
 // ============================================================================
 // Module-Level State
@@ -128,6 +130,11 @@ export interface UnmatchedTracking {
   signed_by_normalized: string | null;
   destination_zip: string | null;
   easypost_status: string | null;
+  usps_status: string | null;
+  usps_delivered_at: number | null;
+  usps_last_event_at: number | null;
+  usps_events_json: string | null;
+  last_usps_fetch_at: number | null;
   created_at_easypost: number | null;
   resolution_status: "pending" | "matched" | "ignored" | "manual_entry";
   matched_to_shipment_id: number | null;
@@ -240,7 +247,11 @@ export class MarketplaceService {
     listUnmatchedTracking: Statement;
     resolveUnmatchedTracking: Statement;
     updateUnmatchedTrackingStatus: Statement;
+    updateUnmatchedTrackingUspsStatus: Statement;
+    touchUnmatchedTrackingUspsFetch: Statement;
+    updateUnmatchedTrackingCarrier: Statement;
     listAllPendingUnmatchedTracking: Statement;
+    findShipmentsByTrackingNumber: Statement;
     getNextDisplayOrderNumber: Statement;
     countOrdersFiltered: Statement;
     countOrdersBySource: Statement;
@@ -499,8 +510,8 @@ export class MarketplaceService {
       listUnmatchedTracking: this.db.prepare(`
         SELECT * FROM unmatched_tracking
         WHERE resolution_status = 'pending'
-          AND (easypost_status IS NULL
-               OR easypost_status NOT IN ('delivered', 'in_transit', 'out_for_delivery', 'return_to_sender'))
+          AND (COALESCE(usps_status, easypost_status) IS NULL
+               OR COALESCE(usps_status, easypost_status) NOT IN ('delivered', 'in_transit', 'out_for_delivery', 'return_to_sender'))
         ORDER BY created_at DESC LIMIT ? OFFSET ?
       `),
 
@@ -516,10 +527,38 @@ export class MarketplaceService {
         WHERE id = ?
       `),
 
+      updateUnmatchedTrackingUspsStatus: this.db.prepare(`
+        UPDATE unmatched_tracking
+        SET usps_status = ?,
+            usps_delivered_at = ?,
+            usps_last_event_at = ?,
+            usps_events_json = ?,
+            last_usps_fetch_at = ?
+        WHERE id = ?
+      `),
+
+      touchUnmatchedTrackingUspsFetch: this.db.prepare(`
+        UPDATE unmatched_tracking
+        SET last_usps_fetch_at = ?
+        WHERE id = ?
+      `),
+
+      updateUnmatchedTrackingCarrier: this.db.prepare(`
+        UPDATE unmatched_tracking
+        SET carrier = ?
+        WHERE id = ?
+      `),
+
       listAllPendingUnmatchedTracking: this.db.prepare(`
         SELECT * FROM unmatched_tracking
         WHERE resolution_status = 'pending'
         ORDER BY created_at DESC
+      `),
+
+      findShipmentsByTrackingNumber: this.db.prepare(`
+        SELECT * FROM marketplace_shipments
+        WHERE tracking_number = ?
+           OR REPLACE(REPLACE(tracking_number, '-', ''), ' ', '') = ?
       `),
 
       getNextDisplayOrderNumber: this.db.prepare(`
@@ -1174,14 +1213,15 @@ export class MarketplaceService {
       );
 
       // Update shipment status based on EasyPost status
-      if (tracking.easypost_status) {
+      const effectiveStatus = tracking.usps_status || tracking.easypost_status;
+      if (effectiveStatus) {
         const statusMap: Record<string, MarketplaceShipment["status"]> = {
           delivered: "delivered",
           in_transit: "in_transit",
           pre_transit: "shipped",
           out_for_delivery: "in_transit",
         };
-        const newStatus = statusMap[tracking.easypost_status.toLowerCase()];
+        const newStatus = statusMap[effectiveStatus.toLowerCase()];
         if (newStatus) {
           this.updateShipmentStatus(eligibleShipment.id, newStatus);
         }
@@ -1223,21 +1263,28 @@ export class MarketplaceService {
 
   /**
    * Refresh tracking statuses from EasyPost for all pending unmatched entries.
-   * Fetches current status from EasyPost API and updates local database.
+   * Optionally falls back to USPS tracking for unknown USPS entries.
    *
    * @param easyPostService - EasyPost service instance for API calls
-   * @returns Count of entries refreshed and any that changed status
+   * @returns Counts of entries refreshed/updated and any that changed status
    */
   async refreshUnmatchedTrackingStatuses(
-    easyPostService: EasyPostService
+    easyPostService: EasyPostService,
+    options: { includeUspsFallback?: boolean; uspsService?: UspsTrackingService } = {}
   ): Promise<{
+    attempted: number;
     refreshed: number;
     updated: number;
     errors: number;
+    uspsChecked: number;
+    uspsUpdated: number;
+    uspsErrors: number;
+    autoResolved: number;
     details: Array<{
       trackingNumber: string;
       oldStatus: string | null;
       newStatus: string;
+      source: "easypost" | "usps";
     }>;
   }> {
     // Get ALL pending entries (not filtered by status like listUnmatchedTracking)
@@ -1248,17 +1295,31 @@ export class MarketplaceService {
       "Starting tracking status refresh from EasyPost"
     );
 
+    const attempted = pending.length;
     let refreshed = 0;
     let updated = 0;
     let errors = 0;
+    let uspsChecked = 0;
+    let uspsUpdated = 0;
+    let uspsErrors = 0;
     const details: Array<{
       trackingNumber: string;
       oldStatus: string | null;
       newStatus: string;
+      source: "easypost" | "usps";
     }> = [];
+    const uspsCandidates: UnmatchedTracking[] = [];
+    const nowSec = Math.floor(Date.now() / 1000);
+    const uspsMinAgeSec = Math.max(1, runtimeConfig.uspsTrackingRefreshMinutes) * 60;
+    const includeUspsFallback = Boolean(options.includeUspsFallback && options.uspsService?.isConfigured());
 
     for (const tracking of pending) {
       try {
+        if (!tracking.carrier && isLikelyUspsTrackingNumber(tracking.tracking_number)) {
+          this.statements.updateUnmatchedTrackingCarrier.run("USPS", tracking.id);
+          tracking.carrier = "USPS";
+        }
+
         const tracker = await easyPostService.getTrackerByTrackingNumber(
           tracking.tracking_number,
           tracking.carrier || undefined
@@ -1266,35 +1327,48 @@ export class MarketplaceService {
 
         if (!tracker) {
           errors++;
-          continue;
-        }
+        } else {
+          refreshed++;
 
-        refreshed++;
+          // Update status if changed
+          if (tracker.status !== tracking.easypost_status) {
+            this.statements.updateUnmatchedTrackingStatus.run(
+              tracker.status,
+              tracker.id,
+              tracking.id
+            );
 
-        // Update status if changed
-        if (tracker.status !== tracking.easypost_status) {
-          this.statements.updateUnmatchedTrackingStatus.run(
-            tracker.status,
-            tracker.id,
-            tracking.id
-          );
-
-          updated++;
-          details.push({
-            trackingNumber: tracking.tracking_number,
-            oldStatus: tracking.easypost_status,
-            newStatus: tracker.status,
-          });
-
-          this.logger.info(
-            {
+            updated++;
+            details.push({
               trackingNumber: tracking.tracking_number,
               oldStatus: tracking.easypost_status,
               newStatus: tracker.status,
-              trackerId: tracker.id,
-            },
-            "Updated tracking status from EasyPost"
-          );
+              source: "easypost",
+            });
+
+            this.logger.info(
+              {
+                trackingNumber: tracking.tracking_number,
+                oldStatus: tracking.easypost_status,
+                newStatus: tracker.status,
+                trackerId: tracker.id,
+              },
+              "Updated tracking status from EasyPost"
+            );
+          }
+
+          tracking.easypost_status = tracker.status;
+        }
+
+        if (includeUspsFallback && isUspsCarrier(tracking)) {
+          const effectiveStatus = tracking.easypost_status || tracking.usps_status;
+          const shouldFetchUsps =
+            isUnknownStatus(effectiveStatus) &&
+            (!tracking.last_usps_fetch_at || nowSec - tracking.last_usps_fetch_at >= uspsMinAgeSec);
+
+          if (shouldFetchUsps) {
+            uspsCandidates.push(tracking);
+          }
         }
       } catch (err) {
         errors++;
@@ -1305,12 +1379,102 @@ export class MarketplaceService {
       }
     }
 
+    const uspsService = options.uspsService;
+    if (includeUspsFallback && uspsCandidates.length > 0 && uspsService) {
+      const concurrency = Math.max(1, runtimeConfig.uspsTrackingConcurrency);
+      await runWithConcurrency(uspsCandidates, concurrency, async (tracking) => {
+        uspsChecked++;
+        const result = await uspsService.getTrackingStatus(tracking.tracking_number);
+        const fetchTime = Math.floor(Date.now() / 1000);
+
+        if (!result) {
+          uspsErrors++;
+          this.statements.touchUnmatchedTrackingUspsFetch.run(fetchTime, tracking.id);
+          return;
+        }
+
+        const oldStatus = tracking.usps_status;
+        if (result.status !== tracking.usps_status) {
+          uspsUpdated++;
+          details.push({
+            trackingNumber: tracking.tracking_number,
+            oldStatus,
+            newStatus: result.status,
+            source: "usps",
+          });
+        }
+
+        let rawJson = "";
+        try {
+          rawJson = JSON.stringify(result.raw);
+        } catch (err) {
+          this.logger.warn({ err, trackingNumber: tracking.tracking_number }, "USPS raw payload stringify failed");
+        }
+
+        this.statements.updateUnmatchedTrackingUspsStatus.run(
+          result.status,
+          result.deliveredAt,
+          result.lastEventAt,
+          rawJson,
+          fetchTime,
+          tracking.id
+        );
+      });
+    }
+
+    const autoResolved = this.resolveUnmatchedTrackingByTrackingNumber(pending);
+
     this.logger.info(
-      { refreshed, updated, errors },
+      { attempted, refreshed, updated, errors, uspsChecked, uspsUpdated, uspsErrors, autoResolved },
       "Completed tracking status refresh"
     );
 
-    return { refreshed, updated, errors, details };
+    return {
+      attempted,
+      refreshed,
+      updated,
+      errors,
+      uspsChecked,
+      uspsUpdated,
+      uspsErrors,
+      autoResolved,
+      details,
+    };
+  }
+
+  private resolveUnmatchedTrackingByTrackingNumber(pending: UnmatchedTracking[]): number {
+    let resolved = 0;
+
+    for (const tracking of pending) {
+      if (!tracking.tracking_number || !isUspsCarrier(tracking)) {
+        continue;
+      }
+
+      const normalizedTracking = normalizeTrackingNumber(tracking.tracking_number);
+      const shipments = this.statements.findShipmentsByTrackingNumber.all(
+        tracking.tracking_number,
+        normalizedTracking
+      ) as MarketplaceShipment[];
+
+      if (shipments.length !== 1) {
+        continue;
+      }
+
+      this.resolveUnmatchedTracking(
+        tracking.id,
+        "matched",
+        shipments[0].id,
+        "system:tracking-number"
+      );
+
+      resolved++;
+    }
+
+    if (resolved > 0) {
+      this.logger.info({ resolved }, "Resolved unmatched tracking by number");
+    }
+
+    return resolved;
   }
 
   /**
@@ -1344,8 +1508,8 @@ export class MarketplaceService {
     const unmatchedCount = this.db.prepare(`
       SELECT COUNT(*) as count FROM unmatched_tracking
       WHERE resolution_status = 'pending'
-        AND (easypost_status IS NULL
-             OR easypost_status NOT IN ('delivered', 'in_transit', 'out_for_delivery', 'return_to_sender'))
+        AND (COALESCE(usps_status, easypost_status) IS NULL
+             OR COALESCE(usps_status, easypost_status) NOT IN ('delivered', 'in_transit', 'out_for_delivery', 'return_to_sender'))
     `).get() as { count: number };
 
     // Marketplace exceptions
@@ -1674,4 +1838,41 @@ export class MarketplaceService {
     }
     return result.changes;
   }
+}
+
+const USPS_NUMERIC_TRACKING_REGEX = /^9\\d{20,24}$/;
+const USPS_ALPHA_TRACKING_REGEX = /^[A-Z]{2}\\d{9}US$/i;
+
+function isUnknownStatus(status?: string | null): boolean {
+  return !status || status.toLowerCase() === "unknown";
+}
+
+function isLikelyUspsTrackingNumber(trackingNumber: string): boolean {
+  const normalized = normalizeTrackingNumber(trackingNumber).toUpperCase();
+  return USPS_NUMERIC_TRACKING_REGEX.test(normalized) || USPS_ALPHA_TRACKING_REGEX.test(normalized);
+}
+
+function isUspsCarrier(tracking: UnmatchedTracking): boolean {
+  const carrier = tracking.carrier?.toLowerCase() || "";
+  return carrier.includes("usps") || isLikelyUspsTrackingNumber(tracking.tracking_number);
+}
+
+function normalizeTrackingNumber(trackingNumber: string): string {
+  return trackingNumber.replace(/[\\s-]+/g, "");
+}
+
+async function runWithConcurrency<T>(items: T[], limit: number, worker: (item: T) => Promise<void>): Promise<void> {
+  const max = Math.max(1, limit);
+  let index = 0;
+  const runners = Array.from({ length: Math.min(max, items.length) }, async () => {
+    while (true) {
+      const current = index++;
+      if (current >= items.length) {
+        return;
+      }
+      await worker(items[current]);
+    }
+  });
+
+  await Promise.all(runners);
 }

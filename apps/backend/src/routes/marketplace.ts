@@ -32,6 +32,7 @@ import { TcgplayerImporter } from "../services/marketplace/tcgplayerImporter.js"
 import { EasypostTrackingLinker } from "../services/marketplace/easypostTrackingLinker.js";
 import { PullSheetImporter } from "../services/marketplace/pullSheetImporter.js";
 import { EasyPostService, type EasyPostAddress, type EasyPostParcel } from "../services/easyPostService.js";
+import { UspsTrackingService } from "../services/uspsTrackingService.js";
 import { detectCsvFormat, extractHeadersFromCsv, getFormatDisplayName } from "../services/marketplace/csvFormatDetector.js";
 import { runtimeConfig } from "../config.js";
 import { requireAdminAuth } from "../middleware/adminAuth.js";
@@ -108,6 +109,7 @@ export function registerMarketplaceRoutes(app: Express, ctx: AppContext): void {
   const easypostTrackingLinker = new EasypostTrackingLinker(marketplaceService, logger);
   const pullSheetImporter = new PullSheetImporter(marketplaceService, logger);
   const easyPostService = new EasyPostService(logger);
+  const uspsTrackingService = new UspsTrackingService(logger);
   const printQueueRepo = new PrintQueueRepository(db, logger);
 
   // Mount at /api/cm-admin/marketplace/* (NOT /api/marketplace - that would be public)
@@ -568,8 +570,8 @@ export function registerMarketplaceRoutes(app: Express, ctx: AppContext): void {
         .prepare(`
           SELECT COUNT(*) as total FROM unmatched_tracking
           WHERE resolution_status = 'pending'
-            AND (easypost_status IS NULL
-                 OR easypost_status NOT IN ('delivered', 'in_transit', 'out_for_delivery', 'return_to_sender'))
+            AND (COALESCE(usps_status, easypost_status) IS NULL
+                 OR COALESCE(usps_status, easypost_status) NOT IN ('delivered', 'in_transit', 'out_for_delivery', 'return_to_sender'))
         `).get() as { total: number };
 
       res.json({ unmatched, total: countRow.total, limit, offset });
@@ -1410,26 +1412,31 @@ export function registerMarketplaceRoutes(app: Express, ctx: AppContext): void {
 
   /**
    * POST /api/cm-admin/marketplace/rematch
-   * Refresh tracking statuses from EasyPost and re-match unmatched entries.
+   * Refresh tracking statuses from EasyPost (and USPS fallback) and re-match unmatched entries.
    *
    * Flow:
    * 1. Fetch current status from EasyPost for all pending unmatched tracking
-   * 2. Update local DB with fresh statuses
-   * 3. Re-attempt matching against marketplace orders
+   * 2. Optionally fetch USPS tracking for remaining unknown USPS entries
+   * 3. Update local DB with fresh statuses and resolve by tracking number
+   * 4. Re-attempt matching against marketplace orders
    *
    * Returns: { refreshed, statusUpdated, matched, details }
    */
   router.post("/rematch", async (req: Request, res: Response) => {
     const { operatorId, clientIp, userAgent } = (req as any).auditContext as AuditContext;
+    const includeUspsFallback = Boolean((req.body as any)?.includeUspsFallback);
 
     logger.info(
-      { operatorId, clientIp, userAgent, action: "refresh-tracking" },
+      { operatorId, clientIp, userAgent, action: "refresh-tracking", includeUspsFallback },
       "marketplace.refresh.start"
     );
 
     try {
       // Step 1: Refresh statuses from EasyPost
-      const refreshResult = await marketplaceService.refreshUnmatchedTrackingStatuses(easyPostService);
+      const refreshResult = await marketplaceService.refreshUnmatchedTrackingStatuses(easyPostService, {
+        includeUspsFallback,
+        uspsService: uspsTrackingService,
+      });
 
       logger.info(
         {
@@ -1437,6 +1444,10 @@ export function registerMarketplaceRoutes(app: Express, ctx: AppContext): void {
           refreshed: refreshResult.refreshed,
           updated: refreshResult.updated,
           errors: refreshResult.errors,
+          uspsChecked: refreshResult.uspsChecked,
+          uspsUpdated: refreshResult.uspsUpdated,
+          uspsErrors: refreshResult.uspsErrors,
+          autoResolved: refreshResult.autoResolved,
         },
         "marketplace.refresh.statuses.complete"
       );
@@ -1452,9 +1463,14 @@ export function registerMarketplaceRoutes(app: Express, ctx: AppContext): void {
       res.json({
         ok: true,
         // Refresh results
+        checked: refreshResult.attempted,
         refreshed: refreshResult.refreshed,
-        statusUpdated: refreshResult.updated,
+        statusUpdated: refreshResult.updated + refreshResult.uspsUpdated,
         refreshErrors: refreshResult.errors,
+        uspsChecked: refreshResult.uspsChecked,
+        uspsUpdated: refreshResult.uspsUpdated,
+        uspsErrors: refreshResult.uspsErrors,
+        autoResolved: refreshResult.autoResolved,
         statusChanges: refreshResult.details,
         // Re-match results
         matched: matchResult.matched,
