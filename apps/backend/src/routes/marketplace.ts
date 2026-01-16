@@ -563,10 +563,14 @@ export function registerMarketplaceRoutes(app: Express, ctx: AppContext): void {
 
     try {
       const unmatched = marketplaceService.listUnmatchedTracking(limit, offset);
-      // Count total pending
+      // Count total pending (excluding terminal tracking statuses)
       const countRow = db
-        .prepare("SELECT COUNT(*) as total FROM unmatched_tracking WHERE resolution_status = 'pending'")
-        .get() as { total: number };
+        .prepare(`
+          SELECT COUNT(*) as total FROM unmatched_tracking
+          WHERE resolution_status = 'pending'
+            AND (easypost_status IS NULL
+                 OR easypost_status NOT IN ('delivered', 'in_transit', 'out_for_delivery', 'return_to_sender'))
+        `).get() as { total: number };
 
       res.json({ unmatched, total: countRow.total, limit, offset });
     } catch (err) {

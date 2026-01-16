@@ -494,7 +494,11 @@ export class MarketplaceService {
       `),
 
       listUnmatchedTracking: this.db.prepare(`
-        SELECT * FROM unmatched_tracking WHERE resolution_status = 'pending' ORDER BY created_at DESC LIMIT ? OFFSET ?
+        SELECT * FROM unmatched_tracking
+        WHERE resolution_status = 'pending'
+          AND (easypost_status IS NULL
+               OR easypost_status NOT IN ('delivered', 'in_transit', 'out_for_delivery', 'return_to_sender'))
+        ORDER BY created_at DESC LIMIT ? OFFSET ?
       `),
 
       resolveUnmatchedTracking: this.db.prepare(`
@@ -1228,9 +1232,13 @@ export class MarketplaceService {
     `).get() as { count: number };
 
     // Unmatched tracking count (marketplace only - no CardMint equivalent)
+    // Exclude entries with terminal tracking statuses (delivered, in_transit, etc.)
+    // that are being handled normally and don't require operator attention
     const unmatchedCount = this.db.prepare(`
       SELECT COUNT(*) as count FROM unmatched_tracking
       WHERE resolution_status = 'pending'
+        AND (easypost_status IS NULL
+             OR easypost_status NOT IN ('delivered', 'in_transit', 'out_for_delivery', 'return_to_sender'))
     `).get() as { count: number };
 
     // Marketplace exceptions
