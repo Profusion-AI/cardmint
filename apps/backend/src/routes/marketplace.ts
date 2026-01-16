@@ -1410,40 +1410,63 @@ export function registerMarketplaceRoutes(app: Express, ctx: AppContext): void {
 
   /**
    * POST /api/cm-admin/marketplace/rematch
-   * Manually trigger re-matching of unmatched tracking entries.
-   * Useful when orders were imported before tracking, or to retry after
-   * new orders are added without uploading a new CSV.
+   * Refresh tracking statuses from EasyPost and re-match unmatched entries.
    *
-   * Returns: { matched, details: [{ trackingNumber, orderNumber }] }
+   * Flow:
+   * 1. Fetch current status from EasyPost for all pending unmatched tracking
+   * 2. Update local DB with fresh statuses
+   * 3. Re-attempt matching against marketplace orders
+   *
+   * Returns: { refreshed, statusUpdated, matched, details }
    */
-  router.post("/rematch", (req: Request, res: Response) => {
+  router.post("/rematch", async (req: Request, res: Response) => {
     const { operatorId, clientIp, userAgent } = (req as any).auditContext as AuditContext;
 
     logger.info(
-      { operatorId, clientIp, userAgent, action: "rematch" },
-      "marketplace.rematch.start"
+      { operatorId, clientIp, userAgent, action: "refresh-tracking" },
+      "marketplace.refresh.start"
     );
 
     try {
-      const result = marketplaceService.reMatchUnmatchedTracking();
+      // Step 1: Refresh statuses from EasyPost
+      const refreshResult = await marketplaceService.refreshUnmatchedTrackingStatuses(easyPostService);
 
       logger.info(
-        { operatorId, matched: result.matched, details: result.details },
-        "marketplace.rematch.complete"
+        {
+          operatorId,
+          refreshed: refreshResult.refreshed,
+          updated: refreshResult.updated,
+          errors: refreshResult.errors,
+        },
+        "marketplace.refresh.statuses.complete"
+      );
+
+      // Step 2: Re-match tracking to orders
+      const matchResult = marketplaceService.reMatchUnmatchedTracking();
+
+      logger.info(
+        { operatorId, matched: matchResult.matched, details: matchResult.details },
+        "marketplace.refresh.rematch.complete"
       );
 
       res.json({
         ok: true,
-        matched: result.matched,
-        details: result.details,
+        // Refresh results
+        refreshed: refreshResult.refreshed,
+        statusUpdated: refreshResult.updated,
+        refreshErrors: refreshResult.errors,
+        statusChanges: refreshResult.details,
+        // Re-match results
+        matched: matchResult.matched,
+        matchDetails: matchResult.details,
       });
     } catch (err) {
       const error = err as Error;
       logger.error(
         { err: error.message, operatorId },
-        "marketplace.rematch.failed"
+        "marketplace.refresh.failed"
       );
-      res.status(500).json({ error: "Failed to re-match unmatched tracking" });
+      res.status(500).json({ error: "Failed to refresh tracking statuses" });
     }
   });
 

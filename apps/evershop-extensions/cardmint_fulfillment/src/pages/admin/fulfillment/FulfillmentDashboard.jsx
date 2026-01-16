@@ -189,7 +189,7 @@ export default function FulfillmentDashboard() {
     setPagination({ ...pagination, offset: newOffset });
   };
 
-  const handleRematch = async () => {
+  const handleRefreshTracking = async () => {
     setIsRematching(true);
     try {
       const response = await fetch('/api/admin/api/fulfillment/marketplace/rematch', {
@@ -200,18 +200,29 @@ export default function FulfillmentDashboard() {
       });
       const data = await response.json();
       if (!response.ok || !data.ok) {
-        throw new Error(data.error || 'Rematch failed');
+        throw new Error(data.error || 'Refresh failed');
       }
       // Refresh data (fetchFulfillments already triggers fetchStats)
       await fetchFulfillments();
       // Trigger UnmatchedTrackingPanel refresh
       setUnmatchedRefreshTrigger(prev => prev + 1);
-      // Show success toast
-      setToast({ show: true, message: `Re-matched ${data.matched} tracking entries`, fading: false });
+      // Build detailed toast message
+      const parts = [];
+      if (data.refreshed > 0) {
+        parts.push(`Checked ${data.refreshed} tracking entries`);
+      }
+      if (data.statusUpdated > 0) {
+        parts.push(`${data.statusUpdated} status${data.statusUpdated > 1 ? 'es' : ''} updated`);
+      }
+      if (data.matched > 0) {
+        parts.push(`${data.matched} matched to orders`);
+      }
+      const message = parts.length > 0 ? parts.join(', ') : 'No updates needed';
+      setToast({ show: true, message, fading: false });
       setTimeout(() => setToast(t => ({ ...t, fading: true })), 4500);
       setTimeout(() => setToast({ show: false, message: '', fading: false }), 5000);
     } catch (err) {
-      setToast({ show: true, message: `Rematch failed: ${err.message}`, fading: false });
+      setToast({ show: true, message: `Refresh failed: ${err.message}`, fading: false });
       setTimeout(() => setToast(t => ({ ...t, fading: true })), 4500);
       setTimeout(() => setToast({ show: false, message: '', fading: false }), 5000);
     } finally {
@@ -367,10 +378,10 @@ export default function FulfillmentDashboard() {
         <div style={actionsStyle}>
           <button
             style={secondaryButtonStyle}
-            onClick={handleRematch}
+            onClick={handleRefreshTracking}
             disabled={isRematching}
           >
-            {isRematching ? 'Re-matching...' : 'Re-match Tracking'}
+            {isRematching ? 'Refreshing...' : 'Refresh Tracking'}
           </button>
           <button
             style={primaryButtonStyle}

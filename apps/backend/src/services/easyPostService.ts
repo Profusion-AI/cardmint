@@ -626,6 +626,94 @@ export class EasyPostService {
   }
 
   /**
+   * Get or create a tracker by tracking number.
+   * Used to fetch current tracking status from EasyPost.
+   *
+   * EasyPost's POST /trackers endpoint is idempotent - it returns existing
+   * tracker if one exists for this tracking code, or creates a new one.
+   *
+   * @param trackingCode - The carrier tracking number (e.g., "9400136208303438664253")
+   * @param carrier - Optional carrier code (e.g., "USPS"). If omitted, EasyPost auto-detects.
+   * @returns Tracker with current status, or null on error
+   */
+  async getTrackerByTrackingNumber(
+    trackingCode: string,
+    carrier?: string
+  ): Promise<{
+    id: string;
+    tracking_code: string;
+    status: string;
+    carrier: string;
+    public_url: string;
+    updated_at: string;
+  } | null> {
+    if (!this.isConfigured()) {
+      this.logger.warn("EasyPost not configured, cannot fetch tracker");
+      return null;
+    }
+
+    try {
+      const body: Record<string, unknown> = {
+        tracking_code: trackingCode,
+      };
+      if (carrier) {
+        body.carrier = carrier;
+      }
+
+      const response = await this.apiRequest<{
+        id: string;
+        object: "Tracker";
+        tracking_code: string;
+        status: string;
+        carrier: string;
+        public_url: string;
+        updated_at: string;
+      }>("POST", "/trackers", body);
+
+      if ("error" in response) {
+        const err = response as EasyPostError;
+        this.logger.warn(
+          { trackingCode, carrier, error: err.error.message },
+          "EasyPost getTracker failed"
+        );
+        return null;
+      }
+
+      const tracker = response as {
+        id: string;
+        object: "Tracker";
+        tracking_code: string;
+        status: string;
+        carrier: string;
+        public_url: string;
+        updated_at: string;
+      };
+
+      this.logger.debug(
+        {
+          trackerId: tracker.id,
+          trackingCode: tracker.tracking_code,
+          status: tracker.status,
+          carrier: tracker.carrier,
+        },
+        "EasyPost tracker retrieved"
+      );
+
+      return {
+        id: tracker.id,
+        tracking_code: tracker.tracking_code,
+        status: tracker.status,
+        carrier: tracker.carrier,
+        public_url: tracker.public_url,
+        updated_at: tracker.updated_at,
+      };
+    } catch (err) {
+      this.logger.error({ err, trackingCode }, "EasyPost getTracker exception");
+      return null;
+    }
+  }
+
+  /**
    * Make an authenticated request to the EasyPost API
    */
   private async apiRequest<T>(

@@ -10,6 +10,7 @@ import type { Logger } from "pino";
 import { encryptJson, decryptJson } from "../../utils/encryption";
 import { normalizeNameForMatching } from "../../utils/nameNormalization.js";
 import { parseTcgplayerOrderNumber } from "../../utils/orderNumberFormat.js";
+import type { EasyPostService } from "../easyPostService.js";
 
 // ============================================================================
 // Module-Level State
@@ -238,6 +239,8 @@ export class MarketplaceService {
     insertUnmatchedTracking: Statement;
     listUnmatchedTracking: Statement;
     resolveUnmatchedTracking: Statement;
+    updateUnmatchedTrackingStatus: Statement;
+    listAllPendingUnmatchedTracking: Statement;
     getNextDisplayOrderNumber: Statement;
     countOrdersFiltered: Statement;
     countOrdersBySource: Statement;
@@ -505,6 +508,18 @@ export class MarketplaceService {
         UPDATE unmatched_tracking
         SET resolution_status = ?, matched_to_shipment_id = ?, resolved_by = ?, resolved_at = strftime('%s', 'now')
         WHERE id = ?
+      `),
+
+      updateUnmatchedTrackingStatus: this.db.prepare(`
+        UPDATE unmatched_tracking
+        SET easypost_status = ?, easypost_tracker_id = ?
+        WHERE id = ?
+      `),
+
+      listAllPendingUnmatchedTracking: this.db.prepare(`
+        SELECT * FROM unmatched_tracking
+        WHERE resolution_status = 'pending'
+        ORDER BY created_at DESC
       `),
 
       getNextDisplayOrderNumber: this.db.prepare(`
@@ -1204,6 +1219,98 @@ export class MarketplaceService {
     }
 
     return { matched: matched.length, details: matched };
+  }
+
+  /**
+   * Refresh tracking statuses from EasyPost for all pending unmatched entries.
+   * Fetches current status from EasyPost API and updates local database.
+   *
+   * @param easyPostService - EasyPost service instance for API calls
+   * @returns Count of entries refreshed and any that changed status
+   */
+  async refreshUnmatchedTrackingStatuses(
+    easyPostService: EasyPostService
+  ): Promise<{
+    refreshed: number;
+    updated: number;
+    errors: number;
+    details: Array<{
+      trackingNumber: string;
+      oldStatus: string | null;
+      newStatus: string;
+    }>;
+  }> {
+    // Get ALL pending entries (not filtered by status like listUnmatchedTracking)
+    const pending = this.statements.listAllPendingUnmatchedTracking.all() as UnmatchedTracking[];
+
+    this.logger.info(
+      { pendingCount: pending.length },
+      "Starting tracking status refresh from EasyPost"
+    );
+
+    let refreshed = 0;
+    let updated = 0;
+    let errors = 0;
+    const details: Array<{
+      trackingNumber: string;
+      oldStatus: string | null;
+      newStatus: string;
+    }> = [];
+
+    for (const tracking of pending) {
+      try {
+        const tracker = await easyPostService.getTrackerByTrackingNumber(
+          tracking.tracking_number,
+          tracking.carrier || undefined
+        );
+
+        if (!tracker) {
+          errors++;
+          continue;
+        }
+
+        refreshed++;
+
+        // Update status if changed
+        if (tracker.status !== tracking.easypost_status) {
+          this.statements.updateUnmatchedTrackingStatus.run(
+            tracker.status,
+            tracker.id,
+            tracking.id
+          );
+
+          updated++;
+          details.push({
+            trackingNumber: tracking.tracking_number,
+            oldStatus: tracking.easypost_status,
+            newStatus: tracker.status,
+          });
+
+          this.logger.info(
+            {
+              trackingNumber: tracking.tracking_number,
+              oldStatus: tracking.easypost_status,
+              newStatus: tracker.status,
+              trackerId: tracker.id,
+            },
+            "Updated tracking status from EasyPost"
+          );
+        }
+      } catch (err) {
+        errors++;
+        this.logger.warn(
+          { err, trackingNumber: tracking.tracking_number },
+          "Failed to refresh tracking status"
+        );
+      }
+    }
+
+    this.logger.info(
+      { refreshed, updated, errors },
+      "Completed tracking status refresh"
+    );
+
+    return { refreshed, updated, errors, details };
   }
 
   /**
