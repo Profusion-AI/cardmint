@@ -284,7 +284,9 @@ export default function RatesModal({
 
   useEffect(() => {
     if (isOpen && shipmentId) {
-      // Reset state on modal open
+      // Reset state on modal open - clear ratesData to avoid stale items/insurance display
+      setRatesData(null);
+      setRates([]);
       setParcelPreset('');
       setParcelLength('');
       setParcelWidth('');
@@ -325,6 +327,55 @@ export default function RatesModal({
             }}
           >
             {error}
+          </div>
+        )}
+
+        {/* Order Contents */}
+        {ratesData?.items && ratesData.items.length > 0 && (
+          <div
+            style={{
+              backgroundColor: '#F3F4F6',
+              padding: '12px',
+              borderRadius: '6px',
+              marginBottom: '16px',
+            }}
+          >
+            <div
+              style={{
+                fontSize: '12px',
+                fontWeight: 600,
+                color: '#4B5563',
+                marginBottom: '8px',
+              }}
+            >
+              Order Contents ({ratesData.items.length} line item{ratesData.items.length !== 1 ? 's' : ''}, {ratesData.items.reduce((sum, item) => sum + item.quantity, 0)} total)
+            </div>
+            <div
+              style={{
+                maxHeight: '120px',
+                overflowY: 'auto',
+                fontSize: '12px',
+                color: '#374151',
+              }}
+            >
+              {ratesData.items.map((item, index) => {
+                // Build card detail string only if set or number exists
+                const cardDetail = item.setName || item.cardNumber
+                  ? ` (${[item.setName, item.cardNumber ? `#${item.cardNumber}` : null].filter(Boolean).join(' ')})`
+                  : '';
+                return (
+                  <div
+                    key={index}
+                    style={{
+                      padding: '4px 0',
+                      borderBottom: index < ratesData.items.length - 1 ? '1px solid #E5E7EB' : 'none',
+                    }}
+                  >
+                    {item.quantity}x {item.productName}{cardDetail}
+                  </div>
+                );
+              })}
+            </div>
           </div>
         )}
 

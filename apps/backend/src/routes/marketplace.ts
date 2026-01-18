@@ -982,6 +982,9 @@ export function registerMarketplaceRoutes(app: Express, ctx: AppContext): void {
       return rateList.map(r => ({ ...r, recommended: r.id === recommendedId }));
     };
 
+    // Fetch order items early - needed for both cached and new shipment responses
+    const orderItems = marketplaceService.getItemsByOrderId(shipmentData.order.id);
+
     if (easypostShipmentId && !weightChanged && !parcelOverrideProvided) {
       // Fetch existing shipment rates from EasyPost
       const existingShipment = await easyPostService.getShipment(easypostShipmentId);
@@ -1019,13 +1022,18 @@ export function registerMarketplaceRoutes(app: Express, ctx: AppContext): void {
           parcelWeightOz,
           insuredValueCents,
           rates: addRecommendedFlag(mappedRates),
+          items: orderItems.map((item) => ({
+            productName: item.product_name,
+            setName: item.set_name,
+            cardNumber: item.card_number,
+            quantity: item.quantity,
+          })),
         });
       }
     }
 
     // 12. Create new EasyPost shipment with order context for label custom fields
     const orderNumber = formatTcgplayerOrderNumber(shipmentData.order.external_order_id);
-    const orderItems = marketplaceService.getItemsByOrderId(shipmentData.order.id);
     const firstItemDescription = orderItems.length > 0
       ? (orderItems.length > 1 ? `${orderItems[0].product_name} (+${orderItems.length - 1} more)` : orderItems[0].product_name)
       : undefined;
@@ -1101,6 +1109,12 @@ export function registerMarketplaceRoutes(app: Express, ctx: AppContext): void {
       parcelWeightOz,
       insuredValueCents,
       rates: addRecommendedFlag(mappedRates),
+      items: orderItems.map((item) => ({
+        productName: item.product_name,
+        setName: item.set_name,
+        cardNumber: item.card_number,
+        quantity: item.quantity,
+      })),
     });
   });
 
