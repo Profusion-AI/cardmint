@@ -639,6 +639,9 @@ EOF
 | 2025-12-25 | Claude | prod-2025-12-27a deployed | rsync + npm ci | Fulfillment, security hardening, 6 migrations |
 | 2025-12-25 | Claude | Security tokens added | /etc/cardmint-backend.env | CARDMINT_ADMIN_API_KEY, CAPTURE_INTERNAL_KEY, DISPLAY_TOKEN |
 | 2025-12-25 | Claude | Nginx route added | /etc/nginx/conf.d/cardmint.conf | /api/admin/ → port 4000 |
+| 2026-01-19 | Claude | prod-2026-01-19a deployed | rsync + docker rebuild | PWE workflow, email capture, storefront SPA |
+| 2026-01-19 | Claude | Storefront permissions fixed | chmod -R o+rX | nginx couldn't read /var/www/cardmint-web/ after rsync |
+| 2026-01-19 | Claude | Documentation updated | File edit | DO-verified-access.md v7.0 with SPA deploy guide |
 
 ---
 
@@ -830,6 +833,66 @@ ssh -i ~/.ssh/cardmint_droplet cardmint@157.245.213.233 'sudo systemctl status c
 
 ---
 
+## CardMint Storefront (SPA) Deployment
+
+The CardMint storefront is a React SPA served from `/var/www/cardmint-web/`. Source lives in `external/cardmint-shop/` (git submodule).
+
+> **PRIORITY CARE:** Frontend/UX deployments directly impact customer experience. Unlike backend changes that may fail gracefully, broken frontend = broken store. Always verify after deploy.
+
+> **NO STAGING:** We deploy directly to production. The tradeoff is acceptable given our traffic volume and the ability to hotfix quickly. Test locally before deploying.
+
+### Deployment Command
+
+```bash
+# 1. Build locally
+cd /home/kyle/CardMint-workspace/external/cardmint-shop
+npm run build
+
+# 2. Rsync to production
+rsync -avz --delete \
+  -e "ssh -i ~/.ssh/cardmint_droplet" \
+  /home/kyle/CardMint-workspace/external/cardmint-shop/dist/ \
+  cardmint@157.245.213.233:/var/www/cardmint-web/
+
+# 3. CRITICAL: Fix permissions (rsync preserves local umask, nginx needs read access)
+ssh -i ~/.ssh/cardmint_droplet cardmint@157.245.213.233 \
+  'chmod -R o+rX /var/www/cardmint-web/'
+
+# 4. Verify
+curl -Is https://cardmintshop.com/ | head -3
+# Expected: HTTP/2 200
+```
+
+### Post-Deploy Verification Checklist
+
+| Check | Command | Expected |
+|-------|---------|----------|
+| Root URL | `curl -Is https://cardmintshop.com/ \| head -1` | `HTTP/2 200` |
+| SPA routing | `curl -Is https://cardmintshop.com/vault \| head -1` | `HTTP/2 200` |
+| Title tag | `curl -s https://cardmintshop.com/ \| grep '<title>'` | Contains "CardMint" |
+| Assets loading | Browser DevTools Network tab | No 403/404 on .js/.css |
+
+### Common Issues
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| 403 Forbidden | Permissions after rsync | `chmod -R o+rX /var/www/cardmint-web/` |
+| Blank page | JS error or wrong build | Check browser console, rebuild |
+| Old content | Browser cache | Hard refresh or clear cache |
+| SPA routes 404 | nginx misconfigured | Verify `try_files $uri $uri/ /index.html` |
+
+### Rollback
+
+```bash
+# If broken, restore from previous deploy or git checkout
+cd /home/kyle/CardMint-workspace/external/cardmint-shop
+git checkout HEAD~1
+npm run build
+# Then re-run rsync + chmod steps
+```
+
+---
+
 ## Next Steps
 
 ### Completed ✅
@@ -879,8 +942,8 @@ ssh -i ~/.ssh/cardmint_droplet cardmint@157.245.213.233 'sudo systemctl status c
 
 ---
 
-**Document Version:** 6.0
+**Document Version:** 7.0
 **Maintained By:** Claude (Lead Developer)
 **Reviewed By:** Kyle (Operator/CEO)
-**Last Updated:** January 4, 2026 (Env vars master reference, container networking, extension deployment guide)
-**Next Review:** After fulfillment extension deploy
+**Last Updated:** January 19, 2026 (Added SPA deployment guide, no-staging policy, permissions fix)
+**Next Review:** As needed
