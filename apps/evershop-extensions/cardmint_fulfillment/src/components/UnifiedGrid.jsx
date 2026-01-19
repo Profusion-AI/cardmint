@@ -186,6 +186,22 @@ export default function UnifiedGrid({
     return `$${(cents / 100).toFixed(2)}`;
   };
 
+  const getTotalCents = (f) => {
+    const productCents = Number.isFinite(f?.valueCents) ? f.valueCents : null;
+    const shippingCents = Number.isFinite(f?.shippingCostCents) ? f.shippingCostCents : null;
+    if (productCents == null || shippingCents == null) return null;
+    return productCents + shippingCents;
+  };
+
+  const isPweCandidate = (f) => {
+    if (!f) return false;
+    if (!Number.isFinite(f.itemCount)) return false;
+    if (f.itemCount < 1 || f.itemCount > 3) return false;
+    const totalCents = getTotalCents(f);
+    if (totalCents == null) return false;
+    return totalCents < 749;
+  };
+
   const formatTotalCurrency = (productCents, shippingCents) => {
     if (productCents == null || shippingCents == null) return '—';
     return formatCurrency(productCents + shippingCents);
@@ -307,8 +323,14 @@ export default function UnifiedGrid({
           </tr>
         </thead>
         <tbody>
-          {fulfillments.map((f) => (
-            <tr key={f.id}>
+          {fulfillments.map((f) => {
+            const pweCandidate = isPweCandidate(f);
+            const rowStyle = pweCandidate ? { backgroundColor: '#a6a6a6' } : undefined;
+            const buyerTdStyle = pweCandidate ? { ...tdStyle, color: '#E65100' } : tdStyle;
+            const productTdStyle = pweCandidate ? { ...tdStyle, color: '#E65100' } : tdStyle;
+
+            return (
+              <tr key={f.id} style={rowStyle}>
               <td style={tdStyle}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                   <span style={sourceTagStyle(f.source)}>{f.source}</span>
@@ -362,7 +384,7 @@ export default function UnifiedGrid({
                   })()}
                 </div>
               </td>
-              <td style={tdStyle}>
+              <td style={buyerTdStyle}>
                 {f.customerName ? (
                   f.customerName
                 ) : f.source === 'cardmint' && f.sourceRef?.stripeSessionId ? (
@@ -384,7 +406,7 @@ export default function UnifiedGrid({
                         borderRadius: '4px',
                         border: '1px solid #e5e7eb',
                         backgroundColor: customerLoading[f.id] ? '#f3f4f6' : '#fff',
-                        color: customerLoading[f.id] ? '#9CA3AF' : '#1565C0',
+                        color: customerLoading[f.id] ? '#9CA3AF' : (pweCandidate ? '#E65100' : '#1565C0'),
                         cursor: customerLoading[f.id] ? 'not-allowed' : 'pointer',
                       }}
                     >
@@ -392,7 +414,7 @@ export default function UnifiedGrid({
                     </button>
                   )
                 ) : (
-                  <span style={{ color: '#9CA3AF', fontStyle: 'italic' }}>PII Protected</span>
+                  <span style={{ color: pweCandidate ? '#E65100' : '#9CA3AF', fontStyle: 'italic' }}>PII Protected</span>
                 )}
               </td>
               <td style={tdStyle}>
@@ -428,7 +450,7 @@ export default function UnifiedGrid({
                 )}
               </td>
               <td style={tdStyle}>{formatTrackingAndCarrier(f.shipping)}</td>
-              <td style={tdStyle}>{formatProductWithShipping(f.valueCents, f.shippingCostCents)}</td>
+              <td style={productTdStyle}>{formatProductWithShipping(f.valueCents, f.shippingCostCents)}</td>
               <td style={tdStyle}>{formatTotalCurrency(f.valueCents, f.shippingCostCents)}</td>
               {hasMarketplaceShipments && (
                 <td style={tdStyle}>
@@ -443,6 +465,8 @@ export default function UnifiedGrid({
                         trackingNumber: f.shipping?.trackingNumber,
                         itemCount: f.itemCount,
                         valueCents: f.valueCents,
+                        shippingCostCents: f.shippingCostCents,
+                        isPwe: !!f.isPwe,
                         isExternal: f.isExternal,
                       }}
                       onOpenRatesModal={handleOpenRatesModal}
@@ -454,8 +478,9 @@ export default function UnifiedGrid({
                   )}
                 </td>
               )}
-            </tr>
-          ))}
+              </tr>
+            );
+          })}
         </tbody>
       </table>
 

@@ -15,6 +15,7 @@ export default function MarketplaceShipmentActions({
   onOpenImportModal,
 }) {
   const [loading, setLoading] = useState(false);
+  const pweThresholdCents = 749;
 
   const buttonStyle = (variant = 'default') => {
     const variants = {
@@ -50,6 +51,11 @@ export default function MarketplaceShipmentActions({
     };
   };
 
+  const formatCurrency = (cents) => {
+    if (!Number.isFinite(cents)) return '—';
+    return `$${(cents / 100).toFixed(2)}`;
+  };
+
   const updateStatus = async (newStatus, notes = '') => {
     setLoading(true);
     try {
@@ -75,12 +81,68 @@ export default function MarketplaceShipmentActions({
     }
   };
 
+  const updatePwe = async (isPwe) => {
+    setLoading(true);
+    try {
+      const response = await fetch(
+        `/api/admin/api/fulfillment/marketplace/shipments/${shipment.id}/pwe`,
+        {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ isPwe }),
+          credentials: 'include',
+        }
+      );
+
+      const data = await response.json();
+
+      if (!response.ok || !data.ok) {
+        throw new Error(data.message || data.error || 'Failed to update PWE');
+      }
+
+      if (onStatusChange) {
+        onStatusChange(shipment.id, shipment.status);
+      }
+    } catch (err) {
+      window.alert(err?.message || 'Failed to update PWE');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const status = shipment.status;
+  const itemCount = Number.isFinite(shipment.itemCount) ? shipment.itemCount : null;
+  const valueCents = Number.isFinite(shipment.valueCents) ? shipment.valueCents : null;
+  const shippingCents = Number.isFinite(shipment.shippingCostCents) ? shipment.shippingCostCents : null;
+  const totalCents = valueCents != null && shippingCents != null ? valueCents + shippingCents : null;
+  const isPweCandidate =
+    itemCount != null &&
+    itemCount >= 1 &&
+    itemCount <= 3 &&
+    totalCents != null &&
+    totalCents < pweThresholdCents;
 
   return (
     <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
+      {shipment.isPwe && (
+        <span
+          style={{
+            padding: '4px 8px',
+            backgroundColor: '#E0E0E0',
+            color: '#111827',
+            borderRadius: '4px',
+            fontSize: '11px',
+            fontWeight: 700,
+            border: '1px solid #D1D5DB',
+          }}
+          title="PWE: Plain White Envelope / stamp-based manual shipping (no tracking)"
+        >
+          PWE
+        </span>
+      )}
+
       {/* Pending: Show "Purchase Label" button (hidden for external fulfillment) */}
-      {status === 'pending' && !shipment.isExternal && (
+      {status === 'pending' && !shipment.isExternal && !shipment.isPwe && (
         <button
           style={buttonStyle('primary')}
           onClick={() => onOpenRatesModal(shipment)}
@@ -225,6 +287,48 @@ export default function MarketplaceShipmentActions({
         >
           Completed
         </span>
+      )}
+
+      {/* PWE Toggle (marketplace shipments) */}
+      {shipment.isPwe ? (
+        <button
+          style={buttonStyle('default')}
+          onClick={() => {
+            const confirmed = window.confirm(
+              'Undo PWE?\n\nThis re-enables tracked label purchase for this shipment.'
+            );
+            if (!confirmed) return;
+            updatePwe(false);
+          }}
+          disabled={loading}
+          title="Undo PWE (re-enable label purchase)"
+        >
+          {loading ? '...' : 'Undo PWE'}
+        </button>
+      ) : (
+        <button
+          style={buttonStyle('warning')}
+          onClick={() => {
+            const summaryParts = [];
+            if (totalCents != null) summaryParts.push(`Order total: ${formatCurrency(totalCents)}`);
+            if (itemCount != null) summaryParts.push(`Cards: ${itemCount}`);
+            const summary = summaryParts.length > 0 ? `\n\n${summaryParts.join(' • ')}` : '';
+
+            const warning = isPweCandidate
+              ? ''
+              : '\n\nWARNING: This order does not meet the PWE threshold (1–3 cards and total < $7.49).';
+
+            const confirmed = window.confirm(
+              `Mark as PWE (Plain White Envelope / stamp)?${warning}\n\nThis disables label purchase until you undo it.${summary}`
+            );
+            if (!confirmed) return;
+            updatePwe(true);
+          }}
+          disabled={loading}
+          title="Mark as PWE (stamp-based manual shipping; disables label purchase)"
+        >
+          {loading ? '...' : 'Mark PWE'}
+        </button>
       )}
     </div>
   );

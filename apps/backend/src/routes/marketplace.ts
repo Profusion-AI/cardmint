@@ -763,6 +763,52 @@ export function registerMarketplaceRoutes(app: Express, ctx: AppContext): void {
     }
   });
 
+  /**
+   * PATCH /api/cm-admin/marketplace/shipments/:id/pwe
+   * Toggle stamp-based Plain White Envelope (PWE) workflow for a shipment.
+   *
+   * Body: { isPwe: boolean }
+   * Returns: { ok: true, shipmentId, isPwe }
+   */
+  router.patch("/shipments/:id/pwe", (req: Request, res: Response) => {
+    const { operatorId, clientIp, userAgent } = (req as any).auditContext as AuditContext;
+    const shipmentId = parseInt(req.params.id, 10);
+    const { isPwe } = req.body || {};
+
+    logger.info(
+      { operatorId, clientIp, userAgent, action: "update.shipment.pwe", shipmentId, isPwe },
+      "marketplace.shipment.pwe.start"
+    );
+
+    if (isNaN(shipmentId)) {
+      return res.status(400).json({ error: "Invalid shipment ID" });
+    }
+
+    if (typeof isPwe !== "boolean") {
+      return res.status(400).json({
+        error: "BAD_REQUEST",
+        message: "isPwe must be boolean",
+      });
+    }
+
+    try {
+      const shipment = marketplaceService.getShipmentById(shipmentId);
+      if (!shipment) {
+        return res.status(404).json({ error: "Shipment not found" });
+      }
+
+      marketplaceService.updateShipmentPwe(shipmentId, isPwe);
+
+      logger.info({ operatorId, shipmentId, isPwe }, "marketplace.shipment.pwe.complete");
+
+      res.json({ ok: true, shipmentId, isPwe });
+    } catch (err) {
+      const error = err as Error;
+      logger.error({ err: error.message, operatorId, shipmentId }, "marketplace.shipment.pwe.failed");
+      res.status(500).json({ error: "Failed to update PWE flag" });
+    }
+  });
+
   // ============================================================================
   // Rates & Label Endpoints (Phase 4)
   // ============================================================================
@@ -1152,6 +1198,14 @@ export function registerMarketplaceRoutes(app: Express, ctx: AppContext): void {
     const shipment = marketplaceService.getShipmentById(shipmentId);
     if (!shipment) {
       return res.status(404).json({ error: "Shipment not found" });
+    }
+
+    if (shipment.is_pwe === 1) {
+      return res.status(400).json({
+        error: "PWE_SHIPMENT",
+        message:
+          "This shipment is marked as PWE (stamp-based manual shipping). Undo PWE before purchasing a label.",
+      });
     }
 
     // 1b. Order List imports have no address; prompt to import Shipping Export CSV.

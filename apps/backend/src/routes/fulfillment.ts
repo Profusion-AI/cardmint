@@ -94,6 +94,7 @@ interface MarketplaceShipmentRow {
   exception_notes: string | null;
   shipment_created_at: number;
   is_external: number; // 0 = CardMint-fulfilled, 1 = External/TCGPlayer-fulfilled
+  is_pwe: number; // 0 = normal fulfillment, 1 = PWE (stamp-based manual shipping)
   // From marketplace_orders
   order_id: number;
   source: string;
@@ -179,6 +180,7 @@ interface UnifiedFulfillment {
   shippingMethod: string | null;
   status: string;
   isExternal: boolean;           // True = External fulfillment (no CardMint label), false = CardMint-fulfilled
+  isPwe: boolean;                // True = stamp-based PWE workflow
   importFormat?: string | null;  // 'shipping_export' | 'orderlist' (for marketplace debugging)
   shipping: {
     carrier: string | null;
@@ -456,6 +458,7 @@ export function registerFulfillmentRoutes(app: Express, ctx: AppContext): void {
             ms.exception_notes,
             ms.created_at as shipment_created_at,
             ms.is_external,
+            ms.is_pwe,
             mo.id as order_id,
             mo.source,
             mo.external_order_id,
@@ -1920,6 +1923,7 @@ function formatStripeToUnified(row: FulfillmentRow): UnifiedFulfillment {
     shippingMethod: row.shipping_method,
     status: row.status,
     isExternal: false, // Stripe/CardMint orders are always internal
+    isPwe: false,
     shipping: {
       carrier: row.carrier,
       trackingNumber: row.tracking_number,
@@ -1964,6 +1968,7 @@ function formatMarketplaceToUnified(row: MarketplaceShipmentRow): UnifiedFulfill
     shippingMethod: row.shipping_method,
     status: row.shipment_status,
     isExternal: row.is_external === 1, // External = TCGPlayer-fulfilled (no CardMint label)
+    isPwe: row.is_pwe === 1,
     importFormat: row.import_format,
     shipping: {
       carrier: row.carrier,

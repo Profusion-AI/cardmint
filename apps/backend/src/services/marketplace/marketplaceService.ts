@@ -104,6 +104,8 @@ export interface MarketplaceShipment {
   item_count: number | null;
   // External fulfillment flag (Order List imports)
   is_external: number; // 0 = CardMint label, 1 = TCGPlayer/external fulfillment
+  // Operator flag: Plain White Envelope (PWE) / stamp-based manual shipment
+  is_pwe: number; // 0 = normal fulfillment, 1 = PWE (no label purchase)
   // Concurrency lock for label purchase
   label_purchase_in_progress: number;
   label_purchase_locked_at: number | null;
@@ -240,6 +242,7 @@ export class MarketplaceService {
     updateShipmentTracking: Statement;
     updateShipmentStatus: Statement;
     updateShipmentLabel: Statement;
+    updateShipmentPwe: Statement;
     updateShipmentAddressIfMissing: Statement;
     setAddressExpiry: Statement;
     purgeExpiredAddresses: Statement;
@@ -473,6 +476,12 @@ export class MarketplaceService {
         SET easypost_shipment_id = ?, easypost_rate_id = ?, carrier = ?, service = ?,
             tracking_number = ?, tracking_url = ?, label_url = ?, label_cost_cents = ?,
             label_purchased_at = strftime('%s', 'now'), status = 'label_purchased'
+        WHERE id = ?
+      `),
+
+      updateShipmentPwe: this.db.prepare(`
+        UPDATE marketplace_shipments
+        SET is_pwe = ?, updated_at = strftime('%s', 'now')
         WHERE id = ?
       `),
 
@@ -966,6 +975,10 @@ export class MarketplaceService {
       labelCostCents,
       shipmentId
     );
+  }
+
+  updateShipmentPwe(shipmentId: number, isPwe: boolean): void {
+    this.statements.updateShipmentPwe.run(isPwe ? 1 : 0, shipmentId);
   }
 
   /**
