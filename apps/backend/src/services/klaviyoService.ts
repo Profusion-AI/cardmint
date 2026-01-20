@@ -242,12 +242,22 @@ export class KlaviyoService {
 
   /**
    * Phase 2: Sync a new email subscriber into Klaviyo.
-   * - Upserts profile properties
+   * - Upserts profile properties (including welcome code if provided)
    * - Subscribes profile to the configured list with marketing consent
    *
    * Fire-and-forget callers should never await this in a request/response path.
+   *
+   * @param email - Subscriber email address
+   * @param source - Subscription source (e.g., "vault_landing", "footer")
+   * @param welcomeCode - Optional unique welcome discount code (WELCOME-XXXXXXXX)
+   * @param welcomeCodeExpiresAt - Optional Unix timestamp for when the code expires (from DB)
    */
-  async syncSubscriber(email: string, source: string): Promise<void> {
+  async syncSubscriber(
+    email: string,
+    source: string,
+    welcomeCode?: string | null,
+    welcomeCodeExpiresAt?: number | null
+  ): Promise<void> {
     if (!this.isConfigured()) {
       return;
     }
@@ -260,10 +270,27 @@ export class KlaviyoService {
 
     const nowIso = new Date().toISOString();
 
-    const profileId = await this.upsertProfile(email, {
+    // Build profile properties
+    const properties: Record<string, unknown> = {
       CmSubscribeSource: source,
       CmSubscribeAt: nowIso,
-    });
+    };
+
+    // Add welcome code properties if provided
+    if (welcomeCode) {
+      properties.CmWelcomeCode = welcomeCode;
+      // Use actual expiry from DB if provided, otherwise calculate fallback
+      if (welcomeCodeExpiresAt && welcomeCodeExpiresAt > 0) {
+        properties.CmWelcomeCodeExpiresAt = new Date(welcomeCodeExpiresAt * 1000).toISOString();
+      } else {
+        // Fallback: calculate from now (for backwards compatibility)
+        const expiresAt = new Date();
+        expiresAt.setDate(expiresAt.getDate() + runtimeConfig.welcomeCodeTtlDays);
+        properties.CmWelcomeCodeExpiresAt = expiresAt.toISOString();
+      }
+    }
+
+    const profileId = await this.upsertProfile(email, properties);
 
     if (profileId) {
       await this.subscribeProfileToList(email, profileId, listId);

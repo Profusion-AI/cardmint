@@ -332,10 +332,11 @@ export function registerStripeRoutes(app: Express, ctx: AppContext): void {
 
   /**
    * POST /api/coupon/validate
-   * Validate a coupon code against EverShop Postgres
+   * Validate a coupon code against EverShop Postgres or welcome coupon service
    * Returns discount info if valid, or error reason if invalid
    *
    * Used by SPA cart UI for instant feedback before checkout
+   * Routes WELCOME-* codes to welcomeCouponService, others to couponService (EverShop)
    */
   const handleCouponValidate = async (req: Request, res: Response) => {
     const { coupon_code, subtotal_cents } = req.body;
@@ -370,6 +371,32 @@ export function registerStripeRoutes(app: Express, ctx: AppContext): void {
     }
 
     try {
+      // Route WELCOME-* codes to welcomeCouponService
+      if (ctx.welcomeCouponService.isWelcomeCode(coupon_code)) {
+        const result = await ctx.welcomeCouponService.validateCode(coupon_code, subtotal_cents);
+
+        if (result.valid) {
+          return res.json({
+            ok: true,
+            valid: true,
+            coupon: {
+              code: result.code,
+              discount_pct: result.discount_pct,
+              discount_type: "percentage" as const,
+              discount_cents: result.discount_cents,
+            },
+          });
+        } else {
+          return res.json({
+            ok: true,
+            valid: false,
+            reason: result.reason,
+            message: result.message,
+          });
+        }
+      }
+
+      // Standard EverShop coupon validation
       const result = await ctx.couponService.validateCoupon(coupon_code, subtotal_cents);
 
       if (result.valid) {
@@ -551,10 +578,13 @@ export function registerStripeRoutes(app: Express, ctx: AppContext): void {
 
       // Step 2.5: Validate promo coupon if provided
       // Promo discount is calculated on post-lot subtotal (stacking)
+      // Routes WELCOME-* codes to welcomeCouponService, others to couponService (EverShop)
       let promoDiscount: {
         code: string;
         discount_pct: number;
         discount_cents: number;
+        /** Stripe Promotion Code ID (for welcome codes) - enables native Stripe enforcement */
+        stripe_promo_code_id?: string;
       } | null = null;
 
       if (coupon_code && typeof coupon_code === "string" && coupon_code.trim()) {
@@ -564,37 +594,73 @@ export function registerStripeRoutes(app: Express, ctx: AppContext): void {
         const postLotSubtotalCents = lotResult.finalTotalCents;
 
         try {
-          const couponResult = await ctx.couponService.validateCoupon(
-            coupon_code,
-            rawSubtotalCents,
-            postLotSubtotalCents
-          );
+          // Route WELCOME-* codes to welcomeCouponService
+          if (ctx.welcomeCouponService.isWelcomeCode(coupon_code)) {
+            const welcomeResult = await ctx.welcomeCouponService.validateCode(
+              coupon_code,
+              postLotSubtotalCents // Welcome discount applied to post-lot subtotal (stacking)
+            );
 
-          if (!couponResult.valid) {
-            // Coupon was explicitly provided by the client; fail fast so UX can surface the reason.
-            return res.status(400).json({
-              error: "INVALID_COUPON",
-              reason: couponResult.reason,
-              message: couponResult.message,
-            });
+            if (!welcomeResult.valid) {
+              return res.status(400).json({
+                error: "INVALID_COUPON",
+                reason: welcomeResult.reason,
+                message: welcomeResult.message,
+              });
+            }
+
+            promoDiscount = {
+              code: welcomeResult.code,
+              discount_pct: welcomeResult.discount_pct,
+              discount_cents: welcomeResult.discount_cents,
+              stripe_promo_code_id: welcomeResult.stripe_promo_code_id,
+            };
+
+            logger.info(
+              {
+                couponCode: promoDiscount.code,
+                discountPct: promoDiscount.discount_pct,
+                discountCents: promoDiscount.discount_cents,
+                stripePromoCodeId: promoDiscount.stripe_promo_code_id,
+                type: "welcome_code",
+              },
+              "Welcome code validated for checkout"
+            );
+          } else {
+            // Standard EverShop coupon validation
+            const couponResult = await ctx.couponService.validateCoupon(
+              coupon_code,
+              rawSubtotalCents,
+              postLotSubtotalCents
+            );
+
+            if (!couponResult.valid) {
+              // Coupon was explicitly provided by the client; fail fast so UX can surface the reason.
+              return res.status(400).json({
+                error: "INVALID_COUPON",
+                reason: couponResult.reason,
+                message: couponResult.message,
+              });
+            }
+
+            promoDiscount = {
+              code: couponResult.coupon.code,
+              discount_pct: couponResult.coupon.discount_pct,
+              discount_cents: couponResult.coupon.discount_cents,
+            };
+
+            logger.info(
+              {
+                couponCode: promoDiscount.code,
+                discountPct: promoDiscount.discount_pct,
+                discountCents: promoDiscount.discount_cents,
+                type: "evershop_coupon",
+              },
+              "Promo coupon validated"
+            );
           }
-
-          promoDiscount = {
-            code: couponResult.coupon.code,
-            discount_pct: couponResult.coupon.discount_pct,
-            discount_cents: couponResult.coupon.discount_cents,
-          };
-
-          logger.info(
-            {
-              couponCode: promoDiscount.code,
-              discountPct: promoDiscount.discount_pct,
-              discountCents: promoDiscount.discount_cents,
-            },
-            "Promo coupon validated"
-          );
         } catch (error) {
-          // EverShop Postgres might be unreachable; don't silently ignore a requested discount.
+          // Service might be unreachable; don't silently ignore a requested discount.
           logger.warn(
             { err: error, couponCode: coupon_code },
             "Coupon validation error - blocking checkout"
@@ -1382,7 +1448,7 @@ async function handleCheckoutCompleted(
   ctx: AppContext,
   stripeEventId: string
 ): Promise<string | null> {
-  const { logger, stripeService, inventoryService, klaviyoService, db, emailOutboxRepo, couponService } = ctx;
+  const { logger, stripeService, inventoryService, klaviyoService, db, emailOutboxRepo, couponService, welcomeCouponService } = ctx;
   const sessionId = session.id;
 
   // Check if this is a multi-item checkout (Lot Builder)
@@ -1657,36 +1723,91 @@ async function handleCheckoutCompleted(
     })();
   }
 
-  // Create fulfillment record for shipping workflow
-  // Use metadata for item_count/totals so this works even on webhook retries when processedItems is empty
-  if (metadata.shipping_method) {
-    try {
-      // Check if fulfillment already exists (idempotent on retry)
+	  // Create fulfillment record for shipping workflow
+	  // Stripe is source of truth for totals - metadata is "intent" for discrepancy logging
+	  if (metadata.shipping_method) {
+	    try {
+	      // Check if fulfillment already exists (idempotent on retry)
       const existingFulfillment = db
         .prepare(`SELECT stripe_session_id FROM fulfillment WHERE stripe_session_id = ?`)
         .get(sessionId);
 
-      if (existingFulfillment) {
-        logger.debug({ sessionId }, "checkout.session.completed: fulfillment already exists (idempotent)");
-      } else {
-        // Use metadata totals with Stripe session fallback (works on retries)
-        const calculatedSubtotal = processedItems.reduce((sum, item) => sum + (item.price_cents || 0), 0);
-        const originalSubtotalCents =
-          parseInt(metadata.original_subtotal_cents || "0", 10) ||
-          calculatedSubtotal ||
-          session.amount_subtotal ||
-          0;
-        const finalSubtotalCents =
-          parseInt(metadata.final_subtotal_cents || "0", 10) ||
-          calculatedSubtotal ||
-          session.amount_subtotal ||
-          0;
-        const shippingCostCents = parseInt(metadata.shipping_cost_cents || "0", 10);
-        const requiresManualReview = metadata.requires_manual_review === "1" ? 1 : 0;
+	      if (existingFulfillment) {
+	        logger.debug({ sessionId }, "checkout.session.completed: fulfillment already exists (idempotent)");
+	      } else {
+	        // STRIPE-DERIVED TOTALS (source of truth)
+	        // Stripe's total_details contains actual discount/shipping/tax applied
+	        const stripeSubtotalCentsRaw = session.amount_subtotal;
+	        const stripeDiscountCentsRaw = session.total_details?.amount_discount;
+	        const stripeShippingCentsRaw = session.total_details?.amount_shipping;
 
-        // Get item_count from metadata (works on retries) or processedItems
+	        const metadataOriginalSubtotal = parseInt(metadata.original_subtotal_cents || "0", 10);
+	        const metadataFinalSubtotal = parseInt(metadata.final_subtotal_cents || "0", 10);
+	        const metadataShippingCents = parseInt(metadata.shipping_cost_cents || "0", 10);
+
+	        const stripeSubtotalCents =
+	          stripeSubtotalCentsRaw ??
+	          (metadataOriginalSubtotal > 0 ? metadataOriginalSubtotal : 0);
+	        const stripeDiscountCents =
+	          stripeDiscountCentsRaw ??
+	          (metadataOriginalSubtotal > 0 && metadataFinalSubtotal > 0
+	            ? Math.max(0, metadataOriginalSubtotal - metadataFinalSubtotal)
+	            : 0);
+	        const stripeShippingCents =
+	          typeof stripeShippingCentsRaw === "number"
+	            ? stripeShippingCentsRaw
+	            : metadataShippingCents;
+	        const stripeFinalSubtotalCents = stripeSubtotalCents - stripeDiscountCents;
+
+	        if (
+	          stripeSubtotalCentsRaw == null ||
+	          stripeDiscountCentsRaw == null ||
+	          stripeShippingCentsRaw == null
+	        ) {
+	          logger.error(
+	            {
+	              sessionId,
+	              stripe_amount_subtotal: stripeSubtotalCentsRaw,
+	              stripe_amount_discount: stripeDiscountCentsRaw,
+	              stripe_amount_shipping: stripeShippingCentsRaw,
+	              fallbackOriginalSubtotal: metadataOriginalSubtotal,
+	              fallbackFinalSubtotal: metadataFinalSubtotal,
+	              fallbackShippingCents: metadataShippingCents,
+	            },
+	            "checkout.session.completed: missing Stripe totals; using metadata fallbacks"
+	          );
+	        }
+
+	        // METADATA VALUES (intent - for discrepancy detection)
+	        // Discrepancy logging: detect rounding drift between our calculation and Stripe's
+	        if (metadataFinalSubtotal > 0 && metadataFinalSubtotal !== stripeFinalSubtotalCents) {
+	          logger.warn(
+	            {
+              sessionId,
+              computed: metadataFinalSubtotal,
+              stripe: stripeFinalSubtotalCents,
+              driftCents: stripeFinalSubtotalCents - metadataFinalSubtotal,
+              stripeSubtotal: stripeSubtotalCents,
+              stripeDiscount: stripeDiscountCents,
+            },
+            "checkout.session.completed: final_subtotal discrepancy (Stripe wins)"
+          );
+        }
+        if (metadataShippingCents > 0 && metadataShippingCents !== stripeShippingCents) {
+          logger.warn(
+            {
+              sessionId,
+              computed: metadataShippingCents,
+              stripe: stripeShippingCents,
+            },
+            "checkout.session.completed: shipping_cost discrepancy (Stripe wins)"
+          );
+        }
+
+        const requiresManualReview = metadata.requires_manual_review === "1" ? 1 : 0;
         const itemCount = parseInt(metadata.item_count || "0", 10) || processedItems.length || itemUids.length;
 
+        // PERSIST STRIPE VALUES (not metadata)
         db.prepare(
           `INSERT INTO fulfillment (
             stripe_session_id,
@@ -1703,10 +1824,10 @@ async function handleCheckoutCompleted(
           sessionId,
           paymentIntentId,
           itemCount,
-          originalSubtotalCents,
-          finalSubtotalCents,
+          stripeSubtotalCents,        // Stripe's pre-discount subtotal
+          stripeFinalSubtotalCents,   // Stripe's post-discount subtotal
           metadata.shipping_method,
-          shippingCostCents,
+          stripeShippingCents,        // Stripe's shipping amount
           requiresManualReview
         );
 
@@ -1714,13 +1835,14 @@ async function handleCheckoutCompleted(
           {
             sessionId,
             itemCount,
-            originalSubtotalCents,
-            finalSubtotalCents,
+            originalSubtotalCents: stripeSubtotalCents,
+            finalSubtotalCents: stripeFinalSubtotalCents,
+            discountCents: stripeDiscountCents,
             shippingMethod: metadata.shipping_method,
-            shippingCostCents,
+            shippingCostCents: stripeShippingCents,
             requiresManualReview: !!requiresManualReview,
           },
-          "checkout.session.completed: fulfillment record created"
+          "checkout.session.completed: fulfillment record created (Stripe-derived totals)"
         );
       }
     } catch (fulfillmentErr) {
@@ -1731,10 +1853,10 @@ async function handleCheckoutCompleted(
     }
   }
 
-  // Create order record with human-readable order number
-  // Always attempt creation - use upsert pattern for idempotency on webhook retries
-  // Use metadata for totals (works even when processedItems is empty on retry)
-  try {
+	  // Create order record with human-readable order number
+	  // Always attempt creation - use upsert pattern for idempotency on webhook retries
+	  // Stripe is source of truth for totals - metadata is "intent" for analytics
+	  try {
     // Check if order already exists for this session (webhook retry case)
     const existingOrder = db
       .prepare(`SELECT order_uid, order_number FROM orders WHERE stripe_session_id = ?`)
@@ -1752,24 +1874,71 @@ async function handleCheckoutCompleted(
       const today = new Date().toISOString().slice(0, 10).replace(/-/g, "");
       const prefix = `CM-${today}-`;
 
-      // Get item count from metadata (works on retries) or processedItems
-      const itemCount = parseInt(metadata.item_count || "0", 10) || processedItems.length || itemUids.length;
+	      // Get item count from metadata (works on retries) or processedItems
+	      const itemCount = parseInt(metadata.item_count || "0", 10) || processedItems.length || itemUids.length;
 
-      // Get totals: prefer metadata, fallback to processedItems, ultimate fallback to Stripe session
-      // (Stripe session amounts work on retries even when metadata/processedItems are empty)
-      const calculatedSubtotal = processedItems.reduce((sum, item) => sum + (item.price_cents || 0), 0);
-      const subtotalCents =
-        parseInt(metadata.final_subtotal_cents || "0", 10) ||
-        calculatedSubtotal ||
-        session.amount_subtotal ||
-        0;
-      const shippingCents = parseInt(metadata.shipping_cost_cents || "0", 10);
-      // Total: calculated from subtotal+shipping, or Stripe session total as ultimate fallback
-      const totalCents = (subtotalCents + shippingCents) || session.amount_total || 0;
+	      // STRIPE-DERIVED TOTALS (source of truth)
+	      const stripeSubtotalCentsRaw = session.amount_subtotal;
+	      const stripeDiscountCentsRaw = session.total_details?.amount_discount;
+	      const stripeShippingCentsRaw = session.total_details?.amount_shipping;
+	      const stripeTaxCentsRaw = session.total_details?.amount_tax;
+	      const stripeTotalCentsRaw = session.amount_total;
+
+	      const metadataOriginalSubtotal = parseInt(metadata.original_subtotal_cents || "0", 10);
+	      const metadataFinalSubtotal = parseInt(metadata.final_subtotal_cents || "0", 10);
+	      const metadataShippingCents = parseInt(metadata.shipping_cost_cents || "0", 10);
+
+	      const stripeSubtotalCents =
+	        stripeSubtotalCentsRaw ??
+	        (metadataOriginalSubtotal > 0 ? metadataOriginalSubtotal : 0);
+	      const stripeDiscountCents =
+	        stripeDiscountCentsRaw ??
+	        (metadataOriginalSubtotal > 0 && metadataFinalSubtotal > 0
+	          ? Math.max(0, metadataOriginalSubtotal - metadataFinalSubtotal)
+	          : 0);
+	      const stripeShippingCents =
+	        typeof stripeShippingCentsRaw === "number"
+	          ? stripeShippingCentsRaw
+	          : metadataShippingCents;
+	      const stripeTaxCents = stripeTaxCentsRaw ?? 0;
+	      const stripeFinalSubtotalCents = stripeSubtotalCents - stripeDiscountCents;
+	      const stripeTotalCents =
+	        stripeTotalCentsRaw ??
+	        Math.max(0, stripeFinalSubtotalCents + stripeShippingCents + stripeTaxCents);
+
+	      if (
+	        stripeSubtotalCentsRaw == null ||
+	        stripeDiscountCentsRaw == null ||
+	        stripeShippingCentsRaw == null ||
+	        stripeTaxCentsRaw == null ||
+	        stripeTotalCentsRaw == null
+	      ) {
+	        logger.error(
+	          {
+	            sessionId,
+	            stripe_amount_subtotal: stripeSubtotalCentsRaw,
+	            stripe_amount_discount: stripeDiscountCentsRaw,
+	            stripe_amount_shipping: stripeShippingCentsRaw,
+	            stripe_amount_tax: stripeTaxCentsRaw,
+	            stripe_amount_total: stripeTotalCentsRaw,
+	            fallbackOriginalSubtotal: metadataOriginalSubtotal,
+	            fallbackFinalSubtotal: metadataFinalSubtotal,
+	            fallbackShippingCents: metadataShippingCents,
+	          },
+	          "checkout.session.completed: missing Stripe totals; using fallbacks for order totals"
+	        );
+	      }
+
+	      // Use Stripe values as primary; these are what the customer actually paid
+	      const subtotalCents = stripeFinalSubtotalCents;
+	      const shippingCents = stripeShippingCents;
+      const totalCents = stripeTotalCents;
 
       // Analytics fields: discount/coupon tracking (P0.4.3)
-      const originalSubtotalCents = parseInt(metadata.original_subtotal_cents || "0", 10) || subtotalCents;
-      const discountCents = parseInt(metadata.combined_discount_cents || "0", 10) || 0;
+      // original_subtotal = Stripe's pre-discount subtotal
+      // discount_cents = Stripe's actual discount applied
+      const originalSubtotalCents = stripeSubtotalCents;
+      const discountCents = stripeDiscountCents;
       const promoCode = metadata.promo_code || null;
       const lotDiscountPct = parseInt(metadata.lot_discount_pct || "0", 10) || 0;
       // Determine coupon source for analytics segmentation
@@ -1781,7 +1950,7 @@ async function handleCheckoutCompleted(
       } else if (lotDiscountPct > 0) {
         couponSource = "LOT_BUILDER";
       }
-      const taxCents = 0; // CardMint doesn't charge tax currently
+      const taxCents = stripeTaxCents; // Use Stripe's actual tax (0 currently, future-proof)
 
       // Atomic order creation with transaction and retry on unique constraint violation
       const MAX_RETRIES = 3;
@@ -1959,33 +2128,51 @@ async function handleCheckoutCompleted(
       const promoCode = metadata.promo_code;
       const now = Math.floor(Date.now() / 1000);
 
-      // Claim this session for coupon usage increment (first writer wins)
-      const claim = db
-        .prepare(
-          `INSERT OR IGNORE INTO coupon_redemptions (stripe_session_id, promo_code, created_at)
-           VALUES (?, ?, ?)`
-        )
-        .run(sessionId, promoCode, now);
-
-      if (claim.changes === 0) {
-        logger.debug(
-          { sessionId, promoCode },
-          "checkout.session.completed: skipping coupon increment (already redeemed)"
-        );
-      } else {
-        const ok = await couponService.incrementUsage(promoCode);
-        if (ok) {
+      // Check if this is a welcome code (WELCOME-*) vs. EverShop coupon
+      if (welcomeCouponService.isWelcomeCode(promoCode)) {
+        // Mark welcome code as redeemed (idempotent - checks redeemed_at internally)
+        const marked = welcomeCouponService.markRedeemed(promoCode, sessionId);
+        if (marked) {
           logger.info(
             { sessionId, promoCode },
-            "checkout.session.completed: coupon usage incremented"
+            "checkout.session.completed: welcome code marked redeemed"
           );
         } else {
-          // Allow a future webhook retry to attempt again if EverShop is temporarily unreachable.
-          db.prepare(`DELETE FROM coupon_redemptions WHERE stripe_session_id = ?`).run(sessionId);
-          logger.warn(
+          logger.debug(
             { sessionId, promoCode },
-            "checkout.session.completed: coupon increment failed (will retry on next webhook delivery)"
+            "checkout.session.completed: welcome code already redeemed"
           );
+        }
+      } else {
+        // EverShop coupon: increment usage counter
+        // Claim this session for coupon usage increment (first writer wins)
+        const claim = db
+          .prepare(
+            `INSERT OR IGNORE INTO coupon_redemptions (stripe_session_id, promo_code, created_at)
+             VALUES (?, ?, ?)`
+          )
+          .run(sessionId, promoCode, now);
+
+        if (claim.changes === 0) {
+          logger.debug(
+            { sessionId, promoCode },
+            "checkout.session.completed: skipping coupon increment (already redeemed)"
+          );
+        } else {
+          const ok = await couponService.incrementUsage(promoCode);
+          if (ok) {
+            logger.info(
+              { sessionId, promoCode },
+              "checkout.session.completed: coupon usage incremented"
+            );
+          } else {
+            // Allow a future webhook retry to attempt again if EverShop is temporarily unreachable.
+            db.prepare(`DELETE FROM coupon_redemptions WHERE stripe_session_id = ?`).run(sessionId);
+            logger.warn(
+              { sessionId, promoCode },
+              "checkout.session.completed: coupon increment failed (will retry on next webhook delivery)"
+            );
+          }
         }
       }
     } catch (couponErr) {

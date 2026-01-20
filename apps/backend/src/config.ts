@@ -257,6 +257,10 @@ const envSchema = z.object({
   PUBLIC_BASE_URL: z.string().url().optional(),
   // Privacy DSAR endpoints (SEC-001 - disabled by default)
   PRIVACY_EXPORT_ENABLED: boolFromEnv(false),
+  // Welcome Coupon System (Jan 2026 - unique 10% off for new subscribers)
+  STRIPE_WELCOME_COUPON_ID: z.string().optional(), // Master coupon ID (auto-created if missing)
+  WELCOME_CODE_TTL_DAYS: z.coerce.number().default(30), // Code expiration in days
+  WELCOME_CODE_ENABLED: boolFromEnv(false), // Feature flag
 });
 
 const parsed = envSchema.parse(process.env);
@@ -550,6 +554,10 @@ export const runtimeConfig = {
   publicBaseUrl: parsed.PUBLIC_BASE_URL,
   // Privacy DSAR endpoints (SEC-001 - disabled by default)
   privacyExportEnabled: parsed.PRIVACY_EXPORT_ENABLED,
+  // Welcome Coupon System (Jan 2026 - unique 10% off for new subscribers)
+  stripeWelcomeCouponId: parsed.STRIPE_WELCOME_COUPON_ID ?? "",
+  welcomeCodeTtlDays: parsed.WELCOME_CODE_TTL_DAYS,
+  welcomeCodeEnabled: parsed.WELCOME_CODE_ENABLED,
 };
 
 // Log API key detection status

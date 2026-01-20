@@ -57,6 +57,7 @@ import { createEmailOutboxWorker, EmailOutboxWorker } from "../services/emailOut
 import { createAutoFulfillmentWorker, AutoFulfillmentWorker } from "../services/autoFulfillmentWorker";
 import { createMarketplaceAutoFulfillmentWorker, MarketplaceAutoFulfillmentWorker } from "../services/marketplace/marketplaceAutoFulfillmentWorker";
 import { CouponService } from "../services/couponService";
+import { WelcomeCouponService } from "../services/welcomeCouponService";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MASTER_SETLIST_PATH = path.resolve(__dirname, "../../../../data/mastersetlist.csv");
@@ -100,6 +101,7 @@ export interface AppContext {
   autoFulfillmentWorker: AutoFulfillmentWorker;
   marketplaceAutoFulfillmentWorker: MarketplaceAutoFulfillmentWorker;
   couponService: CouponService;
+  welcomeCouponService: WelcomeCouponService;
 
   // Shutdown state and helpers
   isShuttingDown: () => boolean;
@@ -939,6 +941,16 @@ export async function createContext(): Promise<AppContext> {
   // Coupon validation service (Jan 2026 - EverShop coupon integration)
   const couponService = new CouponService(logger);
 
+  // Welcome coupon service (Jan 2026 - unique 10% off for new subscribers)
+  const welcomeCouponService = new WelcomeCouponService(db, logger);
+
+  // Initialize master coupon if feature is enabled but coupon ID not set
+  if (runtimeConfig.welcomeCodeEnabled && !runtimeConfig.stripeWelcomeCouponId) {
+    void welcomeCouponService.ensureMasterCoupon().catch((err) => {
+      logger.error({ err }, "Failed to ensure master welcome coupon (non-blocking)");
+    });
+  }
+
   // Cleanup expired/aborted idempotency keys on startup
   const cleanup = importSafeguards.cleanupExpiredKeys();
   if (cleanup.deleted > 0 || cleanup.aborted > 0) {
@@ -986,6 +998,7 @@ export async function createContext(): Promise<AppContext> {
     autoFulfillmentWorker,
     marketplaceAutoFulfillmentWorker,
     couponService,
+    welcomeCouponService,
 
     isShuttingDown: () => shuttingDown,
     setShuttingDown: (value: boolean) => {

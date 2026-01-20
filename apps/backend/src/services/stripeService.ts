@@ -53,6 +53,43 @@ export interface LotDiscountInfo {
   finalTotalCents: number;
 }
 
+/**
+ * Distribute a target total across items proportionally, ensuring exact sum.
+ * Uses largest-remainder method to allocate fractional cents deterministically.
+ * This prevents cent drift when applying percentage discounts to multiple items.
+ */
+function allocateCentsProportionally(
+  itemPriceCents: number[],
+  targetTotalCents: number
+): number[] {
+  const originalTotal = itemPriceCents.reduce((a, b) => a + b, 0);
+  if (originalTotal === 0) return itemPriceCents.map(() => 0);
+
+  // Calculate ideal amounts (may have fractional cents)
+  const idealAmounts = itemPriceCents.map(
+    (price) => (price / originalTotal) * targetTotalCents
+  );
+
+  // Floor all amounts first
+  const flooredAmounts = idealAmounts.map(Math.floor);
+  let remaining = targetTotalCents - flooredAmounts.reduce((a, b) => a + b, 0);
+
+  // Distribute remaining cents to items with largest fractional parts
+  // Tie-breaker: lower index wins (deterministic across JS runtimes)
+  const fractionalParts = idealAmounts.map((ideal, i) => ({
+    index: i,
+    fraction: ideal - flooredAmounts[i],
+  }));
+  fractionalParts.sort((a, b) => b.fraction - a.fraction || a.index - b.index);
+
+  const result = [...flooredAmounts];
+  for (let i = 0; i < remaining; i++) {
+    result[fractionalParts[i].index]++;
+  }
+
+  return result;
+}
+
 export class StripeService {
   private stripe: Stripe | null = null;
 
@@ -279,18 +316,21 @@ export class StripeService {
   /**
    * Create Checkout Session for multiple items with shipping and optional discounts
    * Mode: payment, quantity: 1 per item (unique 1-of-1 cards), expires in configured TTL
-   * Discount applied via dynamic Stripe Coupon (negative line items not supported)
    * Includes shipping_options for deterministic shipping fee
    *
-   * Discounts are stacked: lot discount applied first, promo discount applied to post-lot subtotal
-   * Both discounts are combined into a single Stripe coupon (Stripe doesn't allow multiple)
+   * Discount handling:
+   * - Welcome codes (with stripe_promo_code_id): Use native Stripe Promotion Code
+   *   This enables Stripe-side single-use enforcement via times_redeemed
+   * - Lot discounts: Use dynamically-created Stripe Coupon
+   * - Lot + Welcome stacking: Apply lot discount via proportionally-allocated
+   *   line-item prices (guarantees exact finalTotalCents), welcome via promotion_code
    */
   async createMultiItemCheckoutSession(
     items: StripeItemData[],
     stripePriceIds: string[],
     shippingQuote: ShippingQuote,
     lotDiscount: LotDiscountInfo | null,
-    promoDiscount: { code: string; discount_pct: number; discount_cents: number } | null,
+    promoDiscount: { code: string; discount_pct: number; discount_cents: number; stripe_promo_code_id?: string } | null,
     successUrl: string,
     cancelUrl: string
   ): Promise<MultiItemSessionResult> {
@@ -317,86 +357,167 @@ export class StripeService {
       "Creating multi-item Stripe checkout session with shipping"
     );
 
-    // Build line items for all products (each card is unique, qty=1)
-    const lineItems: Stripe.Checkout.SessionCreateParams.LineItem[] = stripePriceIds.map((priceId) => ({
-      price: priceId,
-      quantity: 1,
-      adjustable_quantity: { enabled: false },
-    }));
-
-    // Create dynamic coupon for combined discounts if applicable
-    // Stripe does NOT support negative line items or multiple coupons - must use single combined coupon
-    // Stacking: lot discount applied first, promo discount applied to post-lot subtotal
-    let couponId: string | undefined;
+    // Calculate discount values
     const lotDiscountCents = lotDiscount?.discountAmountCents ?? 0;
+    const lotDiscountPct = lotDiscount?.discountPct ?? 0;
     const promoDiscountCents = promoDiscount?.discount_cents ?? 0;
-    const rawCombinedDiscountCents = lotDiscountCents + promoDiscountCents;
-
-    // Cap combined discount to not exceed subtotal (safety guard)
     const subtotalCents = lotDiscount?.originalTotalCents ?? items.reduce((sum, item) => sum + item.price_cents, 0);
-    const combinedDiscountCents = Math.min(rawCombinedDiscountCents, subtotalCents);
 
-    if (combinedDiscountCents > 0) {
-      // Build customer-facing name based on which discounts are applied
-      let couponName: string;
-      let couponType: string;
+    // Stripe Checkout constraint: Only ONE discount entry allowed
+    // Strategy:
+    // - Welcome codes (with stripe_promo_code_id): Use { promotion_code } for native Stripe enforcement
+    // - Lot discount only: Use { coupon }
+    // - EverShop promo only: Use { coupon }
+    // - Lot + Welcome: Apply lot discount via adjusted line-item prices, use promotion_code
+    // - Lot + EverShop promo: Combine into single coupon
+    const hasWelcomeCode = !!promoDiscount?.stripe_promo_code_id;
+    const hasLotDiscount = lotDiscountCents > 0;
+    const hasEvershopPromo = promoDiscount && !promoDiscount.stripe_promo_code_id && promoDiscountCents > 0;
 
-      if (lotDiscountCents > 0 && promoDiscountCents > 0) {
-        // Both discounts - show combined
-        couponName = `Bundle + Promo Savings ($${(combinedDiscountCents / 100).toFixed(2)} off)`;
-        couponType = "combined";
-      } else if (promoDiscountCents > 0) {
-        // Promo only
-        couponName = `Promo ${promoDiscount!.code} (${promoDiscount!.discount_pct}% off)`;
-        couponType = "promo";
-      } else {
-        // Lot only
-        couponName = `Bundle Savings (${lotDiscount!.discountPct}% off)`;
-        couponType = "lot_builder";
+    // Build line items - may use adjusted prices if lot + welcome stacking
+    let lineItems: Stripe.Checkout.SessionCreateParams.LineItem[];
+    let lotCouponId: string | undefined;
+    let welcomePromoCodeId: string | undefined;
+    let lotAppliedViaLineItems = false;
+
+    if (hasLotDiscount && hasWelcomeCode) {
+      // STACKING CASE: Lot discount + Welcome code
+      // Apply lot discount via proportionally-allocated line-item prices (using price_data)
+      // Use promotion_code for welcome code (enables Stripe native enforcement)
+      const targetTotal = lotDiscount!.finalTotalCents;
+      const itemPrices = items.map((item) => item.price_cents);
+      const allocatedPrices = allocateCentsProportionally(itemPrices, targetTotal);
+
+      // INVARIANT: Allocated prices must sum to target (prevents cent drift)
+      const allocatedSum = allocatedPrices.reduce((a, b) => a + b, 0);
+      if (allocatedSum !== targetTotal) {
+        this.logger.error(
+          { allocatedSum, targetTotal, itemPrices, allocatedPrices },
+          "BUG: Cent allocation does not match target total"
+        );
+        throw new Error(`Cent allocation mismatch: ${allocatedSum} !== ${targetTotal}`);
       }
 
-      const couponMetadata: Record<string, string> = {
-        coupon_type: couponType,
-        source: "system_generated",
-        created_at: new Date().toISOString(),
-      };
+      lineItems = items.map((item, idx) => ({
+        price_data: {
+          currency: "usd",
+          product: `cm_item_${item.item_uid}`,
+          unit_amount: allocatedPrices[idx],
+        },
+        quantity: 1,
+        adjustable_quantity: { enabled: false },
+      }));
 
-      // Add lot discount info if present
-      if (lotDiscount) {
-        couponMetadata.lot_discount_cents = lotDiscountCents.toString();
-        couponMetadata.lot_discount_pct = lotDiscount.discountPct.toString();
-        couponMetadata.lot_reason_code = lotDiscount.reasonCode;
-        couponMetadata.lot_reason_text = lotDiscount.reasonText.slice(0, 200);
-      }
-
-      // Add promo discount info if present
-      if (promoDiscount) {
-        couponMetadata.promo_code = promoDiscount.code;
-        couponMetadata.promo_discount_cents = promoDiscountCents.toString();
-        couponMetadata.promo_discount_pct = promoDiscount.discount_pct.toString();
-      }
-
-      const coupon = await stripe.coupons.create({
-        amount_off: combinedDiscountCents,
-        currency: "usd",
-        duration: "once",
-        name: couponName,
-        metadata: couponMetadata,
-      });
-      couponId = coupon.id;
+      welcomePromoCodeId = promoDiscount.stripe_promo_code_id;
+      lotAppliedViaLineItems = true;
 
       this.logger.info(
         {
-          couponId,
-          combinedDiscountCents,
+          lotDiscountPct,
           lotDiscountCents,
-          promoDiscountCents,
-          promoCode: promoDiscount?.code ?? null,
-          lotReasonCode: lotDiscount?.reasonCode ?? null,
+          targetTotal,
+          allocatedPrices,
+          welcomePromoCodeId,
+          welcomeCode: promoDiscount.code,
+          welcomeDiscountCents: promoDiscountCents,
         },
-        "Created Stripe coupon for combined discounts"
+        "Lot + Welcome stacking: lot via allocated line-item prices, welcome via promotion_code"
       );
+    } else {
+      // Standard case: Use pre-created price IDs
+      lineItems = stripePriceIds.map((priceId) => ({
+        price: priceId,
+        quantity: 1,
+        adjustable_quantity: { enabled: false },
+      }));
+
+      // Welcome code only: Use promotion_code
+      if (hasWelcomeCode) {
+        welcomePromoCodeId = promoDiscount.stripe_promo_code_id;
+        this.logger.info(
+          {
+            welcomePromoCodeId,
+            promoCode: promoDiscount.code,
+            discountCents: promoDiscountCents,
+          },
+          "Using Stripe Promotion Code for welcome discount (native enforcement)"
+        );
+      }
+
+      // Lot discount only (no welcome code): Use coupon
+      if (hasLotDiscount && !hasWelcomeCode) {
+        const couponName = `Bundle Savings (${lotDiscountPct}% off)`;
+        const coupon = await stripe.coupons.create({
+          amount_off: lotDiscountCents,
+          currency: "usd",
+          duration: "once",
+          name: couponName,
+          metadata: {
+            coupon_type: "lot_builder",
+            source: "system_generated",
+            created_at: new Date().toISOString(),
+            lot_discount_cents: lotDiscountCents.toString(),
+            lot_discount_pct: lotDiscountPct.toString(),
+            lot_reason_code: lotDiscount!.reasonCode,
+            lot_reason_text: lotDiscount!.reasonText.slice(0, 200),
+          },
+        });
+        lotCouponId = coupon.id;
+
+        this.logger.info(
+          { lotCouponId, lotDiscountCents, lotReasonCode: lotDiscount!.reasonCode },
+          "Created Stripe coupon for lot discount"
+        );
+      }
+
+      // EverShop promo code: Use coupon (combine with lot if both present)
+      if (hasEvershopPromo) {
+        if (lotCouponId) {
+          // Lot + EverShop promo: Combine into single coupon
+          await stripe.coupons.del(lotCouponId);
+          const combinedCents = Math.min(lotDiscountCents + promoDiscountCents, subtotalCents);
+          const combinedCoupon = await stripe.coupons.create({
+            amount_off: combinedCents,
+            currency: "usd",
+            duration: "once",
+            name: `Bundle + Promo Savings ($${(combinedCents / 100).toFixed(2)} off)`,
+            metadata: {
+              coupon_type: "combined",
+              source: "system_generated",
+              created_at: new Date().toISOString(),
+              lot_discount_cents: lotDiscountCents.toString(),
+              lot_discount_pct: lotDiscountPct.toString(),
+              lot_reason_code: lotDiscount!.reasonCode,
+              promo_code: promoDiscount!.code,
+              promo_discount_cents: promoDiscountCents.toString(),
+              promo_discount_pct: promoDiscount!.discount_pct.toString(),
+            },
+          });
+          lotCouponId = combinedCoupon.id;
+          this.logger.info({ combinedCouponId: lotCouponId, combinedCents }, "Created combined coupon for lot + EverShop promo");
+        } else {
+          // EverShop promo only
+          const promoCoupon = await stripe.coupons.create({
+            amount_off: promoDiscountCents,
+            currency: "usd",
+            duration: "once",
+            name: `Promo ${promoDiscount!.code} (${promoDiscount!.discount_pct}% off)`,
+            metadata: {
+              coupon_type: "promo",
+              source: "system_generated",
+              created_at: new Date().toISOString(),
+              promo_code: promoDiscount!.code,
+              promo_discount_cents: promoDiscountCents.toString(),
+              promo_discount_pct: promoDiscount!.discount_pct.toString(),
+            },
+          });
+          lotCouponId = promoCoupon.id;
+        }
+      }
     }
+
+    // Calculate combined discount for metadata (for analytics)
+    const combinedDiscountCents = Math.min(lotDiscountCents + promoDiscountCents, subtotalCents);
 
     // Calculate totals for metadata (used by webhook for fulfillment record)
     // subtotalCents is already calculated above (pre-discount total)
@@ -421,16 +542,22 @@ export class StripeService {
       metadata.lot_discount_pct = lotDiscount.discountPct.toString();
       metadata.lot_discount_cents = lotDiscountCents.toString();
       metadata.lot_reason_code = lotDiscount.reasonCode;
+      // Track how lot discount was applied (for operational clarity)
+      metadata.lot_applied_via = lotAppliedViaLineItems ? "line_item_prices" : "coupon";
     }
 
     if (promoDiscount) {
       metadata.promo_code = promoDiscount.code;
       metadata.promo_discount_pct = promoDiscount.discount_pct.toString();
       metadata.promo_discount_cents = promoDiscountCents.toString();
+      // Track whether this is a welcome code (native enforcement) or EverShop coupon
+      if (promoDiscount.stripe_promo_code_id) {
+        metadata.welcome_promo_code_id = promoDiscount.stripe_promo_code_id;
+      }
     }
 
-    if (couponId) {
-      metadata.stripe_coupon_id = couponId;
+    if (lotCouponId) {
+      metadata.stripe_coupon_id = lotCouponId;
     }
 
     // Aggregate product_uids for correlation (first product_uid as representative)
@@ -474,11 +601,22 @@ export class StripeService {
       },
     };
 
-    // Apply coupon discount if created
-    // Note: Stripe does not allow both allow_promotion_codes and discounts
-    // When using bundle discounts, we don't allow promotion codes
-    if (couponId) {
-      sessionParams.discounts = [{ coupon: couponId }];
+    // Apply single discount (Stripe constraint: only ONE discount entry allowed)
+    // - Lot + Welcome: lot applied via line-item prices, use promotion_code only
+    // - Lot only: use coupon
+    // - Welcome only: use promotion_code
+    // - EverShop promo (± lot): combined into single coupon
+    //
+    // INVARIANT: Only one of lotCouponId or welcomePromoCodeId should be set
+    if (lotCouponId && welcomePromoCodeId) {
+      // This should never happen due to the logic above, but guard anyway
+      throw new Error("BUG: Both lotCouponId and welcomePromoCodeId set - violates Stripe single-discount constraint");
+    }
+
+    if (lotCouponId) {
+      sessionParams.discounts = [{ coupon: lotCouponId }];
+    } else if (welcomePromoCodeId) {
+      sessionParams.discounts = [{ promotion_code: welcomePromoCodeId }];
     } else {
       sessionParams.allow_promotion_codes = false;
     }
@@ -494,7 +632,8 @@ export class StripeService {
         promoCode: promoDiscount?.code ?? null,
         promoDiscountPct: promoDiscount?.discount_pct ?? null,
         combinedDiscountCents,
-        couponId,
+        lotCouponId: lotCouponId ?? null,
+        welcomePromoCodeId: welcomePromoCodeId ?? null,
         shippingMethod: shippingQuote.method,
       },
       "Multi-item Stripe checkout session created with shipping"

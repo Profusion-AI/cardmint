@@ -14,7 +14,7 @@ interface SubscribeBody {
 }
 
 export function registerSubscribeRoutes(app: Express, ctx: AppContext): void {
-  const { db, logger, klaviyoService } = ctx;
+  const { db, logger, klaviyoService, welcomeCouponService } = ctx;
 
   /**
    * POST /api/subscribe
@@ -64,18 +64,55 @@ export function registerSubscribeRoutes(app: Express, ctx: AppContext): void {
       if (result.changes > 0) {
         logger.info({ email: email.substring(0, 3) + "***", source }, "subscribe.new");
 
-        // Phase 2: Fire-and-forget Klaviyo profile sync (never block the response)
-        if (klaviyoService.isConfigured()) {
-          void (async () => {
-            try {
-              await klaviyoService.syncSubscriber(email, source);
-            } catch (err) {
-              logger.error({ err }, "subscribe.klaviyo.failed");
+        // Fire-and-forget: Generate welcome code and sync to Klaviyo
+        void (async () => {
+          try {
+            // Generate welcome code (returns existing if duplicate subscription)
+            let welcomeCode: string | null = null;
+            let welcomeCodeExpiresAt: number | null = null;
+
+            if (welcomeCouponService.isEnabled()) {
+              const codeResult = await welcomeCouponService.generateCode(email, source);
+              if (codeResult) {
+                welcomeCode = codeResult.code;
+                welcomeCodeExpiresAt = codeResult.expiresAt;
+              }
             }
-          })();
-        }
+
+            // Sync to Klaviyo with welcome code (if configured)
+            if (klaviyoService.isConfigured()) {
+              await klaviyoService.syncSubscriber(email, source, welcomeCode, welcomeCodeExpiresAt);
+            }
+          } catch (err) {
+            logger.error({ err }, "subscribe.async.failed");
+          }
+        })();
       } else {
         logger.debug({ source }, "subscribe.duplicate");
+
+        // For duplicate subscriptions, still sync existing welcome code to Klaviyo
+        // (in case the profile needs updating)
+        void (async () => {
+          try {
+            let existingCode: string | null = null;
+            let existingExpiresAt: number | null = null;
+
+            if (welcomeCouponService.isEnabled()) {
+              existingCode = welcomeCouponService.getCodeForEmail(email);
+              if (existingCode) {
+                // Look up expiry from DB
+                const codeDetails = welcomeCouponService.getCodeDetails(existingCode);
+                existingExpiresAt = codeDetails?.expires_at ?? null;
+              }
+            }
+
+            if (klaviyoService.isConfigured()) {
+              await klaviyoService.syncSubscriber(email, source, existingCode, existingExpiresAt);
+            }
+          } catch (err) {
+            logger.error({ err }, "subscribe.duplicate.sync.failed");
+          }
+        })();
       }
 
       // Always return success to avoid email enumeration
