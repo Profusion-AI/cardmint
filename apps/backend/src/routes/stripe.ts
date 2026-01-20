@@ -2208,8 +2208,9 @@ async function handleCheckoutExpired(
     "checkout.session.expired: reservations released"
   );
 
-  // Return sessionId for idempotency tracking (legacy: used to return single item_uid)
-  return sessionId;
+  // Return null - multiple items released, no single item_uid to track
+  // Event idempotency handled by event_id in stripe_webhook_events
+  return null;
 }
 
 /**

@@ -90,24 +90,33 @@ export function registerSubscribeRoutes(app: Express, ctx: AppContext): void {
       } else {
         logger.debug({ source }, "subscribe.duplicate");
 
-        // For duplicate subscriptions, still sync existing welcome code to Klaviyo
-        // (in case the profile needs updating)
+        // For duplicate subscriptions, generate code if missing (handles "subscribed before
+        // welcome codes were enabled" case) and sync to Klaviyo
         void (async () => {
           try {
-            let existingCode: string | null = null;
-            let existingExpiresAt: number | null = null;
+            let welcomeCode: string | null = null;
+            let welcomeCodeExpiresAt: number | null = null;
 
             if (welcomeCouponService.isEnabled()) {
-              existingCode = welcomeCouponService.getCodeForEmail(email);
-              if (existingCode) {
+              // Check for existing code first
+              welcomeCode = welcomeCouponService.getCodeForEmail(email);
+              if (welcomeCode) {
                 // Look up expiry from DB
-                const codeDetails = welcomeCouponService.getCodeDetails(existingCode);
-                existingExpiresAt = codeDetails?.expires_at ?? null;
+                const codeDetails = welcomeCouponService.getCodeDetails(welcomeCode);
+                welcomeCodeExpiresAt = codeDetails?.expires_at ?? null;
+              } else {
+                // No code exists - generate one (handles pre-existing subscribers)
+                const codeResult = await welcomeCouponService.generateCode(email, source);
+                if (codeResult) {
+                  welcomeCode = codeResult.code;
+                  welcomeCodeExpiresAt = codeResult.expiresAt;
+                  logger.info({ email: email.substring(0, 3) + "***" }, "subscribe.duplicate.code_generated");
+                }
               }
             }
 
             if (klaviyoService.isConfigured()) {
-              await klaviyoService.syncSubscriber(email, source, existingCode, existingExpiresAt);
+              await klaviyoService.syncSubscriber(email, source, welcomeCode, welcomeCodeExpiresAt);
             }
           } catch (err) {
             logger.error({ err }, "subscribe.duplicate.sync.failed");
