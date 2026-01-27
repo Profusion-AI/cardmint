@@ -151,3 +151,10 @@ node_modules/
 
 # iPhone mobile capture imports
 iPhone/
+
+# Separate experimental projects
+pokemon-card-scanner/
+scanner-app/
+
+# LibreOffice lock files
+.~lock.*#
