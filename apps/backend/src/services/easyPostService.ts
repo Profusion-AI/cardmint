@@ -714,6 +714,63 @@ export class EasyPostService {
   }
 
   /**
+   * Request a refund for a purchased shipping label.
+   * EasyPost refunds the postage if the label hasn't been scanned.
+   * USPS: Must be within 30 days, must not be scanned.
+   *
+   * @param shipmentId - EasyPost shipment ID (not our internal ID)
+   * @returns Refund status from EasyPost
+   */
+  async refundShipment(shipmentId: string): Promise<{
+    success: boolean;
+    refundStatus?: string;
+    error?: string;
+  }> {
+    if (!this.isConfigured()) {
+      return { success: false, error: "EasyPost not configured" };
+    }
+
+    try {
+      const response = await this.apiRequest<EasyPostShipment>(
+        "POST",
+        `/shipments/${shipmentId}/refund`
+      );
+
+      if ("error" in response) {
+        const err = response as EasyPostError;
+        this.logger.error({ err: err.error, shipmentId }, "EasyPost refundShipment failed");
+        return { success: false, error: err.error.message };
+      }
+
+      const shipment = response as EasyPostShipment;
+
+      // EasyPost returns refund_status on the shipment object
+      // Possible values: "submitted", "refunded", "rejected"
+      const refundStatus = (shipment as unknown as { refund_status?: string }).refund_status;
+
+      this.logger.info(
+        {
+          shipmentId,
+          refundStatus,
+          trackingCode: shipment.tracking_code,
+        },
+        "EasyPost refund requested"
+      );
+
+      return {
+        success: true,
+        refundStatus: refundStatus || "submitted",
+      };
+    } catch (err) {
+      this.logger.error({ err, shipmentId }, "EasyPost refundShipment exception");
+      return {
+        success: false,
+        error: err instanceof Error ? err.message : "Unknown error",
+      };
+    }
+  }
+
+  /**
    * Make an authenticated request to the EasyPost API
    */
   private async apiRequest<T>(

@@ -110,6 +110,46 @@ export default function MarketplaceShipmentActions({
     }
   };
 
+  const handleRefund = async () => {
+    const confirmed = window.confirm(
+      `Request label refund for shipment #${shipment.id}?\n\n` +
+      `Tracking: ${shipment.trackingNumber || 'N/A'}\n\n` +
+      `USPS refunds require:\n` +
+      `• Label created within 30 days\n` +
+      `• Package NOT scanned by USPS\n\n` +
+      `Proceed with refund request?`
+    );
+    if (!confirmed) return;
+
+    setLoading(true);
+    try {
+      const response = await fetch(
+        `/api/admin/api/fulfillment/marketplace/shipments/${shipment.id}/refund`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+        }
+      );
+      const data = await response.json();
+
+      if (data.ok) {
+        window.alert(`Refund ${data.refundStatus}: ${
+          data.refundStatus === 'refunded' ? 'Label refunded immediately' :
+          data.refundStatus === 'submitted' ? 'Refund submitted for processing (may take up to 15 days)' :
+          'Refund rejected - label may have been scanned'
+        }`);
+        if (onStatusChange) onStatusChange(shipment.id, shipment.status);
+      } else {
+        window.alert(`Refund failed: ${data.error || 'Unknown error'}`);
+      }
+    } catch (err) {
+      window.alert(`Refund failed: ${err.message || 'Network error'}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const status = shipment.status;
   const itemCount = Number.isFinite(shipment.itemCount) ? shipment.itemCount : null;
   const valueCents = Number.isFinite(shipment.valueCents) ? shipment.valueCents : null;
@@ -187,10 +227,10 @@ export default function MarketplaceShipmentActions({
         </>
       )}
 
-      {/* Label Purchased: Show "Print Label (PDF)" + "Mark Shipped" */}
+      {/* Label Purchased: Show "Print/Reprint Label (PDF)" + "Refund" + "Mark Shipped" */}
       {status === 'label_purchased' && (
         <>
-          {shipment.id && (
+          {shipment.id && (!shipment.refundStatus || shipment.refundStatus === 'rejected') && (
             <>
               {/* Primary: Print-ready PDF - works with Fedora's native viewer */}
               <a
@@ -202,36 +242,50 @@ export default function MarketplaceShipmentActions({
                   textDecoration: 'none',
                   display: 'inline-block',
                 }}
-                title="Print-ready 4x6 PDF for PL-60 thermal printer (prints correctly from any viewer)"
+                title={shipment.labelViewedAt
+                  ? "Reprint label (already printed once)"
+                  : "Print-ready 4x6 PDF for PL-60 thermal printer"}
               >
-                Print Label
+                {shipment.labelViewedAt ? 'Reprint' : 'Print Label'}
               </a>
-              {/* Secondary: PNG for GIMP editing workflow */}
-              <a
-                href={`/api/admin/api/fulfillment/marketplace/shipments/${shipment.id}/label/optimized`}
-                target="_blank"
-                rel="noopener noreferrer"
-                style={{
-                  ...buttonStyle('default'),
-                  textDecoration: 'none',
-                  display: 'inline-block',
-                  fontSize: '10px',
-                  padding: '4px 8px',
-                  opacity: 0.8,
-                }}
-                title="PNG for GIMP editing (812x1218 @ 203 DPI)"
-              >
-                PNG
-              </a>
+              {/* Refund button (replaces PNG) */}
+              {shipment.easypostShipmentId && (
+                <button
+                  style={buttonStyle('warning')}
+                  onClick={handleRefund}
+                  disabled={loading}
+                  title="Request label refund via EasyPost (USPS: within 30 days, not scanned)"
+                >
+                  {loading ? '...' : 'Refund'}
+                </button>
+              )}
             </>
           )}
-          <button
-            style={buttonStyle('success')}
-            onClick={() => updateStatus('shipped')}
-            disabled={loading}
-          >
-            {loading ? '...' : 'Mark Shipped'}
-          </button>
+          {/* Refund status badge */}
+          {shipment.refundStatus && (
+            <span style={{
+              padding: '4px 8px',
+              backgroundColor: shipment.refundStatus === 'refunded' ? '#D1FAE5' :
+                               shipment.refundStatus === 'rejected' ? '#FEE2E2' : '#FEF3C7',
+              color: shipment.refundStatus === 'refunded' ? '#065F46' :
+                     shipment.refundStatus === 'rejected' ? '#991B1B' : '#92400E',
+              borderRadius: '4px',
+              fontSize: '11px',
+              fontWeight: 500,
+            }}>
+              {shipment.refundStatus === 'submitted' ? 'Refund Pending' :
+               shipment.refundStatus === 'refunded' ? 'Refunded' : 'Refund Rejected'}
+            </span>
+          )}
+          {(!shipment.refundStatus || shipment.refundStatus === 'rejected') && (
+            <button
+              style={buttonStyle('success')}
+              onClick={() => updateStatus('shipped')}
+              disabled={loading}
+            >
+              {loading ? '...' : 'Mark Shipped'}
+            </button>
+          )}
         </>
       )}
 

@@ -95,6 +95,9 @@ interface MarketplaceShipmentRow {
   shipment_created_at: number;
   is_external: number; // 0 = CardMint-fulfilled, 1 = External/TCGPlayer-fulfilled
   is_pwe: number; // 0 = normal fulfillment, 1 = PWE (stamp-based manual shipping)
+  label_viewed_at: number | null; // Timestamp when label was first viewed (Print → Reprint)
+  refund_status: string | null; // 'submitted' | 'refunded' | 'rejected'
+  easypost_shipment_id: string | null;
   // From marketplace_orders
   order_id: number;
   source: string;
@@ -190,6 +193,7 @@ interface UnifiedFulfillment {
     labelUrl: string | null;
     labelCostCents: number | null;
     labelPurchasedAt: number | null;
+    labelViewedAt?: number | null;
   };
   timeline: {
     createdAt: number;
@@ -200,6 +204,8 @@ interface UnifiedFulfillment {
     type: string | null;
     notes: string | null;
   } | null;
+  refundStatus?: string | null;
+  easypostShipmentId?: string | null;
   sourceRef: {
     stripeSessionId?: string;
     marketplaceOrderId?: number;
@@ -459,6 +465,9 @@ export function registerFulfillmentRoutes(app: Express, ctx: AppContext): void {
             ms.created_at as shipment_created_at,
             ms.is_external,
             ms.is_pwe,
+            ms.label_viewed_at,
+            ms.refund_status,
+            ms.easypost_shipment_id,
             mo.id as order_id,
             mo.source,
             mo.external_order_id,
@@ -765,6 +774,7 @@ export function registerFulfillmentRoutes(app: Express, ctx: AppContext): void {
       const shipmentsWithAddress = shipments.map((s) => {
         const decryptedAddress = safeDecryptMarketplaceAddress(s.shipping_address_encrypted);
         return {
+          id: s.id, // Required for Print Label button URL
           shipmentSequence: s.shipment_sequence,
           carrier: s.carrier,
           service: s.service,
@@ -1954,6 +1964,7 @@ function formatStripeToUnified(row: FulfillmentRow): UnifiedFulfillment {
  * Format marketplace shipment row to unified response shape
  */
 function formatMarketplaceToUnified(row: MarketplaceShipmentRow): UnifiedFulfillment {
+  const effectiveStatus = row.is_pwe === 1 ? "shipped" : row.shipment_status;
   return {
     id: `mp:${row.shipment_id}`,
     source: row.source as "tcgplayer" | "ebay",
@@ -1966,7 +1977,7 @@ function formatMarketplaceToUnified(row: MarketplaceShipmentRow): UnifiedFulfill
     valueCents: row.product_value_cents,
     shippingCostCents: row.shipping_fee_cents,
     shippingMethod: row.shipping_method,
-    status: row.shipment_status,
+    status: effectiveStatus,
     isExternal: row.is_external === 1, // External = TCGPlayer-fulfilled (no CardMint label)
     isPwe: row.is_pwe === 1,
     importFormat: row.import_format,
@@ -1978,6 +1989,7 @@ function formatMarketplaceToUnified(row: MarketplaceShipmentRow): UnifiedFulfill
       labelUrl: row.label_url,
       labelCostCents: row.label_cost_cents,
       labelPurchasedAt: row.label_purchased_at,
+      labelViewedAt: row.label_viewed_at,
     },
     timeline: {
       createdAt: row.order_date,
@@ -1990,6 +2002,8 @@ function formatMarketplaceToUnified(row: MarketplaceShipmentRow): UnifiedFulfill
           notes: row.exception_notes,
         }
       : null,
+    refundStatus: row.refund_status,
+    easypostShipmentId: row.easypost_shipment_id,
     sourceRef: {
       marketplaceOrderId: row.order_id,
       shipmentId: row.shipment_id,

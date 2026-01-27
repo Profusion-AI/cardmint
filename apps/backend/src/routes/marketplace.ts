@@ -1414,7 +1414,7 @@ export function registerMarketplaceRoutes(app: Express, ctx: AppContext): void {
 
     try {
       // 1. Get shipment to find label URL
-      const shipment = marketplaceService.getShipmentById(shipmentId);
+      const shipment = marketplaceService.getShipmentById(shipmentId) as any;
       if (!shipment) {
         return res.status(404).json({ error: "NOT_FOUND", message: "Shipment not found" });
       }
@@ -1423,6 +1423,14 @@ export function registerMarketplaceRoutes(app: Express, ctx: AppContext): void {
         return res.status(400).json({
           error: "NO_LABEL",
           message: "No label has been purchased for this shipment yet",
+        });
+      }
+
+      // 1b. Block access if label has been refunded
+      if (shipment.refund_status === "submitted" || shipment.refund_status === "refunded") {
+        return res.status(410).json({
+          error: "LABEL_REFUNDED",
+          message: "This label has been refunded and cannot be printed",
         });
       }
 
@@ -1445,6 +1453,17 @@ export function registerMarketplaceRoutes(app: Express, ctx: AppContext): void {
       // 3. Process and return optimized label (PNG or PDF)
       const outputFormat = format as "png" | "pdf";
       const processed = await processLabelForPL60(shipment.label_url, shipmentId, "marketplace", outputFormat);
+
+      // 3b. Track label view (only for PNG/PDF, not info) - for Print → Reprint UI state
+      // Best-effort atomic write - don't let this break label rendering
+      if (!shipment.label_viewed_at) {
+        try {
+          db.prepare("UPDATE marketplace_shipments SET label_viewed_at = ? WHERE id = ? AND label_viewed_at IS NULL")
+            .run(Math.floor(Date.now() / 1000), shipmentId);
+        } catch (viewErr) {
+          logger.warn({ err: (viewErr as Error).message, shipmentId }, "Failed to update label_viewed_at (non-blocking)");
+        }
+      }
 
       logger.info(
         { operatorId, shipmentId, format: outputFormat, size: processed.optimizedBuffer.length },
@@ -1469,6 +1488,111 @@ export function registerMarketplaceRoutes(app: Express, ctx: AppContext): void {
       );
       res.status(500).json({
         error: "LABEL_PROCESSING_FAILED",
+        message: error.message,
+      });
+    }
+  });
+
+  /**
+   * POST /api/cm-admin/marketplace/shipments/:id/refund
+   * Request a refund for a purchased shipping label via EasyPost.
+   *
+   * EasyPost refunds the postage if the label hasn't been scanned.
+   * USPS: Must be within 30 days and not scanned.
+   *
+   * Guards:
+   * - Shipment must exist
+   * - Must have easypost_shipment_id (label was purchased via EasyPost)
+   * - Status must be 'label_purchased' (can't refund shipped labels)
+   * - refund_status must be NULL (prevent duplicate refund requests)
+   *
+   * Returns: { ok, shipmentId, refundStatus }
+   */
+  router.post("/shipments/:id/refund", async (req: Request, res: Response) => {
+    const { operatorId, clientIp, userAgent } = (req as any).auditContext as AuditContext;
+    const shipmentId = parseInt(req.params.id, 10);
+
+    logger.info(
+      { operatorId, clientIp, userAgent, action: "refund.label", shipmentId },
+      "marketplace.shipment.refund.start"
+    );
+
+    if (isNaN(shipmentId) || shipmentId <= 0) {
+      return res.status(400).json({ error: "BAD_REQUEST", message: "Invalid shipment ID" });
+    }
+
+    try {
+      // 1. Get shipment
+      const shipment = marketplaceService.getShipmentById(shipmentId) as any;
+      if (!shipment) {
+        return res.status(404).json({ error: "NOT_FOUND", message: "Shipment not found" });
+      }
+
+      // 2. Require EasyPost shipment ID (can only refund EasyPost-purchased labels)
+      if (!shipment.easypost_shipment_id) {
+        return res.status(400).json({
+          error: "NO_EASYPOST_SHIPMENT",
+          message: "No EasyPost shipment ID found. Label may not have been purchased via EasyPost.",
+        });
+      }
+
+      // 3. Require status is label_purchased (can't refund shipped labels)
+      if (shipment.status !== "label_purchased") {
+        return res.status(400).json({
+          error: "INVALID_STATUS",
+          message: `Cannot refund label with status '${shipment.status}'. Only 'label_purchased' status can be refunded.`,
+        });
+      }
+
+      // 4. Prevent duplicate refund requests
+      if (shipment.refund_status) {
+        return res.status(400).json({
+          error: "ALREADY_REFUNDED",
+          message: `Refund already requested. Current status: ${shipment.refund_status}`,
+          refundStatus: shipment.refund_status,
+        });
+      }
+
+      // 5. Call EasyPost refund API
+      const refundResult = await easyPostService.refundShipment(shipment.easypost_shipment_id);
+
+      if (!refundResult.success) {
+        logger.error(
+          { operatorId, shipmentId, error: refundResult.error },
+          "marketplace.shipment.refund.easypost_failed"
+        );
+        return res.status(400).json({
+          error: "REFUND_FAILED",
+          message: refundResult.error || "EasyPost refund request failed",
+        });
+      }
+
+      // 6. Update database with refund status
+      const refundStatus = refundResult.refundStatus || "submitted";
+      db.prepare(`
+        UPDATE marketplace_shipments
+        SET refund_status = ?, refund_requested_at = ?, updated_at = strftime('%s', 'now')
+        WHERE id = ?
+      `).run(refundStatus, Math.floor(Date.now() / 1000), shipmentId);
+
+      logger.info(
+        { operatorId, shipmentId, refundStatus, trackingNumber: shipment.tracking_number },
+        "marketplace.shipment.refund.complete"
+      );
+
+      res.json({
+        ok: true,
+        shipmentId,
+        refundStatus,
+      });
+    } catch (err) {
+      const error = err as Error;
+      logger.error(
+        { err: error.message, operatorId, shipmentId },
+        "marketplace.shipment.refund.error"
+      );
+      res.status(500).json({
+        error: "REFUND_ERROR",
         message: error.message,
       });
     }

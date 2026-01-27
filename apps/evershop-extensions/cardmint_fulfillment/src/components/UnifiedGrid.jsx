@@ -468,6 +468,10 @@ export default function UnifiedGrid({
                         shippingCostCents: f.shippingCostCents,
                         isPwe: !!f.isPwe,
                         isExternal: f.isExternal,
+                        // Refund tracking fields
+                        labelViewedAt: f.shipping?.labelViewedAt,
+                        refundStatus: f.refundStatus,
+                        easypostShipmentId: f.easypostShipmentId,
                       }}
                       onOpenRatesModal={handleOpenRatesModal}
                       onStatusChange={handleStatusChange}
