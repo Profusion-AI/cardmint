@@ -481,7 +481,18 @@ export class MarketplaceService {
 
       updateShipmentPwe: this.db.prepare(`
         UPDATE marketplace_shipments
-        SET is_pwe = ?, updated_at = strftime('%s', 'now')
+        SET is_pwe = ?,
+            status = CASE
+              WHEN ? = 1 AND status = 'pending' THEN 'shipped'
+              WHEN ? = 0 AND status = 'shipped' AND tracking_number IS NULL AND label_url IS NULL THEN 'pending'
+              ELSE status
+            END,
+            shipped_at = CASE
+              WHEN ? = 1 AND status = 'pending' THEN strftime('%s', 'now')
+              WHEN ? = 0 AND status = 'shipped' AND tracking_number IS NULL AND label_url IS NULL THEN NULL
+              ELSE shipped_at
+            END,
+            updated_at = strftime('%s', 'now')
         WHERE id = ?
       `),
 
@@ -978,7 +989,15 @@ export class MarketplaceService {
   }
 
   updateShipmentPwe(shipmentId: number, isPwe: boolean): void {
-    this.statements.updateShipmentPwe.run(isPwe ? 1 : 0, shipmentId);
+    const isPweValue = isPwe ? 1 : 0;
+    this.statements.updateShipmentPwe.run(
+      isPweValue,
+      isPweValue,
+      isPweValue,
+      isPweValue,
+      isPweValue,
+      shipmentId
+    );
   }
 
   /**
@@ -1505,8 +1524,17 @@ export class MarketplaceService {
     // Marketplace pending labels (shipments without tracking, excluding external fulfillment)
     // External shipments (is_external=1) are fulfilled via TCGPlayer, not CardMint labels
     const marketplacePending = this.db.prepare(`
-      SELECT COUNT(*) as count FROM marketplace_shipments
-      WHERE status = 'pending' AND is_external = 0
+      SELECT COUNT(*) as count
+      FROM marketplace_shipments ms
+      JOIN marketplace_orders mo ON ms.marketplace_order_id = mo.id
+      WHERE ms.status = 'pending'
+        AND ms.is_external = 0
+        AND ms.is_pwe = 0
+        AND ms.tracking_number IS NULL
+        AND ms.label_url IS NULL
+        AND ms.label_purchased_at IS NULL
+        AND ms.label_purchase_in_progress = 0
+        AND (COALESCE(mo.product_value_cents, 0) + COALESCE(mo.shipping_fee_cents, 0)) >= 750
     `).get() as { count: number };
 
     // CardMint pending labels (awaiting label action)
