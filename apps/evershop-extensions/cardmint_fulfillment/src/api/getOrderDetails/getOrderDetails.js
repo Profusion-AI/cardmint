@@ -16,8 +16,10 @@ export default async function getOrderDetails(request, response) {
     });
   }
 
+  // Forward enrich query param to backend for market pricing + image enrichment
+  const enrich = request.query?.enrich === "true" ? "?enrich=true" : "";
   const result = await proxyGet(
-    `/api/cm-admin/fulfillment/orders/${encodeURIComponent(source)}/${encodeURIComponent(id)}`
+    `/api/cm-admin/fulfillment/orders/${encodeURIComponent(source)}/${encodeURIComponent(id)}${enrich}`
   );
 
   if (!result.ok) {

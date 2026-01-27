@@ -31,6 +31,7 @@ import type { EasyPostAddress } from "../services/easyPostService.js";
 import { PrintQueueRepository } from "../repositories/printQueueRepository.js";
 import { decryptJson } from "../utils/encryption.js";
 import { formatTcgplayerOrderNumber } from "../utils/orderNumberFormat.js";
+import { OrderItemEnrichmentService, type OrderItem, type EnrichedOrderItem } from "../services/fulfillment/orderItemEnrichmentService.js";
 
 interface FulfillmentRow {
   id: number;
@@ -860,28 +861,60 @@ export function registerFulfillmentRoutes(app: Express, ctx: AppContext): void {
         rarity?: string | null;
         productLine?: string | null;
         priceConfidence?: "exact" | "estimated" | "unavailable";
+        // Enrichment fields (when enrich=true)
+        derivedUnitPriceCents?: number | null;
+        priceSource?: "ppt" | "tcgdex" | "unavailable";
+        priceLabel?: string | null;
+        cardImageUrl?: string | null;
       }>;
 
+      // Check if enrichment requested
+      const enrichRequested = req.query.enrich === "true";
+
       if (orderItems.length > 0) {
-        // Use real card data from Pull Sheet
-        items = orderItems.map((item) => ({
-          title: item.product_name,
-          sku: item.tcgplayer_sku_id,
-          quantity: item.quantity,
-          unitPriceCents: item.unit_price_cents,
-          lineTotalCents:
-            item.unit_price_cents !== null
-              ? item.unit_price_cents * item.quantity
-              : null,
-          imageUrl: item.image_url,
-          // Extended card fields
-          setName: item.set_name,
-          cardNumber: item.card_number,
-          condition: item.condition,
-          rarity: item.rarity,
-          productLine: item.product_line,
-          priceConfidence: item.price_confidence,
-        }));
+        // Optionally enrich items with market pricing + images
+        let enrichedItems: EnrichedOrderItem[] | null = null;
+
+        if (enrichRequested) {
+          try {
+            const enrichmentService = new OrderItemEnrichmentService(ctx.pptAdapter, db, logger);
+            enrichedItems = await enrichmentService.enrichOrderItems(orderItems as OrderItem[]);
+          } catch (err) {
+            logger.warn(
+              { err: (err as Error).message, orderId },
+              "fulfillment.order.details.enrichment_failed"
+            );
+            // Continue without enrichment on failure
+          }
+        }
+
+        // Use real card data from Pull Sheet (with optional enrichment)
+        items = orderItems.map((item, idx) => {
+          const enriched = enrichedItems?.[idx];
+          return {
+            title: item.product_name,
+            sku: item.tcgplayer_sku_id,
+            quantity: item.quantity,
+            unitPriceCents: item.unit_price_cents,
+            lineTotalCents:
+              item.unit_price_cents !== null
+                ? item.unit_price_cents * item.quantity
+                : null,
+            imageUrl: enriched?.cardImageUrl ?? item.image_url,
+            // Extended card fields
+            setName: item.set_name,
+            cardNumber: item.card_number,
+            condition: item.condition,
+            rarity: item.rarity,
+            productLine: item.product_line,
+            priceConfidence: item.price_confidence,
+            // Enrichment fields
+            derivedUnitPriceCents: enriched?.derivedUnitPriceCents ?? null,
+            priceSource: enriched?.priceSource ?? "unavailable",
+            priceLabel: enriched?.priceLabel ?? null,
+            cardImageUrl: enriched?.cardImageUrl ?? null,
+          };
+        });
       } else {
         // Fallback: placeholder item (no Pull Sheet imported)
         items = [

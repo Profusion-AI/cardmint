@@ -83,11 +83,86 @@ function normalizeAddress(address) {
   return null;
 }
 
+/**
+ * Price source badge component for market estimate column.
+ */
+function PriceSourceBadge({ source }) {
+  const styles = {
+    ppt: { label: 'PPT', bg: '#DBEAFE', color: '#1D4ED8' },
+    tcgdex: { label: 'TCGD', bg: '#FEF3C7', color: '#92400E' },
+    unavailable: { label: '—', bg: '#F3F4F6', color: '#6B7280' },
+  };
+
+  const style = styles[source] || styles.unavailable;
+
+  if (source === 'unavailable') {
+    return <span style={{ color: style.color }}>—</span>;
+  }
+
+  return (
+    <span
+      style={{
+        display: 'inline-block',
+        fontSize: '10px',
+        backgroundColor: style.bg,
+        color: style.color,
+        padding: '2px 6px',
+        borderRadius: '4px',
+        fontWeight: 600,
+        marginLeft: '4px',
+      }}
+    >
+      {style.label}
+    </span>
+  );
+}
+
+/**
+ * Image flyout component for hover preview.
+ */
+function ImageFlyout({ imageUrl, position, isVisible }) {
+  if (!isVisible || !imageUrl) return null;
+
+  return (
+    <div
+      style={{
+        position: 'fixed',
+        left: Math.min(position.x + 20, window.innerWidth - 220),
+        top: Math.min(position.y - 100, window.innerHeight - 300),
+        zIndex: 1000,
+        backgroundColor: '#fff',
+        boxShadow: '0 4px 20px rgba(0,0,0,0.25)',
+        borderRadius: '8px',
+        padding: '8px',
+        border: '1px solid #e5e7eb',
+        opacity: isVisible ? 1 : 0,
+        transition: 'opacity 0.15s ease-in-out',
+        pointerEvents: 'none',
+      }}
+    >
+      <img
+        src={imageUrl}
+        alt="Card preview"
+        style={{
+          maxWidth: '200px',
+          maxHeight: '280px',
+          borderRadius: '4px',
+          display: 'block',
+        }}
+      />
+    </div>
+  );
+}
+
 export default function OrderDetails() {
   const [params, setParams] = useState({ source: null, id: null });
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+
+  // Image preview state
+  const [revealedImages, setRevealedImages] = useState(new Set());
+  const [hoveredImage, setHoveredImage] = useState({ url: null, position: { x: 0, y: 0 } });
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -106,8 +181,9 @@ export default function OrderDetails() {
       try {
         setLoading(true);
         setError(null);
+        // Request enrichment with market pricing + images
         const resp = await fetch(
-          `/api/admin/api/fulfillment/orders/${encodeURIComponent(source)}/${encodeURIComponent(id)}`,
+          `/api/admin/api/fulfillment/orders/${encodeURIComponent(source)}/${encodeURIComponent(id)}?enrich=true`,
           { credentials: 'include' }
         );
         const json = await resp.json();
@@ -163,6 +239,35 @@ export default function OrderDetails() {
     if (shipments.some((s) => s?.provenance === 'csv_upload')) return 'CSV upload';
     return 'none';
   }, [shipments]);
+
+  // Check if any items have enriched pricing data
+  const hasEnrichedData = useMemo(() => {
+    return items.some((it) => it.priceSource && it.priceSource !== 'unavailable');
+  }, [items]);
+
+  // Handle image reveal click
+  const handleRevealImage = (idx) => {
+    setRevealedImages((prev) => {
+      const next = new Set(prev);
+      if (next.has(idx)) {
+        next.delete(idx);
+      } else {
+        next.add(idx);
+      }
+      return next;
+    });
+  };
+
+  // Handle mouse move for image flyout
+  const handleMouseMove = (e, imageUrl) => {
+    if (imageUrl) {
+      setHoveredImage({ url: imageUrl, position: { x: e.clientX, y: e.clientY } });
+    }
+  };
+
+  const handleMouseLeave = () => {
+    setHoveredImage({ url: null, position: { x: 0, y: 0 } });
+  };
 
   // Styles
   const containerStyle = {
@@ -284,6 +389,14 @@ export default function OrderDetails() {
     fontSize: '13px',
   };
 
+  const clickableNameStyle = {
+    cursor: 'pointer',
+    textDecoration: 'underline',
+    textDecorationStyle: 'dotted',
+    textDecorationColor: '#9CA3AF',
+    textUnderlineOffset: '2px',
+  };
+
   const back = () => {
     try {
       if (window.history.length > 1) {
@@ -298,6 +411,13 @@ export default function OrderDetails() {
 
   return (
     <div style={containerStyle}>
+      {/* Image flyout on hover */}
+      <ImageFlyout
+        imageUrl={hoveredImage.url}
+        position={hoveredImage.position}
+        isVisible={!!hoveredImage.url}
+      />
+
       <div style={headerStyle}>
         <div>
           <h1 style={titleStyle}>
@@ -394,6 +514,7 @@ export default function OrderDetails() {
                     <th style={thStyle}>Qty</th>
                     <th style={thStyle}>Unit</th>
                     <th style={thStyle}>Total</th>
+                    <th style={thStyle}>Market Est.</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -408,21 +529,46 @@ export default function OrderDetails() {
                     // Price confidence badge
                     const priceConfidence = it.priceConfidence;
                     const isEstimated = priceConfidence === 'estimated';
-                    const isUnavailable = priceConfidence === 'unavailable' || it.unitPriceCents == null;
+
+                    // Get the best image URL (prefer enriched cardImageUrl over original imageUrl)
+                    const bestImageUrl = it.cardImageUrl || it.imageUrl;
+                    const isImageRevealed = revealedImages.has(idx);
 
                     return (
                       <tr key={idx}>
                         <td style={tdStyle}>
                           <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                            {it.imageUrl ? (
+                            {/* Show thumbnail if revealed */}
+                            {isImageRevealed && bestImageUrl && (
                               <img
-                                src={it.imageUrl}
+                                src={bestImageUrl}
                                 alt=""
-                                style={{ width: '36px', height: '36px', borderRadius: '6px', objectFit: 'cover', border: '1px solid #e5e7eb' }}
+                                style={{
+                                  width: '36px',
+                                  height: '50px',
+                                  borderRadius: '4px',
+                                  objectFit: 'cover',
+                                  border: '1px solid #e5e7eb',
+                                  cursor: 'pointer',
+                                }}
+                                onMouseMove={(e) => handleMouseMove(e, bestImageUrl)}
+                                onMouseLeave={handleMouseLeave}
+                                onClick={() => handleRevealImage(idx)}
                               />
-                            ) : null}
+                            )}
                             <div>
-                              <div style={{ fontWeight: 600 }}>{it.title || '—'}</div>
+                              <div
+                                style={{
+                                  fontWeight: 600,
+                                  ...(bestImageUrl ? clickableNameStyle : {}),
+                                }}
+                                onClick={bestImageUrl ? () => handleRevealImage(idx) : undefined}
+                                onMouseMove={bestImageUrl ? (e) => handleMouseMove(e, bestImageUrl) : undefined}
+                                onMouseLeave={bestImageUrl ? handleMouseLeave : undefined}
+                                title={bestImageUrl ? (isImageRevealed ? 'Click to hide image' : 'Click to show image') : undefined}
+                              >
+                                {it.title || '—'}
+                              </div>
                               {it.productLine && (
                                 <div style={{ fontSize: '11px', color: '#6B7280' }}>{it.productLine}</div>
                               )}
@@ -461,6 +607,14 @@ export default function OrderDetails() {
                           </span>
                         </td>
                         <td style={tdStyle}>{formatCurrency(it.lineTotalCents)}</td>
+                        <td style={tdStyle}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                            <span title={it.priceLabel || undefined}>
+                              {formatCurrency(it.derivedUnitPriceCents)}
+                            </span>
+                            <PriceSourceBadge source={it.priceSource || 'unavailable'} />
+                          </div>
+                        </td>
                       </tr>
                     );
                   })}
@@ -569,4 +723,3 @@ export const layout = {
   areaId: 'content',
   sortOrder: 11,
 };
-
