@@ -152,6 +152,12 @@ export default function OrderDetails() {
   }, [address]);
 
   const hasAnyShipmentData = shipments.some((s) => s?.trackingNumber || s?.labelUrl);
+
+  // Find shipment with a label for the Print Label button
+  const shipmentWithLabel = useMemo(() => {
+    return shipments.find((s) => s?.labelUrl || s?.labelPurchasedAt);
+  }, [shipments]);
+
   const shipmentProvenance = useMemo(() => {
     if (shipments.some((s) => s?.provenance === 'easypost_label')) return 'EasyPost label';
     if (shipments.some((s) => s?.provenance === 'csv_upload')) return 'CSV upload';
@@ -195,6 +201,19 @@ export default function OrderDetails() {
     fontSize: '13px',
     fontWeight: 500,
     color: '#374151',
+  };
+
+  const printLabelButtonStyle = {
+    padding: '8px 12px',
+    borderRadius: '6px',
+    border: 'none',
+    backgroundColor: '#2563EB',
+    cursor: 'pointer',
+    fontSize: '13px',
+    fontWeight: 500,
+    color: '#fff',
+    textDecoration: 'none',
+    display: 'inline-block',
   };
 
   const sectionStyle = {
@@ -291,6 +310,17 @@ export default function OrderDetails() {
           </div>
         </div>
         <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+          {shipmentWithLabel && shipmentWithLabel.id && (
+            <a
+              href={`/api/admin/api/fulfillment/marketplace/shipments/${shipmentWithLabel.id}/label/optimized?format=pdf`}
+              target="_blank"
+              rel="noopener noreferrer"
+              style={printLabelButtonStyle}
+              title="Print-ready 4x6 PDF for thermal printer"
+            >
+              Print Label
+            </a>
+          )}
           <button style={buttonStyle} onClick={back}>Back</button>
           <button style={buttonStyle} onClick={() => safeCopy(order.orderNumber || '')}>Copy Order #</button>
           {addressSingleLine && (
