@@ -25,8 +25,12 @@ export default function CompoundStatusRow({ areaProps }) {
 
     itemStatus = itemStatus ?? "UNKNOWN";
 
-    // Determine sync state
-    const syncState = row?.cmEvershopSyncState ?? "not_synced";
+    // Determine sync state from EverShop visibility (core field)
+    // GraphQL declares `visibility: Int`, but the underlying DB is boolean; GraphQL coercion typically returns 1/0.
+    const visibility = row?.visibility;
+    const isVisible = visibility === 1 || visibility === true;
+    const isHidden = visibility === 0 || visibility === false;
+    const syncState = isVisible ? "evershop_live" : isHidden ? "evershop_hidden" : "not_synced";
 
     // Status colors
     const statusColors = {

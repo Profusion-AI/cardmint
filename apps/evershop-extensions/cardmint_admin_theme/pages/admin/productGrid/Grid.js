@@ -106,6 +106,18 @@ function Actions({ products = [], selectedIds = [] }) {
         // Refresh the page
         window.location.reload();
     };
+    const updateVisibility = async (visibility) => {
+        setIsLoading(true);
+        const promises = products
+            .filter((product) => selectedIds.includes(product.uuid))
+            .map((product) => axios.patch(product.updateApi, {
+            visibility
+        }));
+        await Promise.all(promises);
+        setIsLoading(false);
+        // Refresh the page
+        window.location.reload();
+    };
     const deleteProducts = async () => {
         setIsLoading(true);
         const promises = products
@@ -116,6 +128,10 @@ function Actions({ products = [], selectedIds = [] }) {
         // Refresh the page
         window.location.reload();
     };
+    // Check if any selected products are disabled (can't publish disabled products)
+    const hasDisabledSelected = products
+        .filter((product) => selectedIds.includes(product.uuid))
+        .some((product) => Number(product.status) === 0);
     const actions = [
         {
             name: 'Disable',
@@ -176,6 +192,62 @@ function Actions({ products = [], selectedIds = [] }) {
                         title: 'Delete',
                         onAction: async () => {
                             await deleteProducts();
+                        },
+                        variant: 'critical',
+                        isLoading
+                    }
+                });
+            }
+        },
+        {
+            name: 'Publish',
+            onAction: () => {
+                if (hasDisabledSelected) {
+                    openAlert({
+                        heading: 'Cannot publish disabled products',
+                        content: React.createElement("div", null, "Please enable products before publishing them to the storefront."),
+                        primaryAction: {
+                            title: 'OK',
+                            onAction: closeAlert,
+                            variant: 'primary'
+                        }
+                    });
+                    return;
+                }
+                openAlert({
+                    heading: `Publish ${selectedIds.length} products`,
+                    content: React.createElement("div", null, "Make visible on storefront?"),
+                    primaryAction: {
+                        title: 'Cancel',
+                        onAction: closeAlert,
+                        variant: 'primary'
+                    },
+                    secondaryAction: {
+                        title: 'Publish',
+                        onAction: async () => {
+                            await updateVisibility(1);
+                        },
+                        variant: 'interactive',
+                        isLoading
+                    }
+                });
+            }
+        },
+        {
+            name: 'Hide',
+            onAction: () => {
+                openAlert({
+                    heading: `Hide ${selectedIds.length} products`,
+                    content: React.createElement("div", null, "Hide from storefront?"),
+                    primaryAction: {
+                        title: 'Cancel',
+                        onAction: closeAlert,
+                        variant: 'primary'
+                    },
+                    secondaryAction: {
+                        title: 'Hide',
+                        onAction: async () => {
+                            await updateVisibility(0);
                         },
                         variant: 'critical',
                         isLoading
@@ -454,7 +526,11 @@ ProductGrid.propTypes = {
             cmPricingUpdatedAt: PropTypes.string,
             cmProductUid: PropTypes.string,
             cmInventoryStatus: PropTypes.string,
-            cmEvershopSyncState: PropTypes.string
+            cmEvershopSyncState: PropTypes.string,
+            visibility: PropTypes.oneOfType([PropTypes.number, PropTypes.bool]),
+            category: PropTypes.shape({
+                name: PropTypes.string
+            })
         })),
         total: PropTypes.number,
         currentFilters: PropTypes.arrayOf(PropTypes.shape({
@@ -505,6 +581,10 @@ export const query = `
         cmProductUid
         cmInventoryStatus
         cmEvershopSyncState
+        visibility
+        category {
+          name
+        }
       }
       total
       currentFilters {
