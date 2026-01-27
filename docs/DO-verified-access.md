@@ -642,6 +642,9 @@ EOF
 | 2026-01-19 | Claude | prod-2026-01-19a deployed | rsync + docker rebuild | PWE workflow, email capture, storefront SPA |
 | 2026-01-19 | Claude | Storefront permissions fixed | chmod -R o+rX | nginx couldn't read /var/www/cardmint-web/ after rsync |
 | 2026-01-19 | Claude | Documentation updated | File edit | DO-verified-access.md v7.0 with SPA deploy guide |
+| 2026-01-22 | Claude | **INCIDENT:** rsync overwrote prod DB | rsync without exclusions | cardmint_prod.db replaced with local dev data |
+| 2026-01-22 | Kyle | Restored from DO backup | DO Console | Full droplet restore from Jan 21/22 snapshot |
+| 2026-01-22 | Claude | Added rsync warning | File edit | Critical warning about exclusions added |
 
 ---
 
@@ -762,6 +765,10 @@ ssh -i ~/.ssh/cardmint_droplet cardmint@157.245.213.233 'df -h / | tail -1 | awk
 ## CardMint Backend Deployment
 
 The CardMint backend at `/var/www/cardmint-backend/` is deployed via rsync (not git clone).
+
+> **CRITICAL WARNING:** Always use the exact rsync command below with ALL exclusions.
+> On Jan 22, 2026, an rsync without proper exclusions overwrote `cardmint_prod.db` with local dev data,
+> requiring a full droplet restore from DO backup. The `--exclude` flags are NOT optional.
 
 ### Deployment Command
 
