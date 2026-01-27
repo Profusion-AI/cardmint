@@ -16,7 +16,9 @@
     "import:pilot": "tsx scripts/import_pilot.ts",
     "canonical:backfill-ppt": "tsx scripts/canonical_backfill_ppt.ts",
     "canonical:health": "tsx scripts/canonical_health.ts",
-    "canonical:diff-report": "tsx scripts/truth_core_diff_report.ts"
+    "canonical:diff-report": "tsx scripts/truth_core_diff_report.ts",
+    "klaviyo:replay": "tsx scripts/replay_klaviyo.ts",
+    "klaviyo:backfill": "tsx scripts/backfill_klaviyo_subscribers.ts"
   },
   "dependencies": {
     "@types/multer": "^2.0.0",
