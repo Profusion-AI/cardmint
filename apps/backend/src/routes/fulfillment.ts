@@ -32,6 +32,7 @@ import { PrintQueueRepository } from "../repositories/printQueueRepository.js";
 import { decryptJson } from "../utils/encryption.js";
 import { formatTcgplayerOrderNumber } from "../utils/orderNumberFormat.js";
 import { OrderItemEnrichmentService, type OrderItem, type EnrichedOrderItem } from "../services/fulfillment/orderItemEnrichmentService.js";
+import { TCGDexAdapter } from "../services/pricing/tcgdexAdapter.js";
 
 interface FulfillmentRow {
   id: number;
@@ -570,6 +571,169 @@ export function registerFulfillmentRoutes(app: Express, ctx: AppContext): void {
     } catch (err) {
       logger.error({ err, operatorId, source, status }, "Failed to list unified fulfillments");
       res.status(500).json({ error: "Failed to list unified fulfillments" });
+    }
+  });
+
+  /**
+   * GET /api/cm-admin/fulfillment/orders/:source/:id/preview
+   * Lightweight preview for hover flyout on fulfillment dashboard.
+   * Returns first 3 cards with images for quick-glance order identification.
+   */
+  router.get("/orders/:source/:id/preview", async (req: Request, res: Response) => {
+    const { operatorId } = (req as any).auditContext;
+    const source = req.params.source as string;
+    const id = req.params.id as string;
+
+    logger.debug({ operatorId, source, id }, "fulfillment.order.preview");
+
+    if (source !== "cardmint" && source !== "marketplace") {
+      return res.status(400).json({
+        ok: false,
+        error: "BAD_REQUEST",
+        message: "source must be one of: cardmint, marketplace",
+      });
+    }
+
+    try {
+      let previewItems: Array<{ name: string; imageUrl: string | null; quantity: number }> = [];
+      let totalQty = 0;
+      let hasMore = false;
+
+      if (source === "cardmint") {
+        const sessionId = id;
+
+        // Get item count from fulfillment table
+        const row = db
+          .prepare("SELECT item_count FROM fulfillment WHERE stripe_session_id = ?")
+          .get(sessionId) as { item_count: number } | undefined;
+
+        if (!row) {
+          return res.status(404).json({ ok: false, error: "NOT_FOUND" });
+        }
+
+        totalQty = row.item_count ?? 0;
+
+        // Try to get items from Stripe (with images)
+        if (stripeService.isConfigured()) {
+          try {
+            const lineItems = await stripeService.listCheckoutSessionLineItems(sessionId);
+            const allItems = lineItems.data || [];
+            totalQty = allItems.reduce((sum: number, li: any) => sum + (li.quantity || 1), 0);
+            hasMore = allItems.length > 3;
+
+            previewItems = allItems.slice(0, 3).map((li: any) => {
+              const product = li?.price?.product && typeof li.price.product === "object" ? li.price.product : null;
+              return {
+                name: li.description ?? product?.name ?? "Card",
+                imageUrl: Array.isArray(product?.images) && product.images.length > 0 ? product.images[0] : null,
+                quantity: li.quantity || 1,
+              };
+            });
+          } catch (err) {
+            logger.debug({ err: (err as Error).message }, "fulfillment.preview.stripe_fetch_failed");
+          }
+        }
+      } else {
+        // Marketplace
+        const orderId = parseInt(id, 10);
+        if (isNaN(orderId)) {
+          return res.status(400).json({ ok: false, error: "BAD_REQUEST" });
+        }
+
+        // Get order items with images
+        const orderItems = db
+          .prepare(`
+            SELECT product_name, image_url, quantity
+            FROM marketplace_order_items
+            WHERE marketplace_order_id = ?
+            ORDER BY id
+          `)
+          .all(orderId) as Array<{ product_name: string; image_url: string | null; quantity: number }>;
+
+        // Fallback: query by source/external_order_id
+        let items = orderItems;
+        if (items.length === 0) {
+          const order = db
+            .prepare("SELECT source, external_order_id, item_count FROM marketplace_orders WHERE id = ?")
+            .get(orderId) as { source: string; external_order_id: string; item_count: number } | undefined;
+
+          if (!order) {
+            return res.status(404).json({ ok: false, error: "NOT_FOUND" });
+          }
+
+          items = db
+            .prepare(`
+              SELECT product_name, image_url, quantity
+              FROM marketplace_order_items
+              WHERE source = ? AND external_order_id = ?
+              ORDER BY id
+            `)
+            .all(order.source, order.external_order_id) as typeof orderItems;
+
+          if (items.length === 0) {
+            totalQty = order.item_count ?? 0;
+          }
+        }
+
+        if (items.length > 0) {
+          totalQty = items.reduce((sum, item) => sum + (item.quantity || 1), 0);
+          hasMore = items.length > 3;
+
+          // Enrich first 3 items with TCGDex images (if missing)
+          const tcgdexAdapter = new TCGDexAdapter(db, logger, 3000);
+          const first3Items = items.slice(0, 3);
+
+          const enrichedPreview = await Promise.all(
+            first3Items.map(async (item) => {
+              let imageUrl = item.image_url;
+
+              // If no image, try to get from TCGDex cache (fast, no API call)
+              if (!imageUrl) {
+                try {
+                  // Quick cache lookup - get item's set/number from full record
+                  const fullItem = db
+                    .prepare(`
+                      SELECT set_name, card_number FROM marketplace_order_items
+                      WHERE product_name = ? LIMIT 1
+                    `)
+                    .get(item.product_name) as { set_name: string | null; card_number: string | null } | undefined;
+
+                  if (fullItem?.set_name && fullItem?.card_number) {
+                    const tcgResult = await tcgdexAdapter.getCardBySetAndNumber(
+                      fullItem.set_name,
+                      fullItem.card_number,
+                      { cardName: item.product_name }
+                    );
+                    if (tcgResult.success && tcgResult.imageUrl) {
+                      imageUrl = tcgResult.imageUrl;
+                    }
+                  }
+                } catch {
+                  // Ignore enrichment failures for preview
+                }
+              }
+
+              return {
+                name: item.product_name,
+                imageUrl,
+                quantity: item.quantity || 1,
+              };
+            })
+          );
+
+          previewItems = enrichedPreview;
+        }
+      }
+
+      return res.json({
+        ok: true,
+        totalQty,
+        hasMore,
+        items: previewItems,
+      });
+    } catch (err) {
+      logger.error({ err: (err as Error).message, source, id }, "fulfillment.order.preview.failed");
+      return res.status(500).json({ ok: false, error: "INTERNAL_ERROR" });
     }
   });
 

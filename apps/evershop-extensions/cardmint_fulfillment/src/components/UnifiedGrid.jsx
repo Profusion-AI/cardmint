@@ -1,6 +1,125 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useCallback } from 'react';
 import RatesModal from './RatesModal.js';
 import MarketplaceShipmentActions from './MarketplaceShipmentActions.js';
+
+/**
+ * Card Preview Flyout Component
+ * Shows up to 3 card images side-by-side with hover-to-reveal behavior.
+ */
+function CardPreviewFlyout({ previewData, position, isVisible, isLoading }) {
+  if (!isVisible) return null;
+
+  const flyoutStyle = {
+    position: 'fixed',
+    left: position.x,
+    top: position.y + 10,
+    zIndex: 1000,
+    backgroundColor: '#fff',
+    borderRadius: '8px',
+    boxShadow: '0 4px 20px rgba(0,0,0,0.15)',
+    padding: '12px',
+    minWidth: '120px',
+    maxWidth: '400px',
+    transition: 'opacity 0.15s ease-in-out',
+    opacity: isVisible ? 1 : 0,
+  };
+
+  if (isLoading) {
+    return (
+      <div style={flyoutStyle}>
+        <div style={{ color: '#6B7280', fontSize: '12px' }}>Loading...</div>
+      </div>
+    );
+  }
+
+  if (!previewData || previewData.items.length === 0) {
+    return (
+      <div style={flyoutStyle}>
+        <div style={{ color: '#6B7280', fontSize: '12px' }}>No preview available</div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={flyoutStyle}>
+      <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-start' }}>
+        {previewData.items.map((item, idx) => (
+          <div key={idx} style={{ textAlign: 'center', maxWidth: '120px' }}>
+            {item.imageUrl ? (
+              <img
+                src={item.imageUrl}
+                alt={item.name}
+                style={{
+                  width: '104px',
+                  height: '146px',
+                  objectFit: 'cover',
+                  borderRadius: '4px',
+                  border: '1px solid #e5e7eb',
+                }}
+              />
+            ) : (
+              <div
+                style={{
+                  width: '104px',
+                  height: '146px',
+                  backgroundColor: '#f3f4f6',
+                  borderRadius: '4px',
+                  border: '1px solid #e5e7eb',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+              >
+                <span style={{ fontSize: '10px', color: '#9CA3AF' }}>No image</span>
+              </div>
+            )}
+            <div
+              style={{
+                fontSize: '10px',
+                color: '#374151',
+                marginTop: '4px',
+                whiteSpace: 'nowrap',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                maxWidth: '104px',
+              }}
+              title={item.name}
+            >
+              {item.name}
+            </div>
+            {item.quantity > 1 && (
+              <div style={{ fontSize: '9px', color: '#6B7280' }}>x{item.quantity}</div>
+            )}
+          </div>
+        ))}
+        {previewData.hasMore && (
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: '0 8px',
+              height: '146px',
+            }}
+          >
+            <span
+              style={{
+                backgroundColor: '#f3f4f6',
+                color: '#6B7280',
+                fontSize: '11px',
+                fontWeight: 500,
+                padding: '4px 8px',
+                borderRadius: '12px',
+              }}
+            >
+              +More
+            </span>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
 
 /**
  * Unified Fulfillment Grid Component
@@ -26,6 +145,84 @@ export default function UnifiedGrid({
   // Customer lookup state (keyed by fulfillment id)
   const [customerData, setCustomerData] = useState({});
   const [customerLoading, setCustomerLoading] = useState({});
+
+  // Qty hover preview state
+  const [hoveredQty, setHoveredQty] = useState(null); // { fulfillmentId, source, orderId }
+  const [hoverPosition, setHoverPosition] = useState({ x: 0, y: 0 });
+  const [previewCache, setPreviewCache] = useState({}); // { [key]: { data, loading, error } }
+  const hoverTimeoutRef = useRef(null);
+
+  // Get preview cache key for a fulfillment
+  const getPreviewKey = useCallback((f) => {
+    if (f.source === 'cardmint') {
+      return `cardmint:${f.sourceRef?.stripeSessionId}`;
+    }
+    return `marketplace:${f.sourceRef?.marketplaceOrderId}`;
+  }, []);
+
+  // Fetch preview data for a fulfillment
+  const fetchPreview = useCallback(async (f) => {
+    const key = getPreviewKey(f);
+    if (!key || previewCache[key]?.data || previewCache[key]?.loading) return;
+
+    // Determine API params
+    let source, id;
+    if (f.source === 'cardmint') {
+      source = 'cardmint';
+      id = f.sourceRef?.stripeSessionId;
+    } else {
+      source = 'marketplace';
+      id = f.sourceRef?.marketplaceOrderId;
+    }
+
+    if (!id) return;
+
+    // Mark as loading
+    setPreviewCache((prev) => ({ ...prev, [key]: { loading: true, data: null, error: null } }));
+
+    try {
+      const response = await fetch(
+        `/api/admin/api/fulfillment/orders/${source}/${encodeURIComponent(id)}/preview`,
+        { credentials: 'include' }
+      );
+      const data = await response.json();
+
+      if (response.ok && data.ok) {
+        setPreviewCache((prev) => ({
+          ...prev,
+          [key]: { loading: false, data: { items: data.items, hasMore: data.hasMore, totalQty: data.totalQty }, error: null },
+        }));
+      } else {
+        setPreviewCache((prev) => ({ ...prev, [key]: { loading: false, data: null, error: data.error || 'Failed' } }));
+      }
+    } catch (err) {
+      setPreviewCache((prev) => ({ ...prev, [key]: { loading: false, data: null, error: 'Network error' } }));
+    }
+  }, [getPreviewKey, previewCache]);
+
+  // Handle Qty cell hover
+  const handleQtyMouseEnter = useCallback((e, f) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    setHoverPosition({ x: rect.left, y: rect.bottom });
+    setHoveredQty({ fulfillmentId: f.id });
+
+    // Clear any existing timeout
+    if (hoverTimeoutRef.current) {
+      clearTimeout(hoverTimeoutRef.current);
+    }
+
+    // Debounce the fetch slightly to avoid rapid requests
+    hoverTimeoutRef.current = setTimeout(() => {
+      fetchPreview(f);
+    }, 100);
+  }, [fetchPreview]);
+
+  const handleQtyMouseLeave = useCallback(() => {
+    if (hoverTimeoutRef.current) {
+      clearTimeout(hoverTimeoutRef.current);
+    }
+    setHoveredQty(null);
+  }, []);
 
   // Fetch customer details from Stripe via backend
   const handleLookupCustomer = async (fulfillmentId, stripeSessionId) => {
@@ -313,6 +510,7 @@ export default function UnifiedGrid({
         <thead>
           <tr>
             <th style={thStyle}>Order #</th>
+            <th style={{ ...thStyle, textAlign: 'center', width: '50px' }}>Qty</th>
             <th style={thStyle}>Buyer Name</th>
             <th style={thStyle}>Order Date/Time (if known)</th>
             <th style={thStyle}>Status</th>
@@ -383,6 +581,20 @@ export default function UnifiedGrid({
                     );
                   })()}
                 </div>
+              </td>
+              <td
+                style={{ ...tdStyle, textAlign: 'center', cursor: 'default', position: 'relative' }}
+                onMouseEnter={(e) => handleQtyMouseEnter(e, f)}
+                onMouseLeave={handleQtyMouseLeave}
+              >
+                <span
+                  style={{
+                    fontWeight: 600,
+                    color: pweCandidate ? '#E65100' : '#374151',
+                  }}
+                >
+                  {f.itemCount ?? '—'}
+                </span>
               </td>
               <td style={buyerTdStyle}>
                 {f.customerName ? (
@@ -523,6 +735,22 @@ export default function UnifiedGrid({
         initialItemCount={selectedShipment?.itemCount || 1}
         initialOrderValue={selectedShipment?.valueCents || 0}
       />
+
+      {/* Qty hover preview flyout */}
+      {hoveredQty && (() => {
+        const f = fulfillments.find((item) => item.id === hoveredQty.fulfillmentId);
+        if (!f) return null;
+        const key = getPreviewKey(f);
+        const cacheEntry = previewCache[key];
+        return (
+          <CardPreviewFlyout
+            previewData={cacheEntry?.data}
+            position={hoverPosition}
+            isVisible={!!hoveredQty}
+            isLoading={cacheEntry?.loading}
+          />
+        );
+      })()}
     </div>
   );
 }
