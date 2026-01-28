@@ -99,6 +99,20 @@ export interface TCGDexLookupResult {
   error?: string;
 }
 
+/** Options for TCGDex card lookup */
+export interface TCGDexLookupOptions {
+  cardName?: string | null; // For validation during set inference
+}
+
+/** Failure classification for debug logging */
+type LookupFailureClass =
+  | "localid_mismatch" // Some variants 404 but later succeeded
+  | "set_mismatch" // All variants 404 for resolved set
+  | "set_unresolved" // Could not resolve set ID
+  | "set_inference_failed" // Denominator-based inference failed
+  | "timeout"
+  | "api_error";
+
 interface CachedTCGDexEntry {
   cache_key: string;
   tcgdex_card_id: string;
@@ -278,6 +292,9 @@ export class TCGDexAdapter {
   private setsCacheLoadedAt: number = 0;
   private readonly SETS_CACHE_TTL_MS = 3600000; // 1 hour
 
+  // Index: officialCardCount → [setIds] for denominator-based set inference
+  private officialCountIndex: Map<number, string[]> | null = null;
+
   constructor(
     private readonly db: Database.Database,
     private readonly logger: Logger,
@@ -398,21 +415,29 @@ export class TCGDexAdapter {
   /**
    * Resolve set name to TCGDex set ID.
    * Uses static mapping first, then falls back to API lookup with fuzzy matching.
+   * Picks the LONGEST matching key to avoid "Sword & Shield Base Set" → "Base Set" hijacking.
    */
   async resolveSetId(setName: string): Promise<string | null> {
     const normalized = normalizeSetName(setName);
 
-    // Try static mapping first
+    // Try static mapping first (exact match)
     const staticId = SET_NAME_TO_TCGDEX_ID[normalized];
     if (staticId) {
       return staticId;
     }
 
-    // Try partial match in static mapping
+    // Try partial match in static mapping - collect ALL matches and pick longest
+    const staticMatches: Array<{ key: string; id: string }> = [];
     for (const [key, id] of Object.entries(SET_NAME_TO_TCGDEX_ID)) {
       if (normalized.includes(key) || key.includes(normalized)) {
-        return id;
+        staticMatches.push({ key, id });
       }
+    }
+
+    if (staticMatches.length > 0) {
+      // Pick the longest matching key (most specific match wins)
+      staticMatches.sort((a, b) => b.key.length - a.key.length);
+      return staticMatches[0].id;
     }
 
     // Fall back to fetching sets from API and fuzzy matching
@@ -423,15 +448,22 @@ export class TCGDexAdapter {
       const exactMatch = this.setsCache.get(normalized);
       if (exactMatch) return exactMatch.id;
 
-      // Fuzzy match by name
+      // Fuzzy match by name - collect ALL matches and pick best
+      const apiMatches: Array<{ name: string; id: string }> = [];
       for (const [, set] of this.setsCache) {
         const setNameNormalized = normalizeSetName(set.name);
         if (
           setNameNormalized.includes(normalized) ||
           normalized.includes(setNameNormalized)
         ) {
-          return set.id;
+          apiMatches.push({ name: set.name, id: set.id });
         }
+      }
+
+      if (apiMatches.length > 0) {
+        // Pick the longest matching name (most specific)
+        apiMatches.sort((a, b) => b.name.length - a.name.length);
+        return apiMatches[0].id;
       }
     }
 
@@ -441,6 +473,7 @@ export class TCGDexAdapter {
 
   /**
    * Load all sets from TCGDex API (cached for 1 hour).
+   * Also builds officialCountIndex for denominator-based set inference.
    */
   private async loadSetsCache(): Promise<void> {
     const now = Date.now();
@@ -464,16 +497,28 @@ export class TCGDexAdapter {
 
       const sets = (await response.json()) as TCGDexSet[];
       this.setsCache = new Map();
+      this.officialCountIndex = new Map();
 
       for (const set of sets) {
         // Index by normalized name
         this.setsCache.set(normalizeSetName(set.name), set);
         // Also index by ID for direct access
         this.setsCache.set(set.id, set);
+
+        // Build officialCountIndex for denominator-based set inference
+        const officialCount = set.cardCount?.official;
+        if (officialCount && officialCount > 0) {
+          const existing = this.officialCountIndex.get(officialCount) ?? [];
+          existing.push(set.id);
+          this.officialCountIndex.set(officialCount, existing);
+        }
       }
 
       this.setsCacheLoadedAt = now;
-      this.logger.debug({ setCount: sets.length }, "Loaded TCGDex sets cache");
+      this.logger.debug(
+        { setCount: sets.length, countIndexSize: this.officialCountIndex.size },
+        "Loaded TCGDex sets cache with cardCount index"
+      );
     } catch (error) {
       this.logger.error({ error }, "Failed to load TCGDex sets cache");
       // Don't throw - allow graceful degradation
@@ -530,16 +575,405 @@ export class TCGDexAdapter {
   }
 
   /**
+   * Generate localId variants to try for a card number.
+   * Order: raw → stripped (no leading zeros) → pad3 (zero-pad to 3 digits)
+   */
+  private generateLocalIdVariants(cardNumber: string): string[] {
+    // Extract numerator from "X/Y" format (e.g., "055/072" → "055")
+    const raw = cardNumber.split("/")[0].trim();
+
+    const variants = new Set<string>();
+    variants.add(raw);
+
+    // Stripped: remove leading zeros if purely numeric
+    if (/^\d+$/.test(raw)) {
+      const stripped = raw.replace(/^0+/, "") || "0";
+      variants.add(stripped);
+
+      // Pad3: left-pad to 3 digits
+      const numericVal = parseInt(stripped, 10);
+      if (!isNaN(numericVal) && numericVal < 1000) {
+        const pad3 = numericVal.toString().padStart(3, "0");
+        variants.add(pad3);
+      }
+    }
+
+    return Array.from(variants);
+  }
+
+  /**
+   * Parse denominator from "X/Y" card number format.
+   * Returns null if not in X/Y format or Y is not numeric.
+   */
+  private parseDenominator(cardNumber: string): number | null {
+    const match = cardNumber.match(/^\d+\/(\d+)$/);
+    if (!match) return null;
+    const denom = parseInt(match[1], 10);
+    return isNaN(denom) ? null : denom;
+  }
+
+  /**
+   * Normalize card name for comparison (strip common suffixes like "(Full Art)").
+   */
+  private normalizeCardName(name: string): string {
+    return name
+      .toLowerCase()
+      .replace(/\s*\([^)]*\)\s*$/g, "") // Remove trailing parentheticals
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  /**
+   * Fetch a card from TCGDex API with timeout handling.
+   * Returns null on 404, throws on other errors.
+   */
+  private async fetchCardFromApi(tcgdexCardId: string): Promise<TCGDexCard | null> {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), this.fetchTimeoutMs);
+
+    try {
+      const response = await fetch(`${TCGDEX_API_BASE}/cards/${tcgdexCardId}`, {
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      if (response.status === 404) {
+        return null;
+      }
+
+      if (!response.ok) {
+        throw new Error(`TCGDex API returned ${response.status}`);
+      }
+
+      return (await response.json()) as TCGDexCard;
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+
+  /**
+   * Try to find a card using multiple localId variants for a given setId.
+   * Returns the first successful result or null if all variants fail.
+   */
+  private async tryVariantsForSet(
+    setId: string,
+    variants: string[],
+    opts?: TCGDexLookupOptions
+  ): Promise<{ card: TCGDexCard; localIdUsed: string; cacheKey: string } | null> {
+    const attemptedIds: string[] = [];
+
+    for (const localId of variants) {
+      const cacheKey = this.generateCacheKey(setId, localId);
+
+      // Check cache first
+      const cached = this.fetchFromCache(cacheKey);
+      if (cached) {
+        // Validate card name if provided
+        if (opts?.cardName) {
+          const normalizedExpected = this.normalizeCardName(opts.cardName);
+          const normalizedCached = this.normalizeCardName(cached.name);
+          if (normalizedExpected !== normalizedCached) {
+            this.logger.debug(
+              { cacheKey, expected: opts.cardName, cached: cached.name },
+              "Cached card name mismatch, skipping"
+            );
+            continue;
+          }
+        }
+
+        // Return reconstructed card from cache
+        return {
+          card: {
+            id: cached.tcgdex_card_id,
+            localId,
+            name: cached.name,
+            image: cached.image_url?.replace("/high.webp", "") ?? undefined,
+            hp: cached.hp ?? undefined,
+            rarity: cached.rarity ?? undefined,
+            set: cached.set_id
+              ? { id: cached.set_id, name: cached.set_name ?? "" }
+              : undefined,
+            // Reconstruct pricing from cache
+            pricing: cached.market_price_cents != null
+              ? {
+                  tcgplayer: {
+                    unlimited: { marketPrice: cached.market_price_cents / 100 },
+                  },
+                }
+              : undefined,
+          },
+          localIdUsed: localId,
+          cacheKey,
+        };
+      }
+
+      attemptedIds.push(`${setId}-${localId}`);
+    }
+
+    // No cache hits - try network for each variant
+    for (const localId of variants) {
+      const tcgdexCardId = `${setId}-${localId}`;
+
+      try {
+        const card = await this.fetchCardFromApi(tcgdexCardId);
+        if (card) {
+          // Validate card name if provided
+          if (opts?.cardName) {
+            const normalizedExpected = this.normalizeCardName(opts.cardName);
+            const normalizedFetched = this.normalizeCardName(card.name);
+            if (normalizedExpected !== normalizedFetched) {
+              this.logger.debug(
+                { tcgdexCardId, expected: opts.cardName, fetched: card.name },
+                "Fetched card name mismatch, skipping"
+              );
+              continue;
+            }
+          }
+
+          return {
+            card,
+            localIdUsed: localId,
+            cacheKey: this.generateCacheKey(setId, localId),
+          };
+        }
+      } catch (error) {
+        if (error instanceof Error && error.name === "AbortError") {
+          throw error; // Re-throw timeout to be handled by caller
+        }
+        // Log but continue trying other variants
+        this.logger.debug(
+          { tcgdexCardId, error: (error as Error).message },
+          "Variant fetch failed"
+        );
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Log failed lookup with classification for debugging.
+   */
+  private logFailedLookup(
+    failureClass: LookupFailureClass,
+    details: {
+      setName: string;
+      cardNumber: string;
+      cardName?: string | null;
+      resolvedSetId?: string | null;
+      denominator?: number | null;
+      attemptedIds?: string[];
+      error?: string;
+    }
+  ): void {
+    this.logger.debug(
+      {
+        failureClass,
+        setName: details.setName,
+        cardNumber: details.cardNumber,
+        cardName: details.cardName ?? undefined,
+        resolvedSetId: details.resolvedSetId ?? undefined,
+        denominator: details.denominator ?? undefined,
+        attemptedIds: details.attemptedIds ?? undefined,
+        error: details.error ?? undefined,
+      },
+      `TCGDex lookup failed: ${failureClass}`
+    );
+  }
+
+  /**
    * Get card by set name and card number.
    * Primary lookup method for marketplace order enrichment.
+   *
+   * Strategy:
+   * 1. Generate localId variants (raw, stripped, pad3)
+   * 2. Resolve set ID and try all variants (cache-first, then network)
+   * 3. If set resolution fails OR all variants 404, use denominator-based set inference
+   * 4. Validate card name during inference to avoid wrong-set matches
    */
   async getCardBySetAndNumber(
     setName: string,
-    cardNumber: string
+    cardNumber: string,
+    opts?: TCGDexLookupOptions
   ): Promise<TCGDexLookupResult> {
-    // Resolve set ID
-    const setId = await this.resolveSetId(setName);
-    if (!setId) {
+    const variants = this.generateLocalIdVariants(cardNumber);
+    const denominator = this.parseDenominator(cardNumber);
+    let resolvedSetId: string | null = null;
+    let attemptedIds: string[] = [];
+
+    // Step 1: Try resolved set ID with all variants
+    resolvedSetId = await this.resolveSetId(setName);
+
+    if (resolvedSetId) {
+      try {
+        const result = await this.tryVariantsForSet(resolvedSetId, variants, opts);
+        if (result) {
+          const { card, cacheKey } = result;
+
+          // Build high-res image URL
+          const imageUrl = card.image ? `${card.image}/high.webp` : null;
+          const { priceCents, priceLabel } = this.extractMarketPrice(card);
+
+          // Write to cache
+          this.writeToCache(cacheKey, card, imageUrl, priceCents, priceLabel);
+
+          this.logger.debug(
+            { tcgdexCardId: card.id, name: card.name, imageUrl, marketPriceCents: priceCents },
+            "TCGDex card lookup successful"
+          );
+
+          return {
+            success: true,
+            card,
+            imageUrl,
+            marketPriceCents: priceCents,
+            priceLabel,
+            fromCache: false,
+          };
+        }
+
+        // All variants failed for resolved set
+        attemptedIds = variants.map((v) => `${resolvedSetId}-${v}`);
+      } catch (error) {
+        if (error instanceof Error && error.name === "AbortError") {
+          this.logFailedLookup("timeout", {
+            setName,
+            cardNumber,
+            cardName: opts?.cardName,
+            resolvedSetId,
+            error: `Timeout after ${this.fetchTimeoutMs}ms`,
+          });
+
+          return {
+            success: false,
+            card: null,
+            imageUrl: null,
+            marketPriceCents: null,
+            priceLabel: null,
+            fromCache: false,
+            error: `TCGDex API timeout after ${this.fetchTimeoutMs}ms`,
+          };
+        }
+
+        this.logFailedLookup("api_error", {
+          setName,
+          cardNumber,
+          cardName: opts?.cardName,
+          resolvedSetId,
+          error: error instanceof Error ? error.message : "Unknown error",
+        });
+
+        return {
+          success: false,
+          card: null,
+          imageUrl: null,
+          marketPriceCents: null,
+          priceLabel: null,
+          fromCache: false,
+          error: error instanceof Error ? error.message : "Unknown error",
+        };
+      }
+    }
+
+    // Step 2: Denominator-based set inference fallback
+    if (denominator && opts?.cardName) {
+      await this.loadSetsCache();
+
+      if (this.officialCountIndex) {
+        const candidateSetIds = this.officialCountIndex.get(denominator) ?? [];
+
+        // Cap to prevent excessive API calls
+        const limitedCandidates = candidateSetIds.slice(0, 25);
+
+        for (const candidateSetId of limitedCandidates) {
+          // Skip the already-tried set
+          if (candidateSetId === resolvedSetId) continue;
+
+          try {
+            const result = await this.tryVariantsForSet(candidateSetId, variants, opts);
+            if (result) {
+              const { card, cacheKey } = result;
+
+              // Build high-res image URL
+              const imageUrl = card.image ? `${card.image}/high.webp` : null;
+              const { priceCents, priceLabel } = this.extractMarketPrice(card);
+
+              // Write to cache
+              this.writeToCache(cacheKey, card, imageUrl, priceCents, priceLabel);
+
+              this.logger.info(
+                {
+                  tcgdexCardId: card.id,
+                  name: card.name,
+                  inferredSetId: candidateSetId,
+                  originalSetName: setName,
+                  denominator,
+                },
+                "TCGDex card lookup successful via set inference"
+              );
+
+              return {
+                success: true,
+                card,
+                imageUrl,
+                marketPriceCents: priceCents,
+                priceLabel,
+                fromCache: false,
+              };
+            }
+          } catch (error) {
+            // Timeout during inference - stop trying
+            if (error instanceof Error && error.name === "AbortError") {
+              this.logFailedLookup("timeout", {
+                setName,
+                cardNumber,
+                cardName: opts.cardName,
+                resolvedSetId,
+                denominator,
+                error: `Timeout during set inference`,
+              });
+
+              return {
+                success: false,
+                card: null,
+                imageUrl: null,
+                marketPriceCents: null,
+                priceLabel: null,
+                fromCache: false,
+                error: `TCGDex API timeout during set inference`,
+              };
+            }
+            // Continue to next candidate
+          }
+        }
+
+        // Set inference failed
+        if (limitedCandidates.length > 0) {
+          this.logFailedLookup("set_inference_failed", {
+            setName,
+            cardNumber,
+            cardName: opts.cardName,
+            resolvedSetId,
+            denominator,
+            attemptedIds: [
+              ...attemptedIds,
+              ...limitedCandidates.flatMap((s) => variants.map((v) => `${s}-${v}`)),
+            ],
+          });
+        }
+      }
+    }
+
+    // Step 3: Final failure - log and return
+    if (!resolvedSetId) {
+      this.logFailedLookup("set_unresolved", {
+        setName,
+        cardNumber,
+        cardName: opts?.cardName,
+        denominator,
+      });
+
       return {
         success: false,
         card: null,
@@ -551,127 +985,23 @@ export class TCGDexAdapter {
       };
     }
 
-    // Normalize card number: handle "60/64" → "60", but preserve leading zeros
-    // (e.g., swsh12.5-001 requires zero-padding to be kept)
-    const normalizedNumber = cardNumber.split("/")[0].trim();
+    this.logFailedLookup("set_mismatch", {
+      setName,
+      cardNumber,
+      cardName: opts?.cardName,
+      resolvedSetId,
+      denominator,
+      attemptedIds,
+    });
 
-    const cacheKey = this.generateCacheKey(setId, normalizedNumber);
-
-    // Check cache first
-    const cached = this.fetchFromCache(cacheKey);
-    if (cached) {
-      const priceFresh = this.isPriceFresh(cached);
-
-      if (priceFresh) {
-        // Full cache hit - both identity and price are fresh
-        return {
-          success: true,
-          card: {
-            id: cached.tcgdex_card_id,
-            localId: normalizedNumber,
-            name: cached.name,
-            image: cached.image_url?.replace("/high.webp", "") ?? undefined,
-            hp: cached.hp ?? undefined,
-            rarity: cached.rarity ?? undefined,
-            set: cached.set_id
-              ? { id: cached.set_id, name: cached.set_name ?? "" }
-              : undefined,
-          },
-          imageUrl: cached.image_url,
-          marketPriceCents: cached.market_price_cents,
-          priceLabel: cached.price_label,
-          fromCache: true,
-        };
-      }
-
-      // Identity cached but price stale - refresh price only
-      this.logger.debug({ cacheKey }, "TCGDex price stale, refreshing");
-    }
-
-    // Fetch from API
-    const tcgdexCardId = `${setId}-${normalizedNumber}`;
-
-    try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), this.fetchTimeoutMs);
-
-      const response = await fetch(`${TCGDEX_API_BASE}/cards/${tcgdexCardId}`, {
-        signal: controller.signal,
-      });
-
-      clearTimeout(timeoutId);
-
-      if (!response.ok) {
-        if (response.status === 404) {
-          return {
-            success: false,
-            card: null,
-            imageUrl: null,
-            marketPriceCents: null,
-            priceLabel: null,
-            fromCache: false,
-            error: `Card not found: ${tcgdexCardId}`,
-          };
-        }
-        throw new Error(`TCGDex API returned ${response.status}`);
-      }
-
-      const card = (await response.json()) as TCGDexCard;
-
-      // Build high-res image URL
-      const imageUrl = card.image ? `${card.image}/high.webp` : null;
-
-      // Extract market price
-      const { priceCents, priceLabel } = this.extractMarketPrice(card);
-
-      // Write to cache
-      this.writeToCache(cacheKey, card, imageUrl, priceCents, priceLabel);
-
-      this.logger.debug(
-        {
-          tcgdexCardId: card.id,
-          name: card.name,
-          imageUrl,
-          marketPriceCents: priceCents,
-        },
-        "TCGDex card lookup successful"
-      );
-
-      return {
-        success: true,
-        card,
-        imageUrl,
-        marketPriceCents: priceCents,
-        priceLabel,
-        fromCache: false,
-      };
-    } catch (error) {
-      if (error instanceof Error && error.name === "AbortError") {
-        return {
-          success: false,
-          card: null,
-          imageUrl: null,
-          marketPriceCents: null,
-          priceLabel: null,
-          fromCache: false,
-          error: `TCGDex API timeout after ${this.fetchTimeoutMs}ms`,
-        };
-      }
-
-      this.logger.error(
-        { error, tcgdexCardId, setName, cardNumber },
-        "TCGDex card lookup failed"
-      );
-
-      return {
-        success: false,
-        card: null,
-        imageUrl: null,
-        marketPriceCents: null,
-        priceLabel: null,
-        fromCache: false,
-        error: error instanceof Error ? error.message : "Unknown error",
-      };
-    }
+    return {
+      success: false,
+      card: null,
+      imageUrl: null,
+      marketPriceCents: null,
+      priceLabel: null,
+      fromCache: false,
+      error: `Card not found for any localId variant: ${attemptedIds.join(", ")}`,
+    };
   }
 }

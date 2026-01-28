@@ -213,7 +213,8 @@ export class OrderItemEnrichmentService {
     try {
       const tcgdexResult = await this.tcgdexAdapter.getCardBySetAndNumber(
         item.set_name,
-        item.card_number
+        item.card_number,
+        { cardName: item.product_name }
       );
 
       if (tcgdexResult.success) {
@@ -276,7 +277,8 @@ export class OrderItemEnrichmentService {
     try {
       const tcgdexResult = await this.tcgdexAdapter.getCardBySetAndNumber(
         item.set_name,
-        item.card_number
+        item.card_number,
+        { cardName: item.product_name }
       );
 
       if (tcgdexResult.success && tcgdexResult.imageUrl) {
