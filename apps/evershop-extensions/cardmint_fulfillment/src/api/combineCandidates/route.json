@@ -1,0 +1,5 @@
+{
+  "methods": ["GET"],
+  "path": "/admin/api/fulfillment/marketplace/shipments/:id/combine-candidates",
+  "access": "private"
+}

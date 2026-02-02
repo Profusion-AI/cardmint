@@ -10,7 +10,7 @@ import type { Logger } from "pino";
 import { runtimeConfig } from "../../config.js";
 import { encryptJson, decryptJson } from "../../utils/encryption";
 import { normalizeNameForMatching } from "../../utils/nameNormalization.js";
-import { parseTcgplayerOrderNumber } from "../../utils/orderNumberFormat.js";
+import { parseTcgplayerOrderNumber, formatTcgplayerOrderNumber } from "../../utils/orderNumberFormat.js";
 import type { EasyPostService } from "../easyPostService.js";
 import type { UspsTrackingService } from "../uspsTrackingService.js";
 
@@ -109,8 +109,44 @@ export interface MarketplaceShipment {
   // Concurrency lock for label purchase
   label_purchase_in_progress: number;
   label_purchase_locked_at: number | null;
+  // Refund tracking
+  refund_status: "submitted" | "refunded" | "rejected" | null;
+  refund_requested_at: number | null;
+  // Combined shipment support
+  fulfilled_by_shipment_id: number | null; // Parent shipment if combined
+  combined_at: number | null;
+  combined_by: string | null;
+  combined_reason: string | null;
   created_at: number;
   updated_at: number;
+}
+
+/**
+ * Result of a combine validation check
+ */
+export interface CombineValidationResult {
+  valid: boolean;
+  error?: string;
+  errorCode?: string;
+  addressMismatchWarning?: string;
+}
+
+/**
+ * Candidate parent shipment for combining
+ */
+export interface CombineCandidate {
+  shipmentId: number;
+  orderNumber: string;
+  externalOrderId: string;
+  customerName: string;
+  trackingNumber: string;
+  trackingUrl: string | null;
+  carrier: string | null;
+  status: string;
+  shippedAt: number | null;
+  orderDate: number;
+  shippingZip: string | null;
+  itemCount: number;
 }
 
 /**
@@ -577,8 +613,9 @@ export class MarketplaceService {
 
       findShipmentsByTrackingNumber: this.db.prepare(`
         SELECT * FROM marketplace_shipments
-        WHERE tracking_number = ?
-           OR REPLACE(REPLACE(tracking_number, '-', ''), ' ', '') = ?
+        WHERE (tracking_number = ?
+           OR REPLACE(REPLACE(tracking_number, '-', ''), ' ', '') = ?)
+          AND fulfilled_by_shipment_id IS NULL
       `),
 
       getNextDisplayOrderNumber: this.db.prepare(`
@@ -936,6 +973,9 @@ export class MarketplaceService {
       matchedBy,
       shipmentId
     );
+
+    // Propagate tracking info to any child shipments (combined shipment support)
+    this.updateChildShipmentsStatus(shipmentId);
   }
 
   updateShipmentAddressIfMissing(shipmentId: number, shippingAddress: ShippingAddress): boolean {
@@ -962,6 +1002,9 @@ export class MarketplaceService {
         "Set address expiry to 90 days post-delivery"
       );
     }
+
+    // Propagate status to any child shipments (combined shipment support)
+    this.updateChildShipmentsStatus(shipmentId);
   }
 
   updateShipmentLabel(
@@ -1074,34 +1117,36 @@ export class MarketplaceService {
 
   /**
    * Generate carrier-specific tracking URL.
-   * Returns null for unknown carriers to avoid incorrect URLs.
+   * Returns null for unknown carriers to allow EasyPost fallback.
    */
   generateTrackingUrl(trackingNumber: string, carrier: string | null): string | null {
     if (!trackingNumber || !carrier) return null;
 
+    // Safety: trim whitespace and URL-encode the tracking number
+    const encoded = encodeURIComponent(trackingNumber.trim());
     const carrierLower = carrier.toLowerCase();
 
     // USPS
     if (carrierLower === "usps" || carrierLower.includes("usps")) {
-      return `https://tools.usps.com/go/TrackConfirmAction?tLabels=${trackingNumber}`;
+      return `https://tools.usps.com/go/TrackConfirmAction?tLabels=${encoded}`;
     }
 
     // UPS
     if (carrierLower === "ups" || carrierLower.includes("ups")) {
-      return `https://www.ups.com/track?tracknum=${trackingNumber}`;
+      return `https://www.ups.com/track?tracknum=${encoded}`;
     }
 
     // FedEx
     if (carrierLower === "fedex" || carrierLower.includes("fedex")) {
-      return `https://www.fedex.com/fedextrack/?trknbr=${trackingNumber}`;
+      return `https://www.fedex.com/fedextrack/?trknbr=${encoded}`;
     }
 
     // DHL
     if (carrierLower === "dhl" || carrierLower.includes("dhl")) {
-      return `https://www.dhl.com/en/express/tracking.html?AWB=${trackingNumber}`;
+      return `https://www.dhl.com/en/express/tracking.html?AWB=${encoded}`;
     }
 
-    // Unknown carrier - return null to avoid incorrect URL
+    // Unknown carrier - return null to allow EasyPost public_url fallback
     return null;
   }
 
@@ -1250,7 +1295,9 @@ export class MarketplaceService {
         const statusMap: Record<string, MarketplaceShipment["status"]> = {
           delivered: "delivered",
           in_transit: "in_transit",
-          pre_transit: "shipped",
+          // pre_transit = label created but not scanned → keep as label_purchased
+          // This allows refunds for unscanned labels
+          pre_transit: "label_purchased",
           out_for_delivery: "in_transit",
         };
         const newStatus = statusMap[effectiveStatus.toLowerCase()];
@@ -1686,6 +1733,9 @@ export class MarketplaceService {
       shipmentId
     );
 
+    // Propagate tracking info to any child shipments (combined shipment support)
+    this.updateChildShipmentsStatus(shipmentId);
+
     this.logger.info(
       {
         shipmentId,
@@ -1722,6 +1772,120 @@ export class MarketplaceService {
     }
     // Fallback to order item count (assumes 1 shipment per order)
     return order.item_count;
+  }
+
+  // ============================================================================
+  // Refund Flow Methods
+  // ============================================================================
+
+  /**
+   * Update shipment refund status.
+   * Called after void request or refund check.
+   *
+   * @param shipmentId - Internal shipment ID
+   * @param refundStatus - New refund status ('submitted' | 'refunded' | 'rejected')
+   */
+  updateRefundStatus(shipmentId: number, refundStatus: string): void {
+    const now = Math.floor(Date.now() / 1000);
+    this.db.prepare(`
+      UPDATE marketplace_shipments
+      SET refund_status = ?,
+          refund_requested_at = COALESCE(refund_requested_at, ?),
+          updated_at = strftime('%s', 'now')
+      WHERE id = ?
+    `).run(refundStatus, now, shipmentId);
+
+    this.logger.info(
+      { shipmentId, refundStatus },
+      "Updated shipment refund status"
+    );
+  }
+
+  /**
+   * Reset shipment to pending state after successful refund.
+   *
+   * Clears:
+   * - status → 'pending'
+   * - tracking_number, tracking_url, label_url, label_cost_cents, label_purchased_at
+   * - shipped_at, delivered_at
+   * - carrier, service, easypost_rate_id, label_viewed_at
+   *
+   * Preserves:
+   * - easypost_shipment_id (for re-rating if needed)
+   * - shipping addresses
+   * - refund_status (keeps 'refunded' for audit)
+   *
+   * @param shipmentId - Internal shipment ID
+   */
+  resetShipmentToPending(shipmentId: number): void {
+    this.db.prepare(`
+      UPDATE marketplace_shipments
+      SET status = 'pending',
+          tracking_number = NULL,
+          tracking_url = NULL,
+          label_url = NULL,
+          label_cost_cents = NULL,
+          label_purchased_at = NULL,
+          shipped_at = NULL,
+          delivered_at = NULL,
+          carrier = NULL,
+          service = NULL,
+          easypost_rate_id = NULL,
+          label_viewed_at = NULL,
+          easypost_status_cached = NULL,
+          easypost_status_cached_at = NULL,
+          updated_at = strftime('%s', 'now')
+      WHERE id = ?
+    `).run(shipmentId);
+
+    this.logger.info(
+      { shipmentId },
+      "Reset shipment to pending (post-refund)"
+    );
+  }
+
+  /**
+   * Cache EasyPost tracking status for refund eligibility checks.
+   * Avoids repeated live API calls during eligibility verification.
+   *
+   * @param shipmentId - Internal shipment ID
+   * @param status - EasyPost tracking status
+   */
+  cacheEasypostStatus(shipmentId: number, status: string): void {
+    const now = Math.floor(Date.now() / 1000);
+    this.db.prepare(`
+      UPDATE marketplace_shipments
+      SET easypost_status_cached = ?,
+          easypost_status_cached_at = ?,
+          updated_at = strftime('%s', 'now')
+      WHERE id = ?
+    `).run(status, now, shipmentId);
+  }
+
+  /**
+   * Get cached EasyPost status for a shipment.
+   *
+   * @param shipmentId - Internal shipment ID
+   * @returns Cached status and timestamp, or null if not cached
+   */
+  getEasypostStatusCache(shipmentId: number): { status: string; cachedAt: number } | null {
+    const row = this.db.prepare(`
+      SELECT easypost_status_cached, easypost_status_cached_at
+      FROM marketplace_shipments
+      WHERE id = ?
+    `).get(shipmentId) as {
+      easypost_status_cached: string | null;
+      easypost_status_cached_at: number | null;
+    } | undefined;
+
+    if (!row || !row.easypost_status_cached || !row.easypost_status_cached_at) {
+      return null;
+    }
+
+    return {
+      status: row.easypost_status_cached,
+      cachedAt: row.easypost_status_cached_at,
+    };
   }
 
   // ============================================================================
@@ -1878,6 +2042,453 @@ export class MarketplaceService {
       );
     }
     return result.changes;
+  }
+
+  // ============================================================================
+  // Combined Shipment Support
+  // ============================================================================
+
+  /**
+   * Validate that a shipment can be combined with a parent shipment.
+   * Performs all integrity checks required before combining.
+   *
+   * @param childShipmentId - Shipment to be combined (child)
+   * @param parentShipmentId - Shipment providing tracking (parent)
+   * @returns Validation result with error details if invalid
+   */
+  validateCombine(childShipmentId: number, parentShipmentId: number): CombineValidationResult {
+    // Check 1: Self-reference
+    if (childShipmentId === parentShipmentId) {
+      return { valid: false, error: "Cannot combine shipment with itself", errorCode: "SELF_REFERENCE" };
+    }
+
+    // Check 2: Child shipment exists and is pending
+    const child = this.getShipmentById(childShipmentId);
+    if (!child) {
+      return { valid: false, error: "Child shipment not found", errorCode: "CHILD_NOT_FOUND" };
+    }
+    if (child.status !== "pending") {
+      return { valid: false, error: `Child shipment status must be 'pending', got '${child.status}'`, errorCode: "INVALID_CHILD_STATUS" };
+    }
+    if (child.fulfilled_by_shipment_id) {
+      return { valid: false, error: "Child shipment is already combined with another shipment", errorCode: "ALREADY_COMBINED" };
+    }
+
+    // Check 3: Parent shipment exists and has tracking
+    const parent = this.getShipmentById(parentShipmentId);
+    if (!parent) {
+      return { valid: false, error: "Parent shipment not found", errorCode: "PARENT_NOT_FOUND" };
+    }
+    if (!parent.tracking_number) {
+      return { valid: false, error: "Parent shipment has no tracking number", errorCode: "PARENT_NO_TRACKING" };
+    }
+
+    // Check 4: Parent is not itself a child
+    if (parent.fulfilled_by_shipment_id) {
+      return { valid: false, error: "Parent shipment is itself a child of another shipment", errorCode: "PARENT_IS_CHILD" };
+    }
+
+    // Check 5: Parent refund status check
+    const refundBlockingStatuses = ["submitted", "refunded"];
+    if (parent.refund_status && refundBlockingStatuses.includes(parent.refund_status)) {
+      return { valid: false, error: `Parent shipment has refund status '${parent.refund_status}'`, errorCode: "PARENT_REFUND_BLOCKED" };
+    }
+
+    // Check 6: Get orders to verify same marketplace source and buyer
+    const childOrder = this.getOrderById(child.marketplace_order_id);
+    const parentOrder = this.getOrderById(parent.marketplace_order_id);
+    if (!childOrder || !parentOrder) {
+      return { valid: false, error: "Could not load order details", errorCode: "ORDER_NOT_FOUND" };
+    }
+
+    // Check 7: Same marketplace source
+    if (childOrder.source !== parentOrder.source) {
+      return { valid: false, error: `Source mismatch: child is '${childOrder.source}', parent is '${parentOrder.source}'`, errorCode: "SOURCE_MISMATCH" };
+    }
+
+    // Check 8: Same buyer (normalized name match)
+    if (childOrder.customer_name_normalized !== parentOrder.customer_name_normalized) {
+      return { valid: false, error: "Customer name does not match between orders", errorCode: "CUSTOMER_MISMATCH" };
+    }
+
+    // Address mismatch warning (not blocking)
+    let addressMismatchWarning: string | undefined;
+    if (child.shipping_zip && parent.shipping_zip && child.shipping_zip !== parent.shipping_zip) {
+      addressMismatchWarning = `Shipping ZIP codes differ: child=${child.shipping_zip}, parent=${parent.shipping_zip}. Proceed with caution.`;
+    }
+
+    return { valid: true, addressMismatchWarning };
+  }
+
+  /**
+   * Combine a child shipment with a parent shipment.
+   * The child inherits tracking info and status from the parent.
+   *
+   * @param childShipmentId - Shipment to be combined
+   * @param parentShipmentId - Shipment providing tracking
+   * @param reason - Operator's reason for combining (min 5 chars)
+   * @param operatorId - Operator performing the action
+   * @returns Combined shipment info or error
+   */
+  combineShipment(
+    childShipmentId: number,
+    parentShipmentId: number,
+    reason: string,
+    operatorId: string
+  ): {
+    ok: true;
+    childShipmentId: number;
+    parentShipmentId: number;
+    inheritedTracking: { trackingNumber: string; trackingUrl: string | null; carrier: string | null };
+    addressMismatchWarning?: string;
+  } | { ok: false; error: string; errorCode: string } {
+    // Validate reason
+    if (!reason || reason.trim().length < 5) {
+      return { ok: false, error: "Reason must be at least 5 characters", errorCode: "REASON_TOO_SHORT" };
+    }
+
+    // Run validation
+    const validation = this.validateCombine(childShipmentId, parentShipmentId);
+    if (!validation.valid) {
+      return { ok: false, error: validation.error!, errorCode: validation.errorCode! };
+    }
+
+    // Get parent shipment for data copy
+    const parent = this.getShipmentById(parentShipmentId)!;
+    const now = Math.floor(Date.now() / 1000);
+
+    // Determine child status based on parent status
+    let childStatus = parent.status;
+    let shippedAt = parent.shipped_at;
+    let deliveredAt = parent.delivered_at;
+
+    // Copy tracking and status from parent to child
+    this.db.prepare(`
+      UPDATE marketplace_shipments
+      SET fulfilled_by_shipment_id = ?,
+          tracking_number = ?,
+          tracking_url = ?,
+          carrier = ?,
+          status = ?,
+          shipped_at = ?,
+          delivered_at = ?,
+          combined_at = ?,
+          combined_by = ?,
+          combined_reason = ?,
+          updated_at = ?
+      WHERE id = ?
+    `).run(
+      parentShipmentId,
+      parent.tracking_number,
+      parent.tracking_url,
+      parent.carrier,
+      childStatus,
+      shippedAt,
+      deliveredAt,
+      now,
+      operatorId,
+      reason.trim(),
+      now,
+      childShipmentId
+    );
+
+    this.logger.info(
+      {
+        childShipmentId,
+        parentShipmentId,
+        trackingNumber: parent.tracking_number,
+        operatorId,
+        reason: reason.trim(),
+      },
+      "Combined shipment with parent"
+    );
+
+    return {
+      ok: true,
+      childShipmentId,
+      parentShipmentId,
+      inheritedTracking: {
+        trackingNumber: parent.tracking_number!,
+        trackingUrl: parent.tracking_url,
+        carrier: parent.carrier,
+      },
+      addressMismatchWarning: validation.addressMismatchWarning,
+    };
+  }
+
+  /**
+   * Uncombine a child shipment from its parent.
+   * Resets the child to pending status with no tracking.
+   *
+   * @param shipmentId - Child shipment to uncombine
+   * @returns Success or error
+   */
+  uncombineShipment(shipmentId: number): { ok: true } | { ok: false; error: string; errorCode: string } {
+    const shipment = this.getShipmentById(shipmentId);
+    if (!shipment) {
+      return { ok: false, error: "Shipment not found", errorCode: "NOT_FOUND" };
+    }
+
+    if (!shipment.fulfilled_by_shipment_id) {
+      return { ok: false, error: "Shipment is not combined with another shipment", errorCode: "NOT_COMBINED" };
+    }
+
+    if (shipment.status === "delivered") {
+      return { ok: false, error: "Cannot uncombine a delivered shipment", errorCode: "ALREADY_DELIVERED" };
+    }
+
+    const now = Math.floor(Date.now() / 1000);
+
+    // Reset child shipment to pending, clear all inherited fields
+    this.db.prepare(`
+      UPDATE marketplace_shipments
+      SET fulfilled_by_shipment_id = NULL,
+          tracking_number = NULL,
+          tracking_url = NULL,
+          carrier = NULL,
+          status = 'pending',
+          shipped_at = NULL,
+          delivered_at = NULL,
+          combined_at = NULL,
+          combined_by = NULL,
+          combined_reason = NULL,
+          updated_at = ?
+      WHERE id = ?
+    `).run(now, shipmentId);
+
+    this.logger.info({ shipmentId }, "Uncombined shipment from parent");
+
+    return { ok: true };
+  }
+
+  /**
+   * Find eligible parent shipments for combining with a given child shipment.
+   * Returns shipments from the same buyer within the last 7 days that have tracking.
+   *
+   * @param childShipmentId - The shipment looking for combine candidates
+   * @returns List of eligible parent candidates
+   */
+  getCombineCandidates(childShipmentId: number): CombineCandidate[] {
+    const childShipment = this.getShipmentById(childShipmentId);
+    if (!childShipment) {
+      return [];
+    }
+
+    const childOrder = this.getOrderById(childShipment.marketplace_order_id);
+    if (!childOrder) {
+      return [];
+    }
+
+    const sevenDaysAgo = Math.floor(Date.now() / 1000) - 7 * 24 * 60 * 60;
+
+    // Find potential parent shipments:
+    // - Same buyer (normalized name)
+    // - Has tracking number
+    // - Is NOT itself a child (fulfilled_by_shipment_id IS NULL)
+    // - refund_status is NULL or 'rejected' (not 'submitted' or 'refunded')
+    // - Order date within last 7 days
+    // - Not the same shipment as child
+    const candidates = this.db.prepare(`
+      SELECT
+        ms.id as shipmentId,
+        mo.display_order_number as orderNumber,
+        mo.external_order_id as externalOrderId,
+        mo.customer_name as customerName,
+        ms.tracking_number as trackingNumber,
+        ms.tracking_url as trackingUrl,
+        ms.carrier,
+        ms.status,
+        ms.shipped_at as shippedAt,
+        mo.order_date as orderDate,
+        ms.shipping_zip as shippingZip,
+        mo.item_count as itemCount
+      FROM marketplace_shipments ms
+      JOIN marketplace_orders mo ON ms.marketplace_order_id = mo.id
+      WHERE mo.customer_name_normalized = ?
+        AND mo.source = ?
+        AND ms.tracking_number IS NOT NULL
+        AND ms.fulfilled_by_shipment_id IS NULL
+        AND (ms.refund_status IS NULL OR ms.refund_status = 'rejected')
+        AND mo.order_date >= ?
+        AND ms.id != ?
+      ORDER BY mo.order_date DESC
+      LIMIT 20
+    `).all(
+      childOrder.customer_name_normalized,
+      childOrder.source,
+      sevenDaysAgo,
+      childShipmentId
+    ) as CombineCandidate[];
+
+    return candidates;
+  }
+
+  /**
+   * Update child shipments when parent status changes.
+   * Propagates status, timestamps, and tracking info to all children.
+   *
+   * @param parentShipmentId - The parent shipment that was updated
+   */
+  updateChildShipmentsStatus(parentShipmentId: number): void {
+    const parent = this.getShipmentById(parentShipmentId);
+    if (!parent) {
+      return;
+    }
+
+    const now = Math.floor(Date.now() / 1000);
+
+    // Update all child shipments to match parent status
+    const result = this.db.prepare(`
+      UPDATE marketplace_shipments
+      SET status = ?,
+          shipped_at = CASE WHEN ? IN ('shipped', 'in_transit', 'delivered') THEN COALESCE(shipped_at, ?) ELSE shipped_at END,
+          delivered_at = CASE WHEN ? = 'delivered' THEN COALESCE(delivered_at, ?) ELSE delivered_at END,
+          tracking_number = ?,
+          tracking_url = ?,
+          carrier = ?,
+          updated_at = ?
+      WHERE fulfilled_by_shipment_id = ?
+    `).run(
+      parent.status,
+      parent.status, parent.shipped_at,
+      parent.status, parent.delivered_at,
+      parent.tracking_number,
+      parent.tracking_url,
+      parent.carrier,
+      now,
+      parentShipmentId
+    );
+
+    if (result.changes > 0) {
+      this.logger.info(
+        { parentShipmentId, childrenUpdated: result.changes, newStatus: parent.status },
+        "Propagated status to child shipments"
+      );
+    }
+  }
+
+  /**
+   * Get child shipments for a parent.
+   *
+   * @param parentShipmentId - The parent shipment ID
+   * @returns List of child shipments
+   */
+  getChildShipments(parentShipmentId: number): MarketplaceShipment[] {
+    return this.db.prepare(`
+      SELECT * FROM marketplace_shipments
+      WHERE fulfilled_by_shipment_id = ?
+    `).all(parentShipmentId) as MarketplaceShipment[];
+  }
+
+  /**
+   * Check if a tracking number already exists on another shipment.
+   * Used for duplicate detection when manually entering tracking.
+   *
+   * @param trackingNumber - Tracking number to check
+   * @param excludeShipmentId - Shipment ID to exclude from check (the one being updated)
+   * @returns Existing shipment info if duplicate found
+   */
+  findExistingTrackingShipment(
+    trackingNumber: string,
+    excludeShipmentId: number
+  ): { shipmentId: number; orderNumber: string } | null {
+    const normalized = normalizeTrackingNumber(trackingNumber);
+
+    const row = this.db.prepare(`
+      SELECT ms.id, mo.display_order_number, mo.external_order_id, mo.source
+      FROM marketplace_shipments ms
+      JOIN marketplace_orders mo ON ms.marketplace_order_id = mo.id
+      WHERE (ms.tracking_number = ? OR REPLACE(REPLACE(ms.tracking_number, '-', ''), ' ', '') = ?)
+        AND ms.id != ?
+        AND ms.fulfilled_by_shipment_id IS NULL
+      LIMIT 1
+    `).get(trackingNumber, normalized, excludeShipmentId) as {
+      id: number;
+      display_order_number: string;
+      external_order_id: string;
+      source: string;
+    } | undefined;
+
+    if (!row) {
+      return null;
+    }
+
+    // Format order number for TCGPlayer
+    const orderNumber = row.source === "tcgplayer"
+      ? formatTcgplayerOrderNumber(row.external_order_id)
+      : row.display_order_number;
+
+    return { shipmentId: row.id, orderNumber };
+  }
+
+  /**
+   * Update shipment tracking manually (with duplicate detection).
+   *
+   * @param shipmentId - Shipment to update
+   * @param trackingNumber - New tracking number
+   * @param carrier - Optional carrier name
+   * @returns Success with optional duplicate warning
+   */
+  updateShipmentTrackingManual(
+    shipmentId: number,
+    trackingNumber: string,
+    carrier?: string
+  ): {
+    ok: true;
+    duplicateDetected?: { existingShipmentId: number; existingOrderNumber: string; suggestCombine: boolean };
+  } | { ok: false; error: string; errorCode: string } {
+    const shipment = this.getShipmentById(shipmentId);
+    if (!shipment) {
+      return { ok: false, error: "Shipment not found", errorCode: "NOT_FOUND" };
+    }
+
+    // Check for duplicate tracking
+    const existing = this.findExistingTrackingShipment(trackingNumber, shipmentId);
+
+    // Generate tracking URL
+    const trackingUrl = this.generateTrackingUrl(trackingNumber, carrier ?? null);
+
+    const now = Math.floor(Date.now() / 1000);
+
+    // Update the shipment
+    this.db.prepare(`
+      UPDATE marketplace_shipments
+      SET tracking_number = ?,
+          tracking_url = ?,
+          carrier = COALESCE(?, carrier),
+          status = CASE WHEN status = 'pending' THEN 'shipped' ELSE status END,
+          shipped_at = CASE WHEN status = 'pending' THEN ? ELSE shipped_at END,
+          updated_at = ?
+      WHERE id = ?
+    `).run(
+      trackingNumber,
+      trackingUrl,
+      carrier ?? null,
+      now,
+      now,
+      shipmentId
+    );
+
+    // Propagate tracking info to any child shipments (combined shipment support)
+    this.updateChildShipmentsStatus(shipmentId);
+
+    this.logger.info(
+      { shipmentId, trackingNumber, carrier, hasDuplicate: !!existing },
+      "Manual tracking number updated"
+    );
+
+    if (existing) {
+      return {
+        ok: true,
+        duplicateDetected: {
+          existingShipmentId: existing.shipmentId,
+          existingOrderNumber: existing.orderNumber,
+          suggestCombine: true,
+        },
+      };
+    }
+
+    return { ok: true };
   }
 }
 

@@ -39,6 +39,7 @@ import { requireAdminAuth } from "../middleware/adminAuth.js";
 import { PrintQueueRepository } from "../repositories/printQueueRepository.js";
 import { processLabelForPL60, getCachedLabel } from "../services/labelProcessingService.js";
 import { formatTcgplayerOrderNumber } from "../utils/orderNumberFormat.js";
+import { isRefundEligible, type MarketplaceShipmentForRefund } from "../utils/refundEligibility.js";
 
 // Max CSV size (10MB)
 const MAX_CSV_SIZE = 10 * 1024 * 1024;
@@ -87,6 +88,32 @@ function extractClientIp(
     return xForwardedFor.split(",")[0].trim();
   }
   return remoteAddress || null;
+}
+
+/**
+ * Get human-readable message for refund rejection reason
+ */
+function getRefundRejectionMessage(reason: string): string {
+  const messages: Record<string, string> = {
+    NO_EASYPOST_SHIPMENT: "No EasyPost shipment ID found. Label may not have been purchased via EasyPost.",
+    REFUND_ALREADY_SUBMITTED: "A refund has already been submitted for this label.",
+    REFUND_ALREADY_REFUNDED: "This label has already been refunded.",
+    REFUND_ALREADY_REJECTED: "A previous refund was rejected. Contact support if you believe this is an error.",
+    LABEL_PURCHASED: "Label is eligible for refund (not yet scanned by carrier).",
+    PRE_TRANSIT: "Label is eligible for refund (carrier has not yet scanned the package).",
+    STATUS_UNKNOWN: "Label status is unknown. Refund may be possible if carrier has not scanned.",
+    SHIPMENT_IN_TRANSIT: "Cannot refund: package is in transit with the carrier.",
+    SHIPMENT_DELIVERED: "Cannot refund: package has been delivered.",
+    CARRIER_STATUS_IN_TRANSIT: "Cannot refund: carrier shows package in transit.",
+    CARRIER_STATUS_OUT_FOR_DELIVERY: "Cannot refund: carrier shows package out for delivery.",
+    CARRIER_STATUS_DELIVERED: "Cannot refund: carrier shows package delivered.",
+    EASYPOST_TIMEOUT: "Timed out while checking EasyPost status. Please try again.",
+    EASYPOST_ERROR: "Error communicating with EasyPost. Please try again.",
+    EASYPOST_SHIPMENT_NOT_FOUND: "EasyPost shipment not found. The label may have already been voided.",
+    INVALID_STATUS_PENDING: "No label has been purchased yet (status is pending).",
+  };
+
+  return messages[reason] || `Refund not eligible: ${reason}`;
 }
 
 interface AuditContext {
@@ -708,7 +735,7 @@ export function registerMarketplaceRoutes(app: Express, ctx: AppContext): void {
         return res.status(404).json({ error: "Shipment not found" });
       }
 
-      // Update status
+      // Update status (automatically propagates to child shipments)
       marketplaceService.updateShipmentStatus(shipmentId, status);
 
       // Handle labelUrl if provided (supports operator-uploaded labels)
@@ -1314,13 +1341,14 @@ export function registerMarketplaceRoutes(app: Express, ctx: AppContext): void {
         ? Math.round(parseFloat(labelResult.shipment.selected_rate.rate) * 100)
         : 0;
 
-      // Build tracking URL (EasyPost may or may not provide one)
-      // Cast to any to access tracker which may exist on purchased shipments
+      // Build tracking URL - prefer carrier-native URLs (more reliable than EasyPost public page)
+      // EasyPost's track.easypost.com sometimes returns ERR_EMPTY_RESPONSE
+      // Fallback to EasyPost public_url for unknown carriers (e.g., Asendia, USPS International)
       const shipmentTracker = (labelResult.shipment as any)?.tracker;
-      const trackingUrl = shipmentTracker?.public_url ||
-        (labelResult.carrier === "USPS" && labelResult.trackingNumber
-          ? `https://tools.usps.com/go/TrackConfirmAction?tLabels=${labelResult.trackingNumber}`
-          : null);
+      const trackingUrl = marketplaceService.generateTrackingUrl(
+        labelResult.trackingNumber || "",
+        labelResult.carrier || null
+      ) || (shipmentTracker?.public_url ?? null);
 
       // 7. Store tracking/label info in database (use NULL not empty string)
       marketplaceService.updateShipmentLabelPurchased(
@@ -1426,13 +1454,21 @@ export function registerMarketplaceRoutes(app: Express, ctx: AppContext): void {
         });
       }
 
-      // 1b. Block access if label has been refunded
-      if (shipment.refund_status === "submitted" || shipment.refund_status === "refunded") {
+      // 1b. Block access if label refund is pending or confirmed
+      // Note: 'rejected' means refund failed, so label is still valid for printing
+      if (shipment.refund_status === "submitted") {
+        return res.status(409).json({
+          error: "REFUND_PENDING",
+          message: "Refund is pending. Check /refund/check to refresh status.",
+        });
+      }
+      if (shipment.refund_status === "refunded") {
         return res.status(410).json({
           error: "LABEL_REFUNDED",
           message: "This label has been refunded and cannot be printed",
         });
       }
+      // refund_status === "rejected" → label is still valid, allow printing
 
       // 2. If info requested, return metadata
       if (format === "info") {
@@ -1494,27 +1530,125 @@ export function registerMarketplaceRoutes(app: Express, ctx: AppContext): void {
   });
 
   /**
-   * POST /api/cm-admin/marketplace/shipments/:id/refund
-   * Request a refund for a purchased shipping label via EasyPost.
+   * POST /api/cm-admin/marketplace/shipments/:id/void
+   * Request a refund/void for a purchased shipping label via EasyPost.
+   * This is Step 1 of the two-step refund flow.
    *
-   * EasyPost refunds the postage if the label hasn't been scanned.
-   * USPS: Must be within 30 days and not scanned.
+   * Step 1: Sets refund_status = 'submitted', keeps label data intact.
+   * Step 2: Use /refund/check to poll for final status and clear label if refunded.
    *
    * Guards:
-   * - Shipment must exist
-   * - Must have easypost_shipment_id (label was purchased via EasyPost)
-   * - Status must be 'label_purchased' (can't refund shipped labels)
-   * - refund_status must be NULL (prevent duplicate refund requests)
+   * - Uses isRefundEligible() which checks:
+   *   - Must have easypost_shipment_id
+   *   - refund_status must be null
+   *   - Status is 'label_purchased' OR ('shipped' with EasyPost pre_transit)
    *
-   * Returns: { ok, shipmentId, refundStatus }
+   * Returns: { ok, shipmentId, refundStatus, easypostStatus? }
    */
-  router.post("/shipments/:id/refund", async (req: Request, res: Response) => {
+  router.post("/shipments/:id/void", async (req: Request, res: Response) => {
     const { operatorId, clientIp, userAgent } = (req as any).auditContext as AuditContext;
     const shipmentId = parseInt(req.params.id, 10);
 
     logger.info(
-      { operatorId, clientIp, userAgent, action: "refund.label", shipmentId },
-      "marketplace.shipment.refund.start"
+      { operatorId, clientIp, userAgent, action: "void.label", shipmentId },
+      "marketplace.shipment.void.start"
+    );
+
+    if (isNaN(shipmentId) || shipmentId <= 0) {
+      return res.status(400).json({ error: "BAD_REQUEST", message: "Invalid shipment ID" });
+    }
+
+    try {
+      // 1. Get shipment with cache columns for eligibility check
+      const shipment = db.prepare(`
+        SELECT id, status, easypost_shipment_id, refund_status,
+               easypost_status_cached, easypost_status_cached_at
+        FROM marketplace_shipments
+        WHERE id = ?
+      `).get(shipmentId) as MarketplaceShipmentForRefund | undefined;
+
+      if (!shipment) {
+        return res.status(404).json({ error: "NOT_FOUND", message: "Shipment not found" });
+      }
+
+      // 2. Check refund eligibility (handles cache, live EasyPost calls, status validation)
+      const eligibility = await isRefundEligible(shipment, easyPostService, db);
+
+      if (!eligibility.eligible) {
+        logger.warn(
+          { operatorId, shipmentId, reason: eligibility.reason, easypostStatus: eligibility.easypostStatus },
+          "marketplace.shipment.void.not_eligible"
+        );
+        return res.status(400).json({
+          error: "NOT_ELIGIBLE",
+          reason: eligibility.reason,
+          easypostStatus: eligibility.easypostStatus ?? null,
+          cached: eligibility.cached,
+          message: getRefundRejectionMessage(eligibility.reason),
+        });
+      }
+
+      // 3. Call EasyPost refund API
+      const refundResult = await easyPostService.refundShipment(shipment.easypost_shipment_id!);
+
+      if (!refundResult.success) {
+        logger.error(
+          { operatorId, shipmentId, error: refundResult.error },
+          "marketplace.shipment.void.easypost_failed"
+        );
+        return res.status(400).json({
+          error: "REFUND_FAILED",
+          message: refundResult.error || "EasyPost refund request failed",
+        });
+      }
+
+      // 4. Update refund status - keep label data intact until confirmed
+      const refundStatus = refundResult.refundStatus || "submitted";
+      marketplaceService.updateRefundStatus(shipmentId, refundStatus);
+
+      logger.info(
+        { operatorId, shipmentId, refundStatus, easypostStatus: eligibility.easypostStatus },
+        "marketplace.shipment.void.complete"
+      );
+
+      res.json({
+        ok: true,
+        shipmentId,
+        refundStatus,
+        easypostStatus: eligibility.easypostStatus ?? null,
+        message: "Refund submitted. Use /refund/check to poll for final status.",
+      });
+    } catch (err) {
+      const error = err as Error;
+      logger.error(
+        { err: error.message, operatorId, shipmentId },
+        "marketplace.shipment.void.error"
+      );
+      res.status(500).json({
+        error: "VOID_ERROR",
+        message: error.message,
+      });
+    }
+  });
+
+  /**
+   * POST /api/cm-admin/marketplace/shipments/:id/refund/check
+   * Poll EasyPost for current refund status and handle outcome.
+   * This is Step 2 of the two-step refund flow.
+   *
+   * If refunded: Clears label data via resetShipmentToPending()
+   * If rejected: Sets refund_status = 'rejected', label printing resumes
+   * If submitted: No change, keep polling
+   *
+   * Returns: { ok, refundStatus, previousStatus, labelCleared }
+   */
+  router.post("/shipments/:id/refund/check", async (req: Request, res: Response) => {
+    const { operatorId, clientIp, userAgent } = (req as any).auditContext as AuditContext;
+    const shipmentId = parseInt(req.params.id, 10);
+
+    logger.info(
+      { operatorId, clientIp, userAgent, action: "refund.check", shipmentId },
+      "marketplace.shipment.refund.check.start"
     );
 
     if (isNaN(shipmentId) || shipmentId <= 0) {
@@ -1528,73 +1662,534 @@ export function registerMarketplaceRoutes(app: Express, ctx: AppContext): void {
         return res.status(404).json({ error: "NOT_FOUND", message: "Shipment not found" });
       }
 
-      // 2. Require EasyPost shipment ID (can only refund EasyPost-purchased labels)
+      // 2. Must have pending refund to check
+      if (!shipment.refund_status) {
+        return res.status(400).json({
+          error: "NO_PENDING_REFUND",
+          message: "No refund has been requested for this shipment. Use /void first.",
+        });
+      }
+
+      // 3. If already finalized, return current status
+      if (shipment.refund_status === "refunded" || shipment.refund_status === "rejected") {
+        return res.json({
+          ok: true,
+          shipmentId,
+          refundStatus: shipment.refund_status,
+          previousStatus: shipment.refund_status,
+          labelCleared: shipment.refund_status === "refunded",
+          message: `Refund already finalized as '${shipment.refund_status}'.`,
+        });
+      }
+
+      // 4. Must have EasyPost shipment ID
       if (!shipment.easypost_shipment_id) {
         return res.status(400).json({
           error: "NO_EASYPOST_SHIPMENT",
-          message: "No EasyPost shipment ID found. Label may not have been purchased via EasyPost.",
+          message: "No EasyPost shipment ID found.",
         });
       }
 
-      // 3. Require status is label_purchased (can't refund shipped labels)
-      if (shipment.status !== "label_purchased") {
-        return res.status(400).json({
-          error: "INVALID_STATUS",
-          message: `Cannot refund label with status '${shipment.status}'. Only 'label_purchased' status can be refunded.`,
-        });
-      }
+      // 5. Poll EasyPost for current status
+      const statusResult = await easyPostService.getShipmentRefundStatus(shipment.easypost_shipment_id);
 
-      // 4. Prevent duplicate refund requests
-      if (shipment.refund_status) {
-        return res.status(400).json({
-          error: "ALREADY_REFUNDED",
-          message: `Refund already requested. Current status: ${shipment.refund_status}`,
-          refundStatus: shipment.refund_status,
-        });
-      }
-
-      // 5. Call EasyPost refund API
-      const refundResult = await easyPostService.refundShipment(shipment.easypost_shipment_id);
-
-      if (!refundResult.success) {
-        logger.error(
-          { operatorId, shipmentId, error: refundResult.error },
-          "marketplace.shipment.refund.easypost_failed"
+      if (!statusResult.success) {
+        logger.warn(
+          { operatorId, shipmentId, error: statusResult.error },
+          "marketplace.shipment.refund.check.easypost_failed"
         );
-        return res.status(400).json({
-          error: "REFUND_FAILED",
-          message: refundResult.error || "EasyPost refund request failed",
+        return res.status(502).json({
+          error: "EASYPOST_ERROR",
+          message: statusResult.error || "Failed to fetch refund status from EasyPost",
         });
       }
 
-      // 6. Update database with refund status
-      const refundStatus = refundResult.refundStatus || "submitted";
-      db.prepare(`
-        UPDATE marketplace_shipments
-        SET refund_status = ?, refund_requested_at = ?, updated_at = strftime('%s', 'now')
-        WHERE id = ?
-      `).run(refundStatus, Math.floor(Date.now() / 1000), shipmentId);
+      const previousStatus = shipment.refund_status;
+      const newRefundStatus = statusResult.refundStatus;
+      let labelCleared = false;
 
-      logger.info(
-        { operatorId, shipmentId, refundStatus, trackingNumber: shipment.tracking_number },
-        "marketplace.shipment.refund.complete"
-      );
+      // 6. Handle status transitions
+      if (newRefundStatus === "refunded") {
+        // Refund confirmed - clear label data
+        marketplaceService.updateRefundStatus(shipmentId, "refunded");
+        marketplaceService.resetShipmentToPending(shipmentId);
+        labelCleared = true;
+
+        logger.info(
+          { operatorId, shipmentId, previousStatus, newRefundStatus: "refunded" },
+          "marketplace.shipment.refund.check.refunded"
+        );
+      } else if (newRefundStatus === "rejected") {
+        // Refund rejected - label is still valid
+        marketplaceService.updateRefundStatus(shipmentId, "rejected");
+
+        logger.info(
+          { operatorId, shipmentId, previousStatus, newRefundStatus: "rejected" },
+          "marketplace.shipment.refund.check.rejected"
+        );
+      } else {
+        // Still submitted - no change
+        logger.debug(
+          { operatorId, shipmentId, refundStatus: newRefundStatus },
+          "marketplace.shipment.refund.check.still_pending"
+        );
+      }
 
       res.json({
         ok: true,
         shipmentId,
-        refundStatus,
+        refundStatus: newRefundStatus ?? previousStatus,
+        previousStatus,
+        trackingStatus: statusResult.trackingStatus,
+        labelCleared,
       });
     } catch (err) {
       const error = err as Error;
       logger.error(
         { err: error.message, operatorId, shipmentId },
-        "marketplace.shipment.refund.error"
+        "marketplace.shipment.refund.check.error"
+      );
+      res.status(500).json({
+        error: "REFUND_CHECK_ERROR",
+        message: error.message,
+      });
+    }
+  });
+
+  /**
+   * POST /api/cm-admin/marketplace/shipments/:id/refund
+   * Back-compat wrapper: calls /void logic, then best-effort polls /refund/check once.
+   * Preserves existing FE contract while we migrate to the two-step flow.
+   *
+   * Idempotent: if refund already submitted/refunded/rejected, returns current status.
+   */
+  router.post("/shipments/:id/refund", async (req: Request, res: Response) => {
+    const { operatorId, clientIp, userAgent } = (req as any).auditContext as AuditContext;
+    const shipmentId = parseInt(req.params.id, 10);
+
+    logger.info(
+      { operatorId, clientIp, userAgent, action: "refund.backcompat", shipmentId },
+      "marketplace.shipment.refund.backcompat.start"
+    );
+
+    if (isNaN(shipmentId) || shipmentId <= 0) {
+      return res.status(400).json({ error: "BAD_REQUEST", message: "Invalid shipment ID" });
+    }
+
+    try {
+      // 1. Get shipment with cache columns for eligibility check
+      const shipment = db.prepare(`
+        SELECT id, status, easypost_shipment_id, refund_status,
+               easypost_status_cached, easypost_status_cached_at
+        FROM marketplace_shipments
+        WHERE id = ?
+      `).get(shipmentId) as MarketplaceShipmentForRefund | undefined;
+
+      if (!shipment) {
+        return res.status(404).json({ error: "NOT_FOUND", message: "Shipment not found" });
+      }
+
+      // 2. Idempotency: if already submitted/refunded/rejected, skip to poll
+      let refundStatus = shipment.refund_status;
+      let alreadySubmitted = false;
+
+      if (refundStatus === "refunded") {
+        // Already refunded - return success
+        return res.json({
+          ok: true,
+          shipmentId,
+          refundStatus: "refunded",
+          labelCleared: true,
+          message: "Label has already been refunded.",
+        });
+      }
+
+      if (refundStatus === "rejected") {
+        // Previously rejected - can try again via /void
+        return res.status(400).json({
+          error: "REFUND_REJECTED",
+          refundStatus: "rejected",
+          message: "A previous refund was rejected. Use /void to retry if conditions changed.",
+        });
+      }
+
+      if (refundStatus === "submitted") {
+        // Already submitted - skip to poll
+        alreadySubmitted = true;
+      } else {
+        // 3. Check refund eligibility (same as /void)
+        const eligibility = await isRefundEligible(shipment, easyPostService, db);
+
+        if (!eligibility.eligible) {
+          logger.warn(
+            { operatorId, shipmentId, reason: eligibility.reason, easypostStatus: eligibility.easypostStatus },
+            "marketplace.shipment.refund.backcompat.not_eligible"
+          );
+          return res.status(400).json({
+            error: "NOT_ELIGIBLE",
+            reason: eligibility.reason,
+            easypostStatus: eligibility.easypostStatus ?? null,
+            cached: eligibility.cached,
+            message: getRefundRejectionMessage(eligibility.reason),
+          });
+        }
+
+        // 4. Call EasyPost refund API (same as /void)
+        const refundResult = await easyPostService.refundShipment(shipment.easypost_shipment_id!);
+
+        if (!refundResult.success) {
+          logger.error(
+            { operatorId, shipmentId, error: refundResult.error },
+            "marketplace.shipment.refund.backcompat.easypost_failed"
+          );
+          return res.status(400).json({
+            error: "REFUND_FAILED",
+            message: refundResult.error || "EasyPost refund request failed",
+          });
+        }
+
+        // 5. Update refund status to submitted
+        refundStatus = refundResult.refundStatus || "submitted";
+        marketplaceService.updateRefundStatus(shipmentId, refundStatus);
+
+        logger.info(
+          { operatorId, shipmentId, refundStatus },
+          "marketplace.shipment.refund.backcompat.submitted"
+        );
+      }
+
+      // 6. Best-effort poll once with 3s timeout (non-blocking failure)
+      let labelCleared = false;
+      let finalStatus = refundStatus;
+
+      // Guard: can't poll without EasyPost shipment ID
+      if (!shipment.easypost_shipment_id) {
+        logger.warn(
+          { operatorId, shipmentId },
+          "marketplace.shipment.refund.backcompat.no_easypost_id_for_poll"
+        );
+        return res.status(400).json({
+          error: "NO_EASYPOST_SHIPMENT",
+          refundStatus: finalStatus,
+          message: "No EasyPost shipment ID found. Cannot poll for refund status.",
+        });
+      }
+
+      try {
+        const pollPromise = easyPostService.getShipmentRefundStatus(shipment.easypost_shipment_id);
+        const timeoutPromise = new Promise<null>((resolve) => setTimeout(() => resolve(null), 3000));
+        const statusResult = await Promise.race([pollPromise, timeoutPromise]);
+
+        if (statusResult && statusResult.success) {
+          const newRefundStatus = statusResult.refundStatus;
+
+          if (newRefundStatus === "refunded") {
+            marketplaceService.updateRefundStatus(shipmentId, "refunded");
+            marketplaceService.resetShipmentToPending(shipmentId);
+            labelCleared = true;
+            finalStatus = "refunded";
+
+            logger.info(
+              { operatorId, shipmentId, previousStatus: refundStatus, newRefundStatus: "refunded" },
+              "marketplace.shipment.refund.backcompat.refunded"
+            );
+          } else if (newRefundStatus === "rejected") {
+            marketplaceService.updateRefundStatus(shipmentId, "rejected");
+            finalStatus = "rejected";
+
+            logger.info(
+              { operatorId, shipmentId, previousStatus: refundStatus, newRefundStatus: "rejected" },
+              "marketplace.shipment.refund.backcompat.rejected"
+            );
+          } else {
+            // Still submitted
+            finalStatus = newRefundStatus ?? refundStatus;
+          }
+        } else {
+          // Poll timed out or failed - return submitted status
+          logger.debug(
+            { operatorId, shipmentId, alreadySubmitted },
+            "marketplace.shipment.refund.backcompat.poll_timeout"
+          );
+        }
+      } catch (pollErr) {
+        // Best-effort - don't fail the whole request
+        logger.warn(
+          { operatorId, shipmentId, err: (pollErr as Error).message },
+          "marketplace.shipment.refund.backcompat.poll_error"
+        );
+      }
+
+      // 7. Return result
+      const message = finalStatus === "refunded"
+        ? "Label refunded successfully."
+        : finalStatus === "rejected"
+          ? "Refund was rejected by the carrier."
+          : "Refund submitted. Status may take a few minutes to finalize.";
+
+      // ok: true for all outcomes (refunded/rejected/submitted) - FE uses refundStatus for display
+      // ok: false is reserved for actual request failures (4xx/5xx errors above)
+      res.json({
+        ok: true,
+        shipmentId,
+        refundStatus: finalStatus,
+        labelCleared,
+        message,
+      });
+    } catch (err) {
+      const error = err as Error;
+      logger.error(
+        { err: error.message, operatorId, shipmentId },
+        "marketplace.shipment.refund.backcompat.error"
       );
       res.status(500).json({
         error: "REFUND_ERROR",
         message: error.message,
       });
+    }
+  });
+
+  // ============================================================================
+  // Combined Shipment Endpoints
+  // ============================================================================
+
+  /**
+   * GET /api/cm-admin/marketplace/shipments/:id/combine-candidates
+   * Find eligible parent shipments for combining with a given child shipment.
+   *
+   * Returns shipments from the same buyer within the last 7 days that have tracking.
+   *
+   * Returns: { ok, candidates: [...] }
+   */
+  router.get("/shipments/:id/combine-candidates", (req: Request, res: Response) => {
+    const { operatorId, clientIp, userAgent } = (req as any).auditContext as AuditContext;
+    const shipmentId = parseInt(req.params.id, 10);
+
+    logger.info(
+      { operatorId, clientIp, userAgent, action: "combine-candidates", shipmentId },
+      "marketplace.shipment.combine-candidates.start"
+    );
+
+    if (isNaN(shipmentId) || shipmentId <= 0) {
+      return res.status(400).json({ error: "BAD_REQUEST", message: "Invalid shipment ID" });
+    }
+
+    try {
+      const candidates = marketplaceService.getCombineCandidates(shipmentId);
+
+      logger.info(
+        { operatorId, shipmentId, candidateCount: candidates.length },
+        "marketplace.shipment.combine-candidates.complete"
+      );
+
+      res.json({ ok: true, candidates });
+    } catch (err) {
+      const error = err as Error;
+      logger.error(
+        { err: error.message, operatorId, shipmentId },
+        "marketplace.shipment.combine-candidates.failed"
+      );
+      res.status(500).json({ error: "Failed to get combine candidates" });
+    }
+  });
+
+  /**
+   * POST /api/cm-admin/marketplace/shipments/:id/combine
+   * Combine a child shipment with a parent shipment.
+   *
+   * The child inherits tracking info and status from the parent.
+   *
+   * Body: { parentShipmentId: number, reason: string }
+   * Returns: { ok, childShipmentId, parentShipmentId, inheritedTracking, addressMismatchWarning? }
+   */
+  router.post("/shipments/:id/combine", (req: Request, res: Response) => {
+    const { operatorId, clientIp, userAgent } = (req as any).auditContext as AuditContext;
+    const childShipmentId = parseInt(req.params.id, 10);
+    const { parentShipmentId, reason } = req.body;
+
+    logger.info(
+      { operatorId, clientIp, userAgent, action: "combine", childShipmentId, parentShipmentId },
+      "marketplace.shipment.combine.start"
+    );
+
+    if (isNaN(childShipmentId) || childShipmentId <= 0) {
+      return res.status(400).json({ error: "BAD_REQUEST", message: "Invalid shipment ID" });
+    }
+
+    if (typeof parentShipmentId !== "number" || parentShipmentId <= 0) {
+      return res.status(400).json({
+        error: "BAD_REQUEST",
+        message: "parentShipmentId is required and must be a positive integer",
+      });
+    }
+
+    if (!reason || typeof reason !== "string" || reason.trim().length < 5) {
+      return res.status(400).json({
+        error: "BAD_REQUEST",
+        message: "reason is required and must be at least 5 characters",
+      });
+    }
+
+    try {
+      const result = marketplaceService.combineShipment(
+        childShipmentId,
+        parentShipmentId,
+        reason.trim(),
+        operatorId
+      );
+
+      if (!result.ok) {
+        logger.warn(
+          { operatorId, childShipmentId, parentShipmentId, error: result.error, errorCode: result.errorCode },
+          "marketplace.shipment.combine.validation_failed"
+        );
+        return res.status(400).json({
+          error: result.errorCode,
+          message: result.error,
+        });
+      }
+
+      logger.info(
+        {
+          operatorId,
+          childShipmentId,
+          parentShipmentId,
+          trackingNumber: result.inheritedTracking.trackingNumber,
+          hasWarning: !!result.addressMismatchWarning,
+        },
+        "marketplace.shipment.combine.complete"
+      );
+
+      res.json(result);
+    } catch (err) {
+      const error = err as Error;
+      logger.error(
+        { err: error.message, operatorId, childShipmentId, parentShipmentId },
+        "marketplace.shipment.combine.failed"
+      );
+      res.status(500).json({ error: "Failed to combine shipments" });
+    }
+  });
+
+  /**
+   * POST /api/cm-admin/marketplace/shipments/:id/uncombine
+   * Uncombine a child shipment from its parent.
+   *
+   * Resets the child to pending status with no tracking.
+   *
+   * Returns: { ok: true }
+   */
+  router.post("/shipments/:id/uncombine", (req: Request, res: Response) => {
+    const { operatorId, clientIp, userAgent } = (req as any).auditContext as AuditContext;
+    const shipmentId = parseInt(req.params.id, 10);
+
+    logger.info(
+      { operatorId, clientIp, userAgent, action: "uncombine", shipmentId },
+      "marketplace.shipment.uncombine.start"
+    );
+
+    if (isNaN(shipmentId) || shipmentId <= 0) {
+      return res.status(400).json({ error: "BAD_REQUEST", message: "Invalid shipment ID" });
+    }
+
+    try {
+      const result = marketplaceService.uncombineShipment(shipmentId);
+
+      if (!result.ok) {
+        logger.warn(
+          { operatorId, shipmentId, error: result.error, errorCode: result.errorCode },
+          "marketplace.shipment.uncombine.validation_failed"
+        );
+        return res.status(400).json({
+          error: result.errorCode,
+          message: result.error,
+        });
+      }
+
+      logger.info(
+        { operatorId, shipmentId },
+        "marketplace.shipment.uncombine.complete"
+      );
+
+      res.json({ ok: true });
+    } catch (err) {
+      const error = err as Error;
+      logger.error(
+        { err: error.message, operatorId, shipmentId },
+        "marketplace.shipment.uncombine.failed"
+      );
+      res.status(500).json({ error: "Failed to uncombine shipment" });
+    }
+  });
+
+  /**
+   * PATCH /api/cm-admin/marketplace/shipments/:id/tracking
+   * Manual tracking number input with duplicate detection.
+   *
+   * If the tracking number already exists on another shipment, returns a suggestion
+   * to combine the orders instead.
+   *
+   * Body: { trackingNumber: string, carrier?: string }
+   * Returns: { ok, shipmentId, trackingNumber, duplicateDetected? }
+   */
+  router.patch("/shipments/:id/tracking", (req: Request, res: Response) => {
+    const { operatorId, clientIp, userAgent } = (req as any).auditContext as AuditContext;
+    const shipmentId = parseInt(req.params.id, 10);
+    const { trackingNumber, carrier } = req.body;
+
+    logger.info(
+      { operatorId, clientIp, userAgent, action: "manual-tracking", shipmentId },
+      "marketplace.shipment.tracking.start"
+    );
+
+    if (isNaN(shipmentId) || shipmentId <= 0) {
+      return res.status(400).json({ error: "BAD_REQUEST", message: "Invalid shipment ID" });
+    }
+
+    if (!trackingNumber || typeof trackingNumber !== "string" || trackingNumber.trim().length < 5) {
+      return res.status(400).json({
+        error: "BAD_REQUEST",
+        message: "trackingNumber is required and must be at least 5 characters",
+      });
+    }
+
+    try {
+      const result = marketplaceService.updateShipmentTrackingManual(
+        shipmentId,
+        trackingNumber.trim(),
+        carrier?.trim()
+      );
+
+      if (!result.ok) {
+        return res.status(400).json({
+          error: result.errorCode,
+          message: result.error,
+        });
+      }
+
+      logger.info(
+        {
+          operatorId,
+          shipmentId,
+          trackingNumber: trackingNumber.trim(),
+          hasDuplicate: !!result.duplicateDetected,
+        },
+        "marketplace.shipment.tracking.complete"
+      );
+
+      res.json({
+        ok: true,
+        shipmentId,
+        trackingNumber: trackingNumber.trim(),
+        duplicateDetected: result.duplicateDetected,
+      });
+    } catch (err) {
+      const error = err as Error;
+      logger.error(
+        { err: error.message, operatorId, shipmentId },
+        "marketplace.shipment.tracking.failed"
+      );
+      res.status(500).json({ error: "Failed to update tracking number" });
     }
   });
 

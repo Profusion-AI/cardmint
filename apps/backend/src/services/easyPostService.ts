@@ -714,6 +714,53 @@ export class EasyPostService {
   }
 
   /**
+   * Get shipment refund status and tracking status.
+   * Used by /refund/check endpoint to poll for final refund outcome.
+   *
+   * @param shipmentId - EasyPost shipment ID
+   * @returns Refund and tracking status from EasyPost
+   */
+  async getShipmentRefundStatus(shipmentId: string): Promise<{
+    success: boolean;
+    refundStatus: "submitted" | "refunded" | "rejected" | null;
+    trackingStatus: string | null;
+    error?: string;
+  }> {
+    if (!this.isConfigured()) {
+      return { success: false, refundStatus: null, trackingStatus: null, error: "EasyPost not configured" };
+    }
+
+    try {
+      const shipment = await this.getShipment(shipmentId);
+
+      if (!shipment) {
+        return { success: false, refundStatus: null, trackingStatus: null, error: "Shipment not found" };
+      }
+
+      // EasyPost returns refund_status on the shipment object
+      const refundStatus = (shipment as unknown as { refund_status?: string }).refund_status as
+        | "submitted"
+        | "refunded"
+        | "rejected"
+        | null;
+
+      return {
+        success: true,
+        refundStatus: refundStatus || null,
+        trackingStatus: shipment.status,
+      };
+    } catch (err) {
+      this.logger.error({ err, shipmentId }, "EasyPost getShipmentRefundStatus exception");
+      return {
+        success: false,
+        refundStatus: null,
+        trackingStatus: null,
+        error: err instanceof Error ? err.message : "Unknown error",
+      };
+    }
+  }
+
+  /**
    * Request a refund for a purchased shipping label.
    * EasyPost refunds the postage if the label hasn't been scanned.
    * USPS: Must be within 30 days, must not be scanned.

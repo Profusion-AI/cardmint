@@ -139,6 +139,7 @@ export default function UnifiedGrid({
   onRefresh,
   onOrderClick,
   onOpenImportModal,
+  onOpenCombineModal,
 }) {
   const [ratesModalOpen, setRatesModalOpen] = useState(false);
   const [selectedShipment, setSelectedShipment] = useState(null);
@@ -684,10 +685,18 @@ export default function UnifiedGrid({
                         labelViewedAt: f.shipping?.labelViewedAt,
                         refundStatus: f.refundStatus,
                         easypostShipmentId: f.easypostShipmentId,
+                        // Combined shipment fields
+                        combinedWith: f.combinedWith,
+                        isCombinedParent: f.isCombinedParent,
+                        labelActionsDisabled: f.labelActionsDisabled,
+                        // For combine modal context
+                        orderNumber: f.orderNumber,
+                        customerName: f.customerName,
                       }}
                       onOpenRatesModal={handleOpenRatesModal}
                       onStatusChange={handleStatusChange}
                       onOpenImportModal={onOpenImportModal}
+                      onOpenCombineModal={onOpenCombineModal}
                     />
                   ) : (
                     <span style={{ color: '#9CA3AF' }}>—</span>

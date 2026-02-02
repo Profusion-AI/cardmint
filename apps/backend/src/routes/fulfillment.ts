@@ -33,6 +33,14 @@ import { decryptJson } from "../utils/encryption.js";
 import { formatTcgplayerOrderNumber } from "../utils/orderNumberFormat.js";
 import { OrderItemEnrichmentService, type OrderItem, type EnrichedOrderItem } from "../services/fulfillment/orderItemEnrichmentService.js";
 import { TCGDexAdapter } from "../services/pricing/tcgdexAdapter.js";
+import { detectQueryType, normalizeQuery, type QueryType } from "../utils/searchQueryParser.js";
+import {
+  searchByTrackingNumber,
+  searchByOrderNumber,
+  searchByCustomerName,
+  searchByOrderDate,
+  searchByCardName,
+} from "../services/fulfillmentSearchService.js";
 
 interface FulfillmentRow {
   id: number;
@@ -100,6 +108,11 @@ interface MarketplaceShipmentRow {
   label_viewed_at: number | null; // Timestamp when label was first viewed (Print → Reprint)
   refund_status: string | null; // 'submitted' | 'refunded' | 'rejected'
   easypost_shipment_id: string | null;
+  // Combined shipment fields
+  fulfilled_by_shipment_id: number | null;
+  combined_at: number | null;
+  combined_by: string | null;
+  combined_reason: string | null;
   // From marketplace_orders
   order_id: number;
   source: string;
@@ -113,6 +126,12 @@ interface MarketplaceShipmentRow {
   shipping_method: string | null;
   order_status: string;
   import_format: string | null; // 'shipping_export' | 'orderlist'
+  // Parent shipment info (when combined)
+  parent_order_number: string | null;
+  parent_external_order_id: string | null;
+  parent_source: string | null;
+  // Child count (for parent shipments)
+  child_count: number;
 }
 
 interface MarketplaceOrderDetailRow {
@@ -208,6 +227,16 @@ interface UnifiedFulfillment {
   } | null;
   refundStatus?: string | null;
   easypostShipmentId?: string | null;
+  // Combined shipment info
+  combinedWith?: {
+    parentShipmentId: number;
+    parentOrderNumber: string;
+    combinedAt: number;
+    combinedBy: string;
+    combinedReason: string;
+  } | null;
+  isCombinedParent?: boolean;     // True if this shipment has child shipments
+  labelActionsDisabled?: boolean; // True for children (inheriting from parent)
   sourceRef: {
     stripeSessionId?: string;
     marketplaceOrderId?: number;
@@ -470,6 +499,10 @@ export function registerFulfillmentRoutes(app: Express, ctx: AppContext): void {
             ms.label_viewed_at,
             ms.refund_status,
             ms.easypost_shipment_id,
+            ms.fulfilled_by_shipment_id,
+            ms.combined_at,
+            ms.combined_by,
+            ms.combined_reason,
             mo.id as order_id,
             mo.source,
             mo.external_order_id,
@@ -481,9 +514,15 @@ export function registerFulfillmentRoutes(app: Express, ctx: AppContext): void {
             mo.shipping_fee_cents,
             mo.shipping_method,
             mo.status as order_status,
-            mo.import_format
+            mo.import_format,
+            parent_mo.display_order_number as parent_order_number,
+            parent_mo.external_order_id as parent_external_order_id,
+            parent_mo.source as parent_source,
+            (SELECT COUNT(*) FROM marketplace_shipments child WHERE child.fulfilled_by_shipment_id = ms.id) as child_count
           FROM marketplace_shipments ms
           JOIN marketplace_orders mo ON ms.marketplace_order_id = mo.id
+          LEFT JOIN marketplace_shipments parent_ms ON ms.fulfilled_by_shipment_id = parent_ms.id
+          LEFT JOIN marketplace_orders parent_mo ON parent_ms.marketplace_order_id = parent_mo.id
         `;
         const mpParams: (string | number)[] = [];
         const conditions: string[] = [];
@@ -571,6 +610,111 @@ export function registerFulfillmentRoutes(app: Express, ctx: AppContext): void {
     } catch (err) {
       logger.error({ err, operatorId, source, status }, "Failed to list unified fulfillments");
       res.status(500).json({ error: "Failed to list unified fulfillments" });
+    }
+  });
+
+  /**
+   * GET /api/cm-admin/fulfillment/search
+   * Unified search across Stripe fulfillment and marketplace shipments.
+   *
+   * Query params:
+   * - q: Search query (required, min 2 chars)
+   * - type: Explicit query type override (optional)
+   *         Values: tracking, order_number, customer_name, date, card_name
+   * - limit: Max results (default: 20, max: 100)
+   *
+   * Query type is auto-detected if not specified:
+   * - Tracking number: 20-22 digit USPS, 1Z* UPS, 12-22 digit FedEx
+   * - Order number: TCGP-*, TCG-*, EBAY-*, Session:*, raw UUIDs
+   * - Date: YYYY-MM-DD, MM/DD/YYYY, MM/DD, "Jan 15"
+   * - Customer name: fallback for anything else
+   *
+   * Note: card_name type must be explicitly requested (not auto-detected)
+   *
+   * Returns: { ok, query, queryType, results, total, searchTime }
+   */
+  router.get("/search", (req: Request, res: Response) => {
+    const { operatorId, clientIp, userAgent } = (req as any).auditContext;
+    const query = (req.query.q as string) || "";
+    const requestedType = req.query.type as string | undefined;
+    const requestedLimit = parseInt(req.query.limit as string);
+    const limit = Math.min(!isNaN(requestedLimit) && requestedLimit > 0 ? requestedLimit : 20, 100);
+
+    const startTime = Date.now();
+
+    logger.info(
+      { operatorId, clientIp, userAgent, action: "search", query: query.slice(0, 50), requestedType, limit },
+      "fulfillment.search.start"
+    );
+
+    // Validate query length
+    if (!query || query.trim().length < 2) {
+      return res.status(400).json({
+        ok: false,
+        error: "BAD_REQUEST",
+        message: "Search query (q) must be at least 2 characters",
+      });
+    }
+
+    try {
+      // Use explicit type if provided and valid, otherwise auto-detect
+      const validTypes: QueryType[] = ["tracking", "order_number", "customer_name", "date", "card_name"];
+      const queryType: QueryType = requestedType && validTypes.includes(requestedType as QueryType)
+        ? (requestedType as QueryType)
+        : detectQueryType(query);
+      const normalizedQuery = normalizeQuery(query, queryType);
+
+      // Execute search based on type
+      let results;
+      switch (queryType) {
+        case "tracking":
+          results = searchByTrackingNumber(db, normalizedQuery, limit);
+          break;
+        case "order_number":
+          results = searchByOrderNumber(db, query.trim(), limit);
+          break;
+        case "customer_name":
+          results = searchByCustomerName(db, query.trim(), limit);
+          break;
+        case "date":
+          results = searchByOrderDate(db, query.trim(), limit);
+          break;
+        case "card_name":
+          results = searchByCardName(db, query.trim(), limit);
+          break;
+      }
+
+      const searchTime = Date.now() - startTime;
+
+      logger.info(
+        {
+          operatorId,
+          queryType,
+          resultCount: results.length,
+          searchTimeMs: searchTime,
+        },
+        "fulfillment.search.complete"
+      );
+
+      res.json({
+        ok: true,
+        query: query.trim(),
+        queryType,
+        results,
+        total: results.length,
+        searchTime,
+      });
+    } catch (err) {
+      const error = err as Error;
+      logger.error(
+        { err: error.message, operatorId, query: query.slice(0, 50) },
+        "fulfillment.search.failed"
+      );
+      res.status(500).json({
+        ok: false,
+        error: "SEARCH_FAILED",
+        message: "Failed to execute search",
+      });
     }
   });
 
@@ -2162,6 +2306,15 @@ function formatStripeToUnified(row: FulfillmentRow): UnifiedFulfillment {
  */
 function formatMarketplaceToUnified(row: MarketplaceShipmentRow): UnifiedFulfillment {
   const effectiveStatus = row.is_pwe === 1 ? "shipped" : row.shipment_status;
+
+  // Format parent order number for combined shipments
+  let parentOrderNumber: string | null = null;
+  if (row.fulfilled_by_shipment_id && row.parent_order_number) {
+    parentOrderNumber = row.parent_source === "tcgplayer" && row.parent_external_order_id
+      ? formatTcgplayerOrderNumber(row.parent_external_order_id)
+      : row.parent_order_number;
+  }
+
   return {
     id: `mp:${row.shipment_id}`,
     source: row.source as "tcgplayer" | "ebay",
@@ -2201,6 +2354,18 @@ function formatMarketplaceToUnified(row: MarketplaceShipmentRow): UnifiedFulfill
       : null,
     refundStatus: row.refund_status,
     easypostShipmentId: row.easypost_shipment_id,
+    // Combined shipment info
+    combinedWith: row.fulfilled_by_shipment_id && row.combined_at && row.combined_by
+      ? {
+          parentShipmentId: row.fulfilled_by_shipment_id,
+          parentOrderNumber: parentOrderNumber ?? `Shipment ${row.fulfilled_by_shipment_id}`,
+          combinedAt: row.combined_at,
+          combinedBy: row.combined_by,
+          combinedReason: row.combined_reason ?? "",
+        }
+      : null,
+    isCombinedParent: row.child_count > 0,
+    labelActionsDisabled: !!row.fulfilled_by_shipment_id, // Children inherit from parent
     sourceRef: {
       marketplaceOrderId: row.order_id,
       shipmentId: row.shipment_id,

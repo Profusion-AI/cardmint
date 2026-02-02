@@ -3,6 +3,10 @@ import UnifiedGrid from '../../../components/UnifiedGrid.js';
 import ImportModal from '../../../components/ImportModal.js';
 import UnmatchedTrackingPanel from '../../../components/UnmatchedTrackingPanel.js';
 import PrintQueuePanel from '../../../components/PrintQueuePanel.js';
+import CombineShipmentModal from '../../../components/CombineShipmentModal.js';
+
+// Temporarily hidden - queue functionality being redesigned
+const SHOW_PRINT_QUEUE = false;
 
 /**
  * Fulfillment Dashboard Page
@@ -64,6 +68,15 @@ export default function FulfillmentDashboard() {
   const [stats, setStats] = useState({ pendingLabels: 0, unmatchedTracking: 0, exceptions: 0, shippedToday: 0 });
   const [isRematching, setIsRematching] = useState(false);
   const [unmatchedRefreshTrigger, setUnmatchedRefreshTrigger] = useState(0);
+
+  // Search state
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchType, setSearchType] = useState('auto');
+  const [searchResults, setSearchResults] = useState(null);
+  const [isSearching, setIsSearching] = useState(false);
+
+  // Combine modal state
+  const [combineModalShipment, setCombineModalShipment] = useState(null);
 
   // Fetch stats (actionable counts)
   const fetchStats = useCallback(async () => {
@@ -241,6 +254,61 @@ export default function FulfillmentDashboard() {
     } finally {
       setIsRematching(false);
     }
+  };
+
+  // Search handlers
+  const handleSearch = async () => {
+    if (!searchQuery || searchQuery.trim().length < 2) return;
+
+    setIsSearching(true);
+    try {
+      const params = new URLSearchParams();
+      params.set('q', searchQuery.trim());
+      if (searchType !== 'auto') {
+        params.set('type', searchType);
+      }
+      params.set('limit', '50');
+
+      const response = await fetch(`/api/admin/api/fulfillment/search?${params}`, {
+        credentials: 'include',
+      });
+      const data = await response.json();
+
+      if (!response.ok || !data.ok) {
+        throw new Error(data.error || 'Search failed');
+      }
+
+      setSearchResults(data.results || []);
+    } catch (err) {
+      setToast({ show: true, message: `Search failed: ${err.message}`, fading: false });
+      setTimeout(() => setToast(t => ({ ...t, fading: true })), 4500);
+      setTimeout(() => setToast({ show: false, message: '', fading: false }), 5000);
+      setSearchResults(null);
+    } finally {
+      setIsSearching(false);
+    }
+  };
+
+  const clearSearch = () => {
+    setSearchQuery('');
+    setSearchResults(null);
+  };
+
+  // Combine modal handlers
+  const handleOpenCombineModal = (shipment) => {
+    setCombineModalShipment(shipment);
+  };
+
+  const handleCloseCombineModal = () => {
+    setCombineModalShipment(null);
+  };
+
+  const handleCombineSuccess = () => {
+    setCombineModalShipment(null);
+    fetchFulfillments();
+    setToast({ show: true, message: 'Shipment combined successfully', fading: false });
+    setTimeout(() => setToast(t => ({ ...t, fading: true })), 4500);
+    setTimeout(() => setToast({ show: false, message: '', fading: false }), 5000);
   };
 
   // Styles
@@ -437,8 +505,103 @@ export default function FulfillmentDashboard() {
         </div>
       </div>
 
-      {/* Phase 5: Print queue + agent heartbeat */}
-      <PrintQueuePanel />
+      {/* Phase 5: Print queue + agent heartbeat (temporarily hidden) */}
+      {SHOW_PRINT_QUEUE && <PrintQueuePanel />}
+
+      {/* Search Bar */}
+      <div style={{
+        display: 'flex',
+        gap: '8px',
+        marginBottom: '20px',
+        padding: '16px',
+        backgroundColor: '#fff',
+        borderRadius: '8px',
+        boxShadow: '0 1px 3px rgba(0,0,0,0.1)',
+        alignItems: 'center',
+      }}>
+        <input
+          type="text"
+          placeholder="Search orders, tracking, buyer, date, or card name..."
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
+          style={{
+            flex: 1,
+            padding: '10px 14px',
+            borderRadius: '6px',
+            border: '1px solid #e5e7eb',
+            fontSize: '14px',
+          }}
+        />
+        <select
+          value={searchType}
+          onChange={(e) => setSearchType(e.target.value)}
+          style={{
+            padding: '10px 12px',
+            borderRadius: '6px',
+            border: '1px solid #e5e7eb',
+            fontSize: '14px',
+            backgroundColor: '#fff',
+            minWidth: '140px',
+          }}
+        >
+          <option value="auto">Auto-detect</option>
+          <option value="tracking">Tracking #</option>
+          <option value="order_number">Order #</option>
+          <option value="customer_name">Buyer Name</option>
+          <option value="date">Order Date</option>
+          <option value="card_name">Card Name</option>
+        </select>
+        {searchType === 'card_name' && (
+          <span
+            title="Card name search only includes TCGPlayer/eBay orders (CardMint orders not indexed by card name)"
+            style={{ cursor: 'help', fontSize: '16px' }}
+          >
+            i
+          </span>
+        )}
+        <button
+          style={{
+            ...secondaryButtonStyle,
+            padding: '10px 20px',
+          }}
+          onClick={handleSearch}
+          disabled={isSearching || searchQuery.trim().length < 2}
+        >
+          {isSearching ? '...' : 'Search'}
+        </button>
+        {searchResults !== null && (
+          <button
+            style={{
+              ...secondaryButtonStyle,
+              padding: '10px 16px',
+              color: '#6B7280',
+            }}
+            onClick={clearSearch}
+          >
+            Clear
+          </button>
+        )}
+      </div>
+
+      {/* Search results indicator */}
+      {searchResults !== null && (
+        <div style={{
+          marginBottom: '12px',
+          padding: '8px 12px',
+          backgroundColor: '#EFF6FF',
+          borderRadius: '6px',
+          fontSize: '13px',
+          color: '#1E40AF',
+        }}>
+          Search results for "{searchQuery}" ({searchResults.length} found)
+          {searchResults.length === 0 && (
+            <span style={{ marginLeft: '8px', color: '#6B7280' }}>
+              - Try a different search term or type
+            </span>
+          )}
+        </div>
+      )}
 
       {/* Source Tabs */}
       <div style={tabsContainerStyle}>
@@ -501,21 +664,31 @@ export default function FulfillmentDashboard() {
 
       {/* Fulfillment Grid */}
       <UnifiedGrid
-        fulfillments={fulfillments}
-        loading={loading}
-        total={total}
-        limit={pagination.limit}
-        offset={pagination.offset}
+        fulfillments={searchResults !== null ? searchResults : fulfillments}
+        loading={loading && searchResults === null}
+        total={searchResults !== null ? searchResults.length : total}
+        limit={searchResults !== null ? searchResults.length : pagination.limit}
+        offset={searchResults !== null ? 0 : pagination.offset}
         onPageChange={handlePageChange}
         onRefresh={fetchFulfillments}
         onOrderClick={saveDashboardState}
         onOpenImportModal={handleImportClick}
+        onOpenCombineModal={handleOpenCombineModal}
       />
 
       {/* Import Modal (unified - auto-detects format) */}
       {showImportModal && (
         <ImportModal
           onClose={handleImportClose}
+        />
+      )}
+
+      {/* Combine Shipment Modal */}
+      {combineModalShipment && (
+        <CombineShipmentModal
+          shipment={combineModalShipment}
+          onClose={handleCloseCombineModal}
+          onCombined={handleCombineSuccess}
         />
       )}
 
