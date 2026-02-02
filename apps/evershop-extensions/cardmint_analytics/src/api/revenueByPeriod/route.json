@@ -1,0 +1,5 @@
+{
+  "methods": ["GET"],
+  "path": "/admin/api/dashboard/revenue-by-period",
+  "access": "private"
+}

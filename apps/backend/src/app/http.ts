@@ -40,6 +40,8 @@ import { registerPrintQueueRoutes } from "../routes/printQueue";
 import { registerAuthRoutes } from "../routes/auth";
 import { registerAccountRoutes } from "../routes/account";
 import { registerClaimRoutes } from "../routes/claim";
+import { registerImageKitAuthRoutes } from "../routes/imagekitAuth";
+import { registerDashboardRoutes } from "../routes/dashboard";
 
 /**
  * Create and configure the Express application.
@@ -128,6 +130,10 @@ export function createApp(ctx: AppContext): Express {
   registerAccountRoutes(app, ctx);
   // Claim order routes (P1.3) - email link claim flow
   registerClaimRoutes(app, ctx);
+  // ImageKit auth for James-HND photo uploads
+  registerImageKitAuthRoutes(app, ctx);
+  // Sales dashboard routes (Feb 2026) - admin analytics
+  registerDashboardRoutes(app, ctx);
 
   return app;
 }
