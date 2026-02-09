@@ -134,6 +134,6 @@ function toCandidate(row: InventoryRow): RetrievalCandidate {
     marketPrice: row.market_price,
     imageUrl: row.cdn_image_url,
     sourceLabel: "internal_truth",
-    freshness: new Date(row.updated_at).toISOString(),
+    freshness: new Date(row.updated_at < 1e10 ? row.updated_at * 1000 : row.updated_at).toISOString(),
   };
 }
