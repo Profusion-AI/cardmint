@@ -272,10 +272,15 @@ export default function FulfillmentDashboard() {
       const response = await fetch(`/api/admin/api/fulfillment/search?${params}`, {
         credentials: 'include',
       });
-      const data = await response.json();
 
+      const contentType = response.headers.get('content-type') || '';
+      if (!contentType.includes('application/json')) {
+        throw new Error(`Unexpected response format (HTTP ${response.status})`);
+      }
+
+      const data = await response.json();
       if (!response.ok || !data.ok) {
-        throw new Error(data.error || 'Search failed');
+        throw new Error(data.error || data.message || 'Search failed');
       }
 
       setSearchResults(data.results || []);
@@ -641,6 +646,7 @@ export default function FulfillmentDashboard() {
             <option value="in_transit">In Transit</option>
             <option value="delivered">Delivered</option>
             <option value="exception">Exception</option>
+            <option value="cancelled">Cancelled</option>
           </select>
         </label>
         <button

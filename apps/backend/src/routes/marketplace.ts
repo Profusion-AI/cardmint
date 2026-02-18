@@ -700,7 +700,7 @@ export function registerMarketplaceRoutes(app: Express, ctx: AppContext): void {
    * Update shipment status and optional label URL (for operator-uploaded labels).
    *
    * Body: {
-   *   status: 'pending'|'label_purchased'|'shipped'|'in_transit'|'delivered'|'exception',
+   *   status: 'pending'|'label_purchased'|'shipped'|'in_transit'|'delivered'|'exception'|'cancelled',
    *   notes?: string,
    *   labelUrl?: string  // Optional: operator-uploaded label URL
    * }
@@ -720,7 +720,7 @@ export function registerMarketplaceRoutes(app: Express, ctx: AppContext): void {
       return res.status(400).json({ error: "Invalid shipment ID" });
     }
 
-    const validStatuses = ["pending", "label_purchased", "shipped", "in_transit", "delivered", "exception"];
+    const validStatuses = ["pending", "label_purchased", "shipped", "in_transit", "delivered", "exception", "cancelled"];
     if (!validStatuses.includes(status)) {
       return res.status(400).json({
         error: "BAD_REQUEST",
@@ -733,6 +733,47 @@ export function registerMarketplaceRoutes(app: Express, ctx: AppContext): void {
       const shipment = marketplaceService.getShipmentById(shipmentId);
       if (!shipment) {
         return res.status(404).json({ error: "Shipment not found" });
+      }
+
+      // Cancel uses order-level state + shipment exception fallback.
+      // marketplace_shipments does not have a "cancelled" enum value.
+      if (status === "cancelled") {
+        const orderId = shipment.marketplace_order_id;
+        const orderShipments = marketplaceService.getShipmentsByOrderId(orderId);
+
+        if (orderShipments.some((s) => s.status === "delivered")) {
+          return res.status(400).json({
+            error: "INVALID_STATUS",
+            message: "Cannot cancel order with delivered shipment(s)",
+          });
+        }
+
+        const cancelNotes = typeof notes === "string" && notes.trim().length > 0
+          ? notes.trim()
+          : "Cancelled by operator";
+
+        marketplaceService.updateOrderStatus(orderId, "cancelled");
+        db.prepare(
+          `UPDATE marketplace_shipments
+           SET status = 'exception',
+               exception_type = 'cancelled',
+               exception_notes = ?,
+               updated_at = strftime('%s', 'now')
+           WHERE marketplace_order_id = ?
+             AND status != 'delivered'`
+        ).run(cancelNotes, orderId);
+
+        logger.info(
+          { operatorId, shipmentId, orderId, status, notes: cancelNotes ? "provided" : "none" },
+          "marketplace.order.cancelled"
+        );
+
+        return res.json({
+          ok: true,
+          shipmentId,
+          orderId,
+          status: "cancelled",
+        });
       }
 
       // Update status (automatically propagates to child shipments)

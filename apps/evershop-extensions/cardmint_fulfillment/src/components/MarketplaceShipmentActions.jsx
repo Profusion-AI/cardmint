@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 
 /**
  * MarketplaceShipmentActions Component
@@ -15,6 +15,7 @@ import React, { useState } from 'react';
  * - Refund Label: status=label_purchased, easypostShipmentId, !refundStatus
  * - Mark Shipped: status=label_purchased, !refundSubmitted
  * - Mark Delivered: status=shipped OR status=in_transit
+ * - Cancel Order: status=pending OR label_purchased OR exception (non-combined)
  * - Uncombine: combinedWith != null, status != delivered
  */
 export default function MarketplaceShipmentActions({
@@ -27,6 +28,8 @@ export default function MarketplaceShipmentActions({
   const [loading, setLoading] = useState(false);
   const [selectedAction, setSelectedAction] = useState(null);
   const [dropdownOpen, setDropdownOpen] = useState(false);
+  const [menuPosition, setMenuPosition] = useState(null);
+  const dropdownButtonRef = useRef(null);
   const pweThresholdCents = 749;
 
   const status = shipment.status;
@@ -65,13 +68,22 @@ export default function MarketplaceShipmentActions({
         }
       );
 
-      const data = await response.json();
+      let data = null;
+      try {
+        data = await response.json();
+      } catch {
+        data = null;
+      }
 
-      if (data.ok && onStatusChange) {
+      if (!response.ok || !data?.ok) {
+        throw new Error(data?.message || data?.error || `HTTP ${response.status}`);
+      }
+
+      if (onStatusChange) {
         onStatusChange(shipment.id, newStatus);
       }
     } catch (err) {
-      console.error('Failed to update status:', err);
+      window.alert(err?.message || 'Failed to update status');
     } finally {
       setLoading(false);
       setSelectedAction(null);
@@ -199,6 +211,24 @@ export default function MarketplaceShipmentActions({
     }
   }
 
+  // Order cancellation (terminal state for operator workflow)
+  if (
+    (status === 'pending' || status === 'label_purchased' || status === 'exception') &&
+    !combinedWith &&
+    !isCombinedParent
+  ) {
+    actions.push({
+      key: 'cancel_order',
+      label: 'Cancel Order',
+      variant: 'danger',
+      confirm: true,
+      confirmMessage:
+        `Cancel order ${shipment.orderNumber || `#${shipment.id}`}?\n\n` +
+        `This marks the order as cancelled and removes it from active fulfillment.`,
+      handler: () => updateStatus('cancelled', 'Cancelled by operator from fulfillment dashboard'),
+    });
+  }
+
   // PWE toggle (pending or label_purchased)
   if ((status === 'pending' || status === 'label_purchased') && !labelActionsDisabled) {
     if (shipment.isPwe) {
@@ -278,7 +308,7 @@ export default function MarketplaceShipmentActions({
   }
 
   // Combined child: Uncombine action
-  if (combinedWith && status !== 'delivered') {
+  if (combinedWith && status !== 'delivered' && status !== 'cancelled') {
     actions.push({
       key: 'uncombine',
       label: 'Uncombine',
@@ -321,6 +351,7 @@ export default function MarketplaceShipmentActions({
     if (!action) return;
 
     setDropdownOpen(false);
+    setMenuPosition(null);
 
     // Stage the action for confirmation (all actions require confirm button)
     setSelectedAction(actionKey);
@@ -354,17 +385,17 @@ export default function MarketplaceShipmentActions({
   };
 
   const dropdownMenuStyle = {
-    position: 'absolute',
-    top: '100%',
-    left: 0,
-    marginTop: '4px',
+    position: 'fixed',
+    top: menuPosition?.top ?? 0,
+    left: menuPosition?.left ?? 0,
     backgroundColor: '#fff',
     border: '1px solid #e5e7eb',
     borderRadius: '6px',
     boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
-    zIndex: 100,
-    minWidth: '160px',
-    overflow: 'hidden',
+    zIndex: 1200,
+    minWidth: `${menuPosition?.minWidth ?? 160}px`,
+    maxHeight: 'min(320px, calc(100vh - 16px))',
+    overflowY: 'auto',
   };
 
   const dropdownItemStyle = (variant) => {
@@ -372,6 +403,7 @@ export default function MarketplaceShipmentActions({
       primary: { color: '#2563EB' },
       success: { color: '#059669' },
       warning: { color: '#D97706' },
+      danger: { color: '#DC2626' },
       default: { color: '#374151' },
     };
     return {
@@ -469,6 +501,35 @@ export default function MarketplaceShipmentActions({
     };
   };
 
+  useEffect(() => {
+    if (!dropdownOpen) {
+      setMenuPosition(null);
+      return;
+    }
+
+    const updateMenuPosition = () => {
+      if (!dropdownButtonRef.current) return;
+      const rect = dropdownButtonRef.current.getBoundingClientRect();
+      const estimatedHeight = Math.min(320, actions.length * 36 + 12);
+      const minWidth = Math.max(rect.width, 160);
+      const spaceBelow = window.innerHeight - rect.bottom;
+      const openUp = spaceBelow < estimatedHeight && rect.top > spaceBelow;
+      const top = openUp
+        ? Math.max(8, rect.top - estimatedHeight - 4)
+        : Math.min(window.innerHeight - estimatedHeight - 8, rect.bottom + 4);
+      const left = Math.max(8, Math.min(rect.left, window.innerWidth - minWidth - 8));
+      setMenuPosition({ top, left, minWidth });
+    };
+
+    updateMenuPosition();
+    window.addEventListener('resize', updateMenuPosition);
+    window.addEventListener('scroll', updateMenuPosition, true);
+    return () => {
+      window.removeEventListener('resize', updateMenuPosition);
+      window.removeEventListener('scroll', updateMenuPosition, true);
+    };
+  }, [dropdownOpen, actions.length]);
+
   return (
     <div style={containerStyle}>
       {/* Status badges */}
@@ -531,8 +592,15 @@ export default function MarketplaceShipmentActions({
       {actions.length > 0 && (
         <div style={dropdownContainerStyle}>
           <button
+            ref={dropdownButtonRef}
             style={dropdownButtonStyle}
-            onClick={() => setDropdownOpen(!dropdownOpen)}
+            onClick={() => {
+              setDropdownOpen((prev) => {
+                const next = !prev;
+                if (!next) setMenuPosition(null);
+                return next;
+              });
+            }}
             disabled={loading}
           >
             {loading ? '...' : 'Actions'}
@@ -541,7 +609,7 @@ export default function MarketplaceShipmentActions({
             </svg>
           </button>
 
-          {dropdownOpen && (
+          {dropdownOpen && menuPosition && (
             <>
               {/* Backdrop to close dropdown on outside click */}
               <div
@@ -551,9 +619,12 @@ export default function MarketplaceShipmentActions({
                   left: 0,
                   right: 0,
                   bottom: 0,
-                  zIndex: 99,
+                  zIndex: 1190,
                 }}
-                onClick={() => setDropdownOpen(false)}
+                onClick={() => {
+                  setDropdownOpen(false);
+                  setMenuPosition(null);
+                }}
               />
               <div style={dropdownMenuStyle}>
                 {actions.map((action) => (

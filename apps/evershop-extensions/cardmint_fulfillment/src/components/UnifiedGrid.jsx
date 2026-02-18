@@ -335,6 +335,7 @@ export default function UnifiedGrid({
       in_transit: { bg: '#E8F5E9', color: '#2E7D32' },
       delivered: { bg: '#C8E6C9', color: '#1B5E20' },
       exception: { bg: '#FFEBEE', color: '#C62828' },
+      cancelled: { bg: '#F3F4F6', color: '#4B5563' },
     };
     const { bg, color } = colors[status] || { bg: '#f3f4f6', color: '#374151' };
     return {

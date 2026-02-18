@@ -422,12 +422,13 @@ export function registerFulfillmentRoutes(app: Express, ctx: AppContext): void {
         "in_transit",
         "delivered",
         "exception",
+        "cancelled",
       ]);
       if (status && !validUnifiedStatuses.has(status)) {
         return res.status(400).json({
           error: "BAD_REQUEST",
           message:
-            "status must be one of: pending, processing, reviewed, label_purchased, shipped, in_transit, delivered, exception",
+            "status must be one of: pending, processing, reviewed, label_purchased, shipped, in_transit, delivered, exception, cancelled",
         });
       }
 
@@ -535,17 +536,21 @@ export function registerFulfillmentRoutes(app: Express, ctx: AppContext): void {
 
         // Filter by status (match against shipment status)
         if (status) {
-          // Map common statuses to marketplace shipment statuses
-          const mpStatusMap: Record<string, string[]> = {
-            pending: ["pending"],
-            label_purchased: ["label_purchased"],
-            shipped: ["shipped", "in_transit"],
-            delivered: ["delivered"],
-            exception: ["exception"],
-          };
-          const mappedStatuses = mpStatusMap[status] || [status];
-          conditions.push(`ms.status IN (${mappedStatuses.map(() => "?").join(", ")})`);
-          mpParams.push(...mappedStatuses);
+          if (status === "cancelled") {
+            conditions.push("mo.status = 'cancelled'");
+          } else {
+            // Map common statuses to marketplace shipment statuses
+            const mpStatusMap: Record<string, string[]> = {
+              pending: ["pending"],
+              label_purchased: ["label_purchased"],
+              shipped: ["shipped", "in_transit"],
+              delivered: ["delivered"],
+              exception: ["exception"],
+            };
+            const mappedStatuses = mpStatusMap[status] || [status];
+            conditions.push(`ms.status IN (${mappedStatuses.map(() => "?").join(", ")})`);
+            mpParams.push(...mappedStatuses);
+          }
         }
 
         if (conditions.length > 0) {
@@ -566,16 +571,20 @@ export function registerFulfillmentRoutes(app: Express, ctx: AppContext): void {
           mpCountParams.push(source);
         }
         if (status) {
-          const mpStatusMap: Record<string, string[]> = {
-            pending: ["pending"],
-            label_purchased: ["label_purchased"],
-            shipped: ["shipped", "in_transit"],
-            delivered: ["delivered"],
-            exception: ["exception"],
-          };
-          const mappedStatuses = mpStatusMap[status] || [status];
-          countConditions.push(`ms.status IN (${mappedStatuses.map(() => "?").join(", ")})`);
-          mpCountParams.push(...mappedStatuses);
+          if (status === "cancelled") {
+            countConditions.push("mo.status = 'cancelled'");
+          } else {
+            const mpStatusMap: Record<string, string[]> = {
+              pending: ["pending"],
+              label_purchased: ["label_purchased"],
+              shipped: ["shipped", "in_transit"],
+              delivered: ["delivered"],
+              exception: ["exception"],
+            };
+            const mappedStatuses = mpStatusMap[status] || [status];
+            countConditions.push(`ms.status IN (${mappedStatuses.map(() => "?").join(", ")})`);
+            mpCountParams.push(...mappedStatuses);
+          }
         }
 
         if (countConditions.length > 0) {
@@ -2305,7 +2314,9 @@ function formatStripeToUnified(row: FulfillmentRow): UnifiedFulfillment {
  * Format marketplace shipment row to unified response shape
  */
 function formatMarketplaceToUnified(row: MarketplaceShipmentRow): UnifiedFulfillment {
-  const effectiveStatus = row.is_pwe === 1 ? "shipped" : row.shipment_status;
+  const effectiveStatus = row.order_status === "cancelled"
+    ? "cancelled"
+    : (row.is_pwe === 1 ? "shipped" : row.shipment_status);
 
   // Format parent order number for combined shipments
   let parentOrderNumber: string | null = null;
