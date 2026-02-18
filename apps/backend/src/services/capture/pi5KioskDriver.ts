@@ -49,6 +49,53 @@ interface KioskHealthResponse {
   preview_client_count?: number;
 }
 
+function redactHeaders(headers: unknown): Record<string, unknown> | undefined {
+  if (!headers || typeof headers !== "object") {
+    return undefined;
+  }
+
+  const source = headers as Record<string, unknown>;
+  const redacted: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(source)) {
+    if (key.toLowerCase() === "authorization") {
+      redacted[key] = "[REDACTED]";
+      continue;
+    }
+    redacted[key] = value;
+  }
+  return redacted;
+}
+
+function sanitizeErrorForLog(error: unknown): Record<string, unknown> {
+  if (axios.isAxiosError(error)) {
+    return {
+      type: "AxiosError",
+      message: error.message,
+      code: error.code,
+      status: error.response?.status,
+      method: error.config?.method,
+      url: error.config?.url,
+      baseURL: error.config?.baseURL,
+      timeout: error.config?.timeout,
+      headers: redactHeaders(error.config?.headers as unknown),
+      responseData: error.response?.data,
+    };
+  }
+
+  if (error instanceof Error) {
+    return {
+      type: error.name,
+      message: error.message,
+      stack: error.stack,
+    };
+  }
+
+  return {
+    type: typeof error,
+    message: String(error),
+  };
+}
+
 export class Pi5KioskDriver implements CaptureDriver {
   private readonly client: AxiosInstance;
   private readonly baseUrl: string;
@@ -132,7 +179,7 @@ export class Pi5KioskDriver implements CaptureDriver {
         },
       };
     } catch (error) {
-      this.logger.error({ err: error }, "Kiosk health check failed");
+      this.logger.error({ err: sanitizeErrorForLog(error) }, "Kiosk health check failed");
       return {
         status: "unavailable",
         driver: "pi-hq",
@@ -202,7 +249,7 @@ export class Pi5KioskDriver implements CaptureDriver {
           }
 
           // Non-retryable error (4xx, timeout, etc.)
-          this.logger.error({ err: error, attempt }, "Kiosk capture failed (non-retryable)");
+          this.logger.error({ err: sanitizeErrorForLog(error), attempt }, "Kiosk capture failed (non-retryable)");
           return {
             output: error.message,
             exitCode: error.response?.status ?? -1,
@@ -211,7 +258,7 @@ export class Pi5KioskDriver implements CaptureDriver {
         }
 
         // Unknown error
-        this.logger.error({ err: error }, "Kiosk capture encountered unexpected error");
+        this.logger.error({ err: sanitizeErrorForLog(error) }, "Kiosk capture encountered unexpected error");
         return {
           output: error instanceof Error ? error.message : String(error),
           exitCode: -1,
@@ -255,10 +302,13 @@ export class Pi5KioskDriver implements CaptureDriver {
 
           this.logger.debug({ source: "db", controls }, "Loaded capture settings from database");
           return controls;
-        }
-      } catch (err) {
-        this.logger.warn({ err }, "Failed to load capture settings from DB, falling back to env vars");
       }
+    } catch (err) {
+      this.logger.warn(
+        { err: sanitizeErrorForLog(err) },
+        "Failed to load capture settings from DB, falling back to env vars"
+      );
+    }
     }
 
     // Fallback to env vars
@@ -340,7 +390,7 @@ export class Pi5KioskDriver implements CaptureDriver {
       const error = err as Error | AxiosError;
 
       if (axios.isAxiosError(error)) {
-        this.logger.error({ err: error }, "Calibration capture failed");
+        this.logger.error({ err: sanitizeErrorForLog(error) }, "Calibration capture failed");
         return {
           output: error.message,
           exitCode: error.response?.status ?? -1,
@@ -348,7 +398,7 @@ export class Pi5KioskDriver implements CaptureDriver {
         };
       }
 
-      this.logger.error({ err: error }, "Calibration capture encountered unexpected error");
+      this.logger.error({ err: sanitizeErrorForLog(error) }, "Calibration capture encountered unexpected error");
       return {
         output: error instanceof Error ? error.message : String(error),
         exitCode: -1,

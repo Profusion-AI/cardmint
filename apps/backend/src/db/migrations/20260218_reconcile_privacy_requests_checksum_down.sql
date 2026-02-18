@@ -1,0 +1,10 @@
+-- DOWN MIGRATION: 20260218_reconcile_privacy_requests_checksum
+-- Status: METADATA-ONLY (no schema changes)
+--
+-- This migration only corrects a checksum in schema_migrations.
+-- Reverting would restore the older checksum and re-introduce warnings.
+--
+-- If a rollback is absolutely required, run:
+--   UPDATE schema_migrations
+--   SET checksum = 'bf2210416d7981f6a17a1650eded0c13d0ceb2e28d0fea276cd993163576ca73'
+--   WHERE id = '20251217_privacy_requests';
