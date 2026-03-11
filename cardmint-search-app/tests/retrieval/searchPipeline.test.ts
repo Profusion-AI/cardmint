@@ -215,7 +215,7 @@ describe("searchPipeline", () => {
         minConfidence: 0.85,
       });
 
-      expect(result.disambiguationReason).toBe("No search adapters available");
+      expect(result.disambiguationReason).toBe("Search service not configured");
     });
   });
 

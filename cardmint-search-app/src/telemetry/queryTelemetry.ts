@@ -18,7 +18,7 @@ export interface QueryTelemetryEntry {
   status: "resolved" | "needs_disambiguation";
   confidenceBucket: "high" | "medium" | "low" | "none";
   sourceLabel: "internal_truth" | "reference_aggregate";
-  retrievalPath: "deterministic" | "fts" | "like" | "fallback" | "degraded";
+  retrievalPath: "deterministic" | "fts" | "like" | "fallback" | "degraded" | "no_results";
   candidateCount: number;
 }
 

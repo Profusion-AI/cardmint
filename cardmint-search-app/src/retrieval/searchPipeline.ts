@@ -47,6 +47,20 @@ export function runPipeline(
       const scored = scoreCandidates(inventoryCandidates, parsed);
       return buildResult(query, parsed, scored, options.minConfidence, "internal_truth", inventoryResult.retrievalPath);
     }
+
+    // Inventory ran but returned nothing; no reference to fall back to
+    if (!options.referenceAdapter) {
+      return {
+        query,
+        status: "needs_disambiguation",
+        chosen: null,
+        candidates: [],
+        sourceLabel: "internal_truth",
+        sourceExplanation: SOURCE_EXPLANATIONS.internal_truth,
+        disambiguationReason: "No matching cards found in inventory",
+        retrievalPath: "no_results",
+      };
+    }
   }
 
   // Conditional fallback to reference (only when inventory returns 0)
@@ -68,7 +82,7 @@ export function runPipeline(
     candidates: [],
     sourceLabel: "reference_aggregate",
     sourceExplanation: SOURCE_EXPLANATIONS.reference_aggregate,
-    disambiguationReason: "No search adapters available",
+    disambiguationReason: "Search service not configured",
     retrievalPath: "degraded",
   };
 }
@@ -84,7 +98,18 @@ function buildResult(
   // Dedup before result building to prevent duplicate product rows from inflating lists
   const deduped = dedupCandidates(scored);
   const top = deduped[0] ?? null;
-  const resolved = Boolean(top && top.confidence >= minConfidence);
+
+  // Margin guard: require a gap of >= 0.15 from the top candidate to the highest-confidence
+  // candidate with a *different* card identity (name+set+collector#).
+  // Condition variants of the same card (NM vs LP) share the same identity — they don't
+  // count as ambiguous competitors.
+  const MARGIN = 0.15;
+  const topIdentity = top ? cardIdentityKey(top) : null;
+  const runnerUpDifferentIdentity = topIdentity
+    ? (deduped.slice(1).find((c) => cardIdentityKey(c) !== topIdentity) ?? null)
+    : null;
+  const margin = runnerUpDifferentIdentity ? top!.confidence - runnerUpDifferentIdentity.confidence : 1;
+  const resolved = Boolean(top && top.confidence >= minConfidence && margin >= MARGIN);
 
   return {
     query,
@@ -96,6 +121,16 @@ function buildResult(
     disambiguationReason: resolved ? null : deriveDisambiguationReason(parsed, deduped, minConfidence),
     retrievalPath,
   };
+}
+
+/**
+ * Card identity key without condition — used for margin comparison.
+ * Two rows are the "same card" if they share name + set + collector#,
+ * regardless of condition bucket.
+ */
+function cardIdentityKey(c: ScoredCandidate): string {
+  const normNo = normalizeCollectorNo(c.collectorNo) ?? "";
+  return `${c.cardName.toLowerCase()}|${c.setName.toLowerCase()}|${normNo}`;
 }
 
 /**

@@ -1,4 +1,4 @@
-export type RetrievalPath = "deterministic" | "fts" | "like" | "fallback" | "degraded";
+export type RetrievalPath = "deterministic" | "fts" | "like" | "fallback" | "degraded" | "no_results";
 
 export interface AdapterSearchResult {
   candidates: RetrievalCandidate[];

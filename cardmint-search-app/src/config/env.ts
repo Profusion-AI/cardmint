@@ -26,8 +26,8 @@ const EnvSchema = z.object({
     .string()
     .optional()
     .transform((value) => {
-      const parsed = value ? Number(value) : 0.85;
-      return Number.isFinite(parsed) ? parsed : 0.85;
+      const parsed = value ? Number(value) : 0.70;
+      return Number.isFinite(parsed) ? parsed : 0.70;
     }),
   SEARCH_APP_PORT: z
     .string()
