@@ -1,5 +1,6 @@
 import type Database from "better-sqlite3";
 import type { RetrievalCandidate, ParsedQuery, AdapterSearchResult } from "./types.js";
+import { normalizeSetName } from "./confidenceScorer.js";
 
 /**
  * Sanitize a query string for FTS5 MATCH.
@@ -65,18 +66,23 @@ export class InventoryAdapter {
   }
 
   private deterministicSearch(setName: string, collectorNo: string): RetrievalCandidate[] {
+    // Normalize the query set name so "Base Set" also matches "Base Set (Shadowless)"
+    const normSet = normalizeSetName(setName);
     const rows = this.db.prepare(`
       SELECT DISTINCT p.product_uid, p.card_name, p.set_name, p.collector_no,
         p.condition_bucket, p.market_price, p.cdn_image_url, p.total_quantity,
         p.evershop_sync_state, c.rarity, p.updated_at
       FROM products p
       LEFT JOIN cm_cards c ON p.cm_card_id = c.cm_card_id
-      WHERE LOWER(p.set_name) = LOWER(?)
+      WHERE (
+        LOWER(p.set_name) = LOWER(?)
+        OR LOWER(p.set_name) LIKE LOWER(?) || ' (%)'
+      )
         AND normalize_cno(p.collector_no) = ?
         AND p.total_quantity > 0
       ORDER BY p.total_quantity DESC
       LIMIT 25
-    `).all(setName, collectorNo) as InventoryRow[];
+    `).all(normSet, normSet, collectorNo) as InventoryRow[];
 
     return rows.map(toCandidate);
   }

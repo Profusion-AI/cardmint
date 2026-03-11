@@ -1,6 +1,11 @@
 import type { ParsedQuery, RetrievalCandidate, ScoredCandidate } from "./types.js";
 import { normalizeCollectorNo } from "../normalize/collectorNo.js";
 
+/** Strip trailing parenthetical: "Base Set (Shadowless)" → "base set" */
+export function normalizeSetName(s: string): string {
+  return s.replace(/\s*\([^)]*\)\s*$/, "").trim().toLowerCase();
+}
+
 /**
  * Score a retrieval candidate against a parsed query.
  *
@@ -29,12 +34,11 @@ export function scoreCandidate(
     }
   }
 
-  // Set name scoring
+  // Set name scoring — normalize away parentheticals so "Base Set" matches "Base Set (Shadowless)"
   if (parsed.setName) {
-    const querySet = parsed.setName.toLowerCase();
-    const candidateSet = candidate.setName.toLowerCase();
-
-    if (candidateSet === querySet) {
+    const normQuery = normalizeSetName(parsed.setName);
+    const normCandidate = normalizeSetName(candidate.setName);
+    if (normCandidate === normQuery) {
       confidence += 0.25;
     }
   }
