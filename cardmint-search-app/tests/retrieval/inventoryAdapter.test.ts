@@ -180,6 +180,59 @@ describe("InventoryAdapter", () => {
     });
   });
 
+  describe("set-constrained FTS and LIKE", () => {
+    it("jungle flareon: does not return Dark Flareon (Team Rocket) when set is Jungle", () => {
+      const { candidates } = adapter.search({
+        cardName: "Flareon",
+        setName: "Jungle",
+        collectorNo: null,
+        variantHint: null,
+        raw: "jungle flareon",
+      });
+      expect(candidates.length).toBeGreaterThan(0);
+      expect(candidates.every((c) => c.setName === "Jungle")).toBe(true);
+      expect(candidates.some((c) => c.setName === "Team Rocket")).toBe(false);
+    });
+
+    it("set-constrained miss: returns empty when no inventory row matches the specified set", () => {
+      // Charizard exists in Base Set and Evolutions, but not in Team Rocket
+      const { candidates } = adapter.search({
+        cardName: "Charizard",
+        setName: "Team Rocket",
+        collectorNo: null,
+        variantHint: null,
+        raw: "charizard team rocket",
+      });
+      expect(candidates.length).toBe(0);
+    });
+
+    it("base set query also returns Base Set (Shadowless) via parenthetical normalization", () => {
+      // Sandshrew exists only in Base Set (Shadowless); querying setName='Base Set' should still find it
+      const { candidates } = adapter.search({
+        cardName: "Sandshrew",
+        setName: "Base Set",
+        collectorNo: null,
+        variantHint: null,
+        raw: "sandshrew base set",
+      });
+      expect(candidates.length).toBeGreaterThan(0);
+      expect(candidates.some((c) => c.setName === "Base Set (Shadowless)")).toBe(true);
+    });
+
+    it("unconstrained name-only search returns matching cards across all sets", () => {
+      // Charizard is in Base Set and Evolutions; no setName should return both
+      const { candidates } = adapter.search({
+        cardName: "Charizard",
+        setName: null,
+        collectorNo: null,
+        variantHint: null,
+        raw: "charizard",
+      });
+      const sets = new Set(candidates.map((c) => c.setName));
+      expect(sets.size).toBeGreaterThanOrEqual(2);
+    });
+  });
+
   describe("sourceLabel contract", () => {
     it("always returns internal_truth for all candidates", () => {
       const { candidates: results } = adapter.search({

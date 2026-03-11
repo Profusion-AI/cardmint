@@ -85,6 +85,7 @@ export function seedInventoryDb(): Database.Database {
     VALUES (?, ?, ?, ?, ?, ?)
   `);
   insertSet.run("set-base", "Base Set", 1999, 102, now, now);
+  insertSet.run("set-base-shadowless", "Base Set (Shadowless)", 1999, 102, now, now);
   insertSet.run("set-jungle", "Jungle", 1999, 64, now, now);
   insertSet.run("set-evolutions", "Evolutions", 2016, 108, now, now);
   insertSet.run("set-teamrocket", "Team Rocket", 2000, 82, now, now);
@@ -98,9 +99,11 @@ export function seedInventoryDb(): Database.Database {
   insertCard.run("card-charizard-base", "set-base", "4/102", "Charizard", "Rare Holo", now, now);
   insertCard.run("card-pikachu-base", "set-base", "58/102", "Pikachu", "Common", now, now);
   insertCard.run("card-blastoise-base", "set-base", "2/102", "Blastoise", "Rare Holo", now, now);
+  insertCard.run("card-sandshrew-shadowless", "set-base-shadowless", "62/102", "Sandshrew", "Common", now, now);
   insertCard.run("card-charizard-evo", "set-evolutions", "011/108", "Charizard", "Rare Holo", now, now);
   insertCard.run("card-flareon-jungle", "set-jungle", "003/064", "Flareon", "Rare Holo", now, now);
   insertCard.run("card-dark-gyarados", "set-teamrocket", "008/082", "Dark Gyarados", "Rare Holo", now, now);
+  insertCard.run("card-dark-flareon-tr", "set-teamrocket", "019/082", "Dark Flareon", "Uncommon", now, now);
   insertCard.run("card-charizard-ex-sv", "set-sv", "TG05/TG30", "Charizard ex", "Ultra Rare", now, now);
 
   // Populate FTS
@@ -140,6 +143,14 @@ export function seedInventoryDb(): Database.Database {
 
   insertProduct.run("prod-dark-gyarados-nm", "card-dark-gyarados", "NM", "SKU-DGYAR-NM", "LSK-DGYAR",
     "Dark Gyarados", "Team Rocket", "008/082", "Rare Holo", 22.00, 1, "https://cdn.example.com/dark-gyarados.jpg",
+    "synced", now, now);
+
+  insertProduct.run("prod-dark-flareon-nm", "card-dark-flareon-tr", "NM", "SKU-DFLAR-NM", "LSK-DFLAR",
+    "Dark Flareon", "Team Rocket", "019/082", "Uncommon", 8.00, 1, "https://cdn.example.com/dark-flareon.jpg",
+    "synced", now, now);
+
+  insertProduct.run("prod-sandshrew-shadowless-nm", "card-sandshrew-shadowless", "NM", "SKU-SAND-SL-NM", "LSK-SAND-SL",
+    "Sandshrew", "Base Set (Shadowless)", "62/102", "Common", 5.00, 1, null,
     "synced", now, now);
 
   insertProduct.run("prod-charizard-ex-sv", "card-charizard-ex-sv", "NM", "SKU-CHAR-EX-SV", "LSK-CHAR-EX-SV",

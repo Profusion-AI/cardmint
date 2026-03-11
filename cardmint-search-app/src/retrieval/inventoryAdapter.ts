@@ -54,12 +54,14 @@ export class InventoryAdapter {
     }
 
     // Path 2: FTS5 (card name available)
+    // When setName is parsed, constrain retrieval to that set only.
+    // If constrained retrieval returns zero hits, return zero — do not relax to unconstrained.
     if (parsed.cardName) {
-      const ftsResults = this.fts5Search(parsed.cardName);
+      const ftsResults = this.fts5Search(parsed.cardName, parsed.setName);
       if (ftsResults.length > 0) return { candidates: ftsResults, retrievalPath: "fts" };
 
-      // Path 3: LIKE fallback (FTS5 fails or returns empty)
-      return { candidates: this.likeSearch(parsed.cardName), retrievalPath: "like" };
+      // Path 3: LIKE fallback (FTS5 fails or returns empty) — set constraint preserved
+      return { candidates: this.likeSearch(parsed.cardName, parsed.setName), retrievalPath: "like" };
     }
 
     return { candidates: [], retrievalPath: "like" };
@@ -87,11 +89,19 @@ export class InventoryAdapter {
     return rows.map(toCandidate);
   }
 
-  private fts5Search(cardName: string): RetrievalCandidate[] {
+  private fts5Search(cardName: string, setName?: string | null): RetrievalCandidate[] {
     const ftsQuery = sanitizeFts5Query(cardName);
     if (!ftsQuery) return [];
 
     try {
+      const params: (string | number)[] = [ftsQuery];
+      let setClause = "";
+      if (setName) {
+        const normSet = normalizeSetName(setName);
+        setClause = ` AND (LOWER(p.set_name) = LOWER(?) OR LOWER(p.set_name) LIKE LOWER(?) || ' (%)')`;
+        params.push(normSet, normSet);
+      }
+
       const rows = this.db.prepare(`
         SELECT DISTINCT p.product_uid, p.card_name, p.set_name, p.collector_no,
           p.condition_bucket, p.market_price, p.cdn_image_url, p.total_quantity,
@@ -100,10 +110,10 @@ export class InventoryAdapter {
         JOIN cm_cards c ON c.rowid = f.rowid
         JOIN products p ON p.cm_card_id = c.cm_card_id
         WHERE cm_cards_fts MATCH ?
-          AND p.total_quantity > 0
+          AND p.total_quantity > 0${setClause}
         ORDER BY rank, p.total_quantity DESC
         LIMIT 25
-      `).all(ftsQuery) as InventoryRow[];
+      `).all(...params) as InventoryRow[];
 
       return rows.map(toCandidate);
     } catch {
@@ -112,7 +122,15 @@ export class InventoryAdapter {
     }
   }
 
-  private likeSearch(cardName: string): RetrievalCandidate[] {
+  private likeSearch(cardName: string, setName?: string | null): RetrievalCandidate[] {
+    const params: (string | number)[] = [cardName];
+    let setClause = "";
+    if (setName) {
+      const normSet = normalizeSetName(setName);
+      setClause = ` AND (LOWER(p.set_name) = LOWER(?) OR LOWER(p.set_name) LIKE LOWER(?) || ' (%)')`;
+      params.push(normSet, normSet);
+    }
+
     const rows = this.db.prepare(`
       SELECT DISTINCT p.product_uid, p.card_name, p.set_name, p.collector_no,
         p.condition_bucket, p.market_price, p.cdn_image_url, p.total_quantity,
@@ -120,10 +138,10 @@ export class InventoryAdapter {
       FROM products p
       LEFT JOIN cm_cards c ON p.cm_card_id = c.cm_card_id
       WHERE LOWER(p.card_name) LIKE '%' || LOWER(?) || '%'
-        AND p.total_quantity > 0
+        AND p.total_quantity > 0${setClause}
       ORDER BY p.total_quantity DESC
       LIMIT 25
-    `).all(cardName) as InventoryRow[];
+    `).all(...params) as InventoryRow[];
 
     return rows.map(toCandidate);
   }
