@@ -1,0 +1,5 @@
+{
+  "methods": ["GET"],
+  "path": "/admin/api/search/card-intel/export",
+  "access": "private"
+}

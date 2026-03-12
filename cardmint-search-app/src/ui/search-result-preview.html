@@ -1,0 +1,461 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CardMint Search — Source Label Preview</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: #f5f5f7;
+    color: #1d1d1f;
+    padding: 2rem;
+    line-height: 1.5;
+  }
+
+  h1 { font-size: 1.5rem; margin-bottom: 0.25rem; }
+  .subtitle { color: #6e6e73; font-size: 0.875rem; margin-bottom: 2rem; }
+
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 1.5rem; max-width: 900px; }
+
+  .card {
+    background: #fff;
+    border-radius: 12px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+    padding: 1.25rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+
+  .card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+  }
+
+  .card-name { font-weight: 600; font-size: 1.125rem; }
+  .card-set { color: #6e6e73; font-size: 0.8125rem; }
+
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
+    padding: 0.25rem 0.625rem;
+    border-radius: 6px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    white-space: nowrap;
+  }
+
+  .badge-icon {
+    width: 14px;
+    height: 14px;
+    flex-shrink: 0;
+  }
+
+  .badge--internal {
+    background: #e8f5e9;
+    color: #2e7d32;
+    border: 1px solid #a5d6a7;
+  }
+
+  .badge--reference {
+    background: #fff3e0;
+    color: #e65100;
+    border: 1px solid #ffcc80;
+  }
+
+  .meta-row {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+  }
+
+  .explanation {
+    font-size: 0.8125rem;
+    color: #6e6e73;
+  }
+
+  .freshness {
+    font-size: 0.75rem;
+    color: #8e8e93;
+  }
+
+  .freshness--stale { color: #e65100; }
+
+  .price {
+    font-size: 1.25rem;
+    font-weight: 700;
+    color: #1d1d1f;
+  }
+
+  .confidence-bar {
+    height: 4px;
+    border-radius: 2px;
+    background: #e5e5ea;
+    overflow: hidden;
+  }
+
+  .confidence-bar__fill {
+    height: 100%;
+    border-radius: 2px;
+    transition: width 0.3s ease;
+  }
+
+  .confidence-bar__fill--high { background: #34c759; }
+  .confidence-bar__fill--medium { background: #ff9f0a; }
+  .confidence-bar__fill--low { background: #ff3b30; }
+
+  .confidence-label {
+    font-size: 0.6875rem;
+    color: #8e8e93;
+  }
+
+  .disambiguation {
+    background: #fff8e1;
+    border-left: 3px solid #ffb300;
+    padding: 0.625rem 0.75rem;
+    border-radius: 0 6px 6px 0;
+    font-size: 0.8125rem;
+    color: #6d4c00;
+  }
+
+  .status-pill {
+    font-size: 0.6875rem;
+    font-weight: 600;
+    padding: 0.125rem 0.5rem;
+    border-radius: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+  }
+
+  .status-pill--resolved { background: #e8f5e9; color: #2e7d32; }
+  .status-pill--disambiguation { background: #fff3e0; color: #e65100; }
+
+  .section-label {
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: #8e8e93;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-top: 0.5rem;
+    margin-bottom: 0.75rem;
+  }
+
+  .candidates-list { display: flex; flex-direction: column; gap: 0.5rem; }
+
+  .candidate-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem 0.625rem;
+    background: #fafafa;
+    border-radius: 8px;
+    font-size: 0.8125rem;
+  }
+
+  .candidate-row .card-name { font-size: 0.8125rem; }
+  .candidate-row .card-set { font-size: 0.75rem; }
+  .candidate-row .price { font-size: 0.9375rem; }
+
+  .live-section {
+    margin-top: 2rem;
+    padding-top: 1.5rem;
+    border-top: 1px solid #e5e5ea;
+  }
+
+  .search-form {
+    display: flex;
+    gap: 0.5rem;
+    margin-bottom: 1rem;
+    max-width: 500px;
+  }
+
+  .search-form input {
+    flex: 1;
+    padding: 0.5rem 0.75rem;
+    border: 1px solid #d2d2d7;
+    border-radius: 8px;
+    font-size: 0.875rem;
+    outline: none;
+  }
+
+  .search-form input:focus { border-color: #007aff; box-shadow: 0 0 0 3px rgba(0,122,255,0.15); }
+
+  .search-form button {
+    padding: 0.5rem 1rem;
+    background: #007aff;
+    color: #fff;
+    border: none;
+    border-radius: 8px;
+    font-size: 0.875rem;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .search-form button:hover { background: #0066d6; }
+
+  #live-result { min-height: 2rem; }
+  .error-msg { color: #ff3b30; font-size: 0.875rem; }
+</style>
+</head>
+<body>
+
+<h1>Source Label Preview</h1>
+<p class="subtitle">CardMint Search — Chunk 2 deliverable: UI labeling for source transparency</p>
+
+<div class="grid" id="demo-grid"></div>
+
+<div class="live-section">
+  <p class="section-label">Live API Query</p>
+  <form class="search-form" id="search-form">
+    <input type="text" id="search-input" placeholder="e.g. Charizard Base Set 4/102" autocomplete="off">
+    <button type="submit">Search</button>
+  </form>
+  <div id="live-result"></div>
+</div>
+
+<script>
+// -- Sample data matching the SearchResult contract --
+
+const DEMO_RESOLVED = {
+  query: "Charizard Base Set 4/102",
+  status: "resolved",
+  chosen: {
+    id: "inv-001",
+    cardName: "Charizard",
+    setName: "Base Set",
+    collectorNo: "4/102",
+    rarity: "Holo Rare",
+    conditionBucket: "LP",
+    marketPrice: 189.99,
+    imageUrl: null,
+    sourceLabel: "internal_truth",
+    freshness: null,
+    confidence: 0.98
+  },
+  candidates: [
+    {
+      id: "inv-001",
+      cardName: "Charizard",
+      setName: "Base Set",
+      collectorNo: "4/102",
+      rarity: "Holo Rare",
+      conditionBucket: "LP",
+      marketPrice: 189.99,
+      imageUrl: null,
+      sourceLabel: "internal_truth",
+      freshness: null,
+      confidence: 0.98
+    }
+  ],
+  sourceLabel: "internal_truth",
+  sourceExplanation: "CardMint verified inventory",
+  disambiguationReason: null
+};
+
+const DEMO_DISAMBIGUATION = {
+  query: "Charizard",
+  status: "needs_disambiguation",
+  chosen: null,
+  candidates: [
+    {
+      id: "ref-001",
+      cardName: "Charizard",
+      setName: "Base Set",
+      collectorNo: "4/102",
+      rarity: "Holo Rare",
+      conditionBucket: null,
+      marketPrice: 195.00,
+      imageUrl: null,
+      sourceLabel: "reference_aggregate",
+      freshness: "2026-02-09T08:00:00Z",
+      confidence: 0.72
+    },
+    {
+      id: "ref-002",
+      cardName: "Charizard",
+      setName: "Evolutions",
+      collectorNo: "11/108",
+      rarity: "Holo Rare",
+      conditionBucket: null,
+      marketPrice: 42.50,
+      imageUrl: null,
+      sourceLabel: "reference_aggregate",
+      freshness: "2026-02-09T08:00:00Z",
+      confidence: 0.68
+    },
+    {
+      id: "ref-003",
+      cardName: "Charizard ex",
+      setName: "Scarlet & Violet",
+      collectorNo: "TG05",
+      rarity: "Ultra Rare",
+      conditionBucket: null,
+      marketPrice: 28.75,
+      imageUrl: null,
+      sourceLabel: "reference_aggregate",
+      freshness: "2026-02-08T14:30:00Z",
+      confidence: 0.55
+    }
+  ],
+  sourceLabel: "reference_aggregate",
+  sourceExplanation: "Reference market aggregate \u2014 not a live seller listing",
+  disambiguationReason: "Multiple sets match \u2014 specify a set to narrow results"
+};
+
+// -- Rendering helpers --
+
+function badgeIcon(label) {
+  if (label === "internal_truth") {
+    return '<svg class="badge-icon" viewBox="0 0 16 16" fill="none"><path d="M8 1l2.12 4.3 4.74.69-3.43 3.34.81 4.72L8 11.77l-4.24 2.28.81-4.72L1.14 5.99l4.74-.69L8 1z" fill="currentColor"/></svg>';
+  }
+  return '<svg class="badge-icon" viewBox="0 0 16 16" fill="none"><path d="M8 2a6 6 0 100 12A6 6 0 008 2zm0 1a5 5 0 110 10A5 5 0 018 3zm-.5 2v3.5H11v1H6.5V5h1z" fill="currentColor"/></svg>';
+}
+
+function formatFreshness(iso) {
+  if (!iso) return null;
+  var diff = Date.now() - new Date(iso).getTime();
+  var hours = Math.floor(diff / 3600000);
+  if (hours < 1) return { text: "< 1 hour ago", stale: false };
+  if (hours < 24) return { text: hours + "h ago", stale: false };
+  var days = Math.floor(hours / 24);
+  return { text: days + "d ago", stale: days > 1 };
+}
+
+function confidenceClass(c) {
+  if (c >= 0.85) return "high";
+  if (c >= 0.6) return "medium";
+  return "low";
+}
+
+function renderCard(result) {
+  var el = document.createElement("div");
+  el.className = "card";
+
+  var isResolved = result.status === "resolved";
+  var display = isResolved ? result.chosen : result.candidates[0];
+  if (!display) return el;
+
+  var badgeCls = result.sourceLabel === "internal_truth" ? "badge--internal" : "badge--reference";
+  var badgeText = result.sourceLabel === "internal_truth" ? "CardMint verified inventory" : "Reference market aggregate";
+  var statusCls = isResolved ? "status-pill--resolved" : "status-pill--disambiguation";
+  var statusText = isResolved ? "Resolved" : "Disambiguation";
+
+  var html = '';
+
+  // Header
+  html += '<div class="card-header">';
+  html += '  <div>';
+  html += '    <span class="card-name">' + esc(display.cardName) + '</span>';
+  html += '    <span class="card-set"> &middot; ' + esc(display.setName);
+  if (display.collectorNo) html += ' #' + esc(display.collectorNo);
+  html += '</span>';
+  html += '  </div>';
+  html += '  <span class="status-pill ' + statusCls + '">' + statusText + '</span>';
+  html += '</div>';
+
+  // Source badge
+  html += '<div class="meta-row">';
+  html += '  <span class="badge ' + badgeCls + '">' + badgeIcon(result.sourceLabel) + badgeText + '</span>';
+  var fresh = formatFreshness(display.freshness);
+  if (fresh) {
+    html += '  <span class="freshness' + (fresh.stale ? " freshness--stale" : "") + '">Updated ' + esc(fresh.text) + '</span>';
+  } else if (result.sourceLabel === "internal_truth") {
+    html += '  <span class="freshness">Live inventory</span>';
+  }
+  html += '</div>';
+
+  // Explanation
+  html += '<p class="explanation">' + esc(result.sourceExplanation) + '</p>';
+
+  // Price + confidence
+  if (display.marketPrice != null) {
+    html += '<div class="meta-row">';
+    html += '  <span class="price">$' + display.marketPrice.toFixed(2) + '</span>';
+    html += '  <span class="confidence-label">' + (display.confidence * 100).toFixed(0) + '% confidence</span>';
+    html += '</div>';
+    html += '<div class="confidence-bar"><div class="confidence-bar__fill confidence-bar__fill--' + confidenceClass(display.confidence) + '" style="width:' + (display.confidence * 100) + '%"></div></div>';
+  }
+
+  // Disambiguation callout
+  if (result.disambiguationReason) {
+    html += '<div class="disambiguation">' + esc(result.disambiguationReason) + '</div>';
+  }
+
+  // Candidate list for disambiguation
+  if (!isResolved && result.candidates.length > 1) {
+    html += '<p class="section-label">Candidates</p>';
+    html += '<div class="candidates-list">';
+    result.candidates.forEach(function(c) {
+      var cFresh = formatFreshness(c.freshness);
+      html += '<div class="candidate-row">';
+      html += '  <span class="card-name">' + esc(c.cardName) + '</span>';
+      html += '  <span class="card-set">' + esc(c.setName);
+      if (c.collectorNo) html += ' #' + esc(c.collectorNo);
+      html += '</span>';
+      if (c.marketPrice != null) html += '  <span class="price" style="margin-left:auto">$' + c.marketPrice.toFixed(2) + '</span>';
+      html += '  <span class="confidence-label">' + (c.confidence * 100).toFixed(0) + '%</span>';
+      if (cFresh) html += '  <span class="freshness' + (cFresh.stale ? " freshness--stale" : "") + '">' + esc(cFresh.text) + '</span>';
+      html += '</div>';
+    });
+    html += '</div>';
+  }
+
+  el.innerHTML = html;
+  return el;
+}
+
+function esc(s) {
+  var d = document.createElement("div");
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+// -- Render demo states --
+var grid = document.getElementById("demo-grid");
+grid.appendChild(renderCard(DEMO_RESOLVED));
+grid.appendChild(renderCard(DEMO_DISAMBIGUATION));
+
+// -- Live API --
+var form = document.getElementById("search-form");
+var input = document.getElementById("search-input");
+var liveResult = document.getElementById("live-result");
+
+form.addEventListener("submit", function(e) {
+  e.preventDefault();
+  var q = input.value.trim();
+  if (!q) return;
+
+  liveResult.innerHTML = '<p class="explanation">Searching\u2026</p>';
+
+  fetch("/api/search", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ query: q })
+  })
+  .then(function(r) { return r.json(); })
+  .then(function(data) {
+    liveResult.innerHTML = "";
+    if (data.error) {
+      liveResult.innerHTML = '<p class="error-msg">' + esc(data.message || data.error) + '</p>';
+      return;
+    }
+    var wrapper = document.createElement("div");
+    wrapper.className = "grid";
+    wrapper.appendChild(renderCard(data));
+    liveResult.appendChild(wrapper);
+  })
+  .catch(function(err) {
+    liveResult.innerHTML = '<p class="error-msg">Request failed: ' + esc(err.message) + '</p>';
+  });
+});
+</script>
+</body>
+</html>
