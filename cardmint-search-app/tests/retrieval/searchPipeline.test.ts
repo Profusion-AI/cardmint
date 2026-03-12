@@ -342,7 +342,7 @@ describe("searchPipeline", () => {
 
       expect(result.sourceLabel).toBe("reference_aggregate");
       for (const c of result.candidates) {
-        expect(c.freshness).toBe("2026-02-06T17:17:00Z");
+        expect(c.freshness).toBe("2026-02-06");
       }
     });
 

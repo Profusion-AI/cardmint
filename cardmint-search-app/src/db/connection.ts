@@ -71,19 +71,25 @@ export function getDbStatus(pool: DbPool): {
     }
   }
 
+  let referenceConnected = pool.reference !== null;
   if (pool.reference) {
     try {
+      // Phase 1: count rows in latest complete snapshot.
+      // corpusCount = 0 is valid (no snapshot uploaded yet), not an error.
       const row = pool.reference.prepare(
-        "SELECT COUNT(*) as cnt FROM tcg_search_corpus WHERE run_id = (SELECT MAX(run_id) FROM tcg_search_corpus)"
+        `SELECT COUNT(*) AS cnt FROM tcg_rows
+         WHERE snapshot_id = (SELECT MAX(id) FROM tcg_snapshots WHERE status = 'complete')`
       ).get() as { cnt: number } | undefined;
-      corpusCount = row?.cnt;
+      corpusCount = row?.cnt ?? 0;
     } catch {
-      // table might not exist
+      // tcg_rows / tcg_snapshots absent — wrong DB file or schema not yet applied.
+      // Degrade to connected=false so the UI shows the amber "corpus not loaded" warning.
+      referenceConnected = false;
     }
   }
 
   return {
     inventory: { connected: pool.inventory !== null, productCount },
-    reference: { connected: pool.reference !== null, corpusCount },
+    reference: { connected: referenceConnected, corpusCount },
   };
 }

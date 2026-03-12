@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
 
+const MAX_BULK_VALUATION_ROWS = 10000;
+
 // ─── Formatters ────────────────────────────────────────────────────────────────
 function formatNumber(num) {
   if (num == null) return "—";
@@ -241,23 +243,40 @@ function StatusBar() {
                 />
               </div>
               {health.db && (
-                <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-                  {Object.entries(health.db).map(([name, db]) => (
-                    <div key={name} style={{ background: "#f9fafb", borderRadius: 6, padding: "10px 14px", flex: "1 1 160px" }}>
-                      <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 4 }}>{name}</div>
-                      <div style={{ fontSize: 12, color: "#6b7280" }}>
-                        {db.connected
-                          ? <span><StatusDot ok={true} />Connected</span>
-                          : <span><StatusDot ok={false} />Disconnected</span>}
-                      </div>
-                      {(db.productCount ?? db.corpusCount) != null && (
-                        <div style={{ fontSize: 12, color: "#9ca3af", marginTop: 2 }}>
-                          {formatNumber(db.productCount ?? db.corpusCount)} records
+                <>
+                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                    {Object.entries(health.db).map(([name, db]) => (
+                      <div key={name} style={{ background: "#f9fafb", borderRadius: 6, padding: "10px 14px", flex: "1 1 160px" }}>
+                        <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 4 }}>{name}</div>
+                        <div style={{ fontSize: 12, color: "#6b7280" }}>
+                          {db.connected
+                            ? <span><StatusDot ok={true} />Connected</span>
+                            : <span><StatusDot ok={false} />Disconnected</span>}
                         </div>
-                      )}
+                        {(db.productCount ?? db.corpusCount) != null && (
+                          <div style={{ fontSize: 12, color: "#9ca3af", marginTop: 2 }}>
+                            {formatNumber(db.productCount ?? db.corpusCount)} records
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                  {health.db.reference && (!health.db.reference.connected || health.db.reference.corpusCount === 0) && (
+                    <div style={{
+                      marginTop: 10,
+                      padding: "8px 12px",
+                      background: "#fefce8",
+                      border: "1px solid #fde68a",
+                      borderRadius: 6,
+                      fontSize: 12,
+                      color: "#854d0e",
+                    }}>
+                      Reference corpus not loaded — upload a TCGPlayer export in{" "}
+                      <a href="/admin/analytics/tcgplayer" style={{ color: "#2563eb" }}>TCG Dashboard</a>{" "}
+                      to enable catalog fallback.
                     </div>
-                  ))}
-                </div>
+                  )}
+                </>
               )}
             </div>
           )}
@@ -749,9 +768,10 @@ function SearchArea() {
         setSearchError(data.error || data.message || "Search failed");
       } else {
         setSearchResult(data);
-        if (data.status === "resolved" && data.results?.length > 0) {
+        if (data.status === "resolved" && data.results?.length > 0 && data.sourceLabel !== "reference_aggregate") {
           setWorkingCard(data.results[0]);
         }
+        // reference_aggregate resolved results: do NOT auto-promote; require explicit confirmation
       }
     } catch (e) {
       setSearchError(e.message);
@@ -785,6 +805,8 @@ function SearchArea() {
   const needsDisambig = searchResult?.status === "needs_disambiguation";
   const hasNoCandidates = needsDisambig && candidates.length === 0;
   const hasDisambigCandidates = needsDisambig && candidates.length > 0;
+  const needsCatalogConfirm = isResolved && searchResult?.sourceLabel === "reference_aggregate" && !workingCard && candidates.length > 0;
+  const showCandidateTable = hasDisambigCandidates || needsCatalogConfirm;
   const disambigReason = searchResult?.disambiguationReason
     || searchResult?.disambiguation?.reason
     || (typeof searchResult?.disambiguation === "string" ? searchResult.disambiguation : null);
@@ -875,11 +897,17 @@ function SearchArea() {
       {/* Working card result row */}
       {workingCard && (
         <div style={{ marginBottom: 16 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8, flexWrap: "wrap" }}>
             <Badge
               text={isResolved ? "resolved" : "needs_disambiguation"}
               color={isResolved ? "green" : "yellow"}
             />
+            {workingCard.sourceLabel === "internal_truth" && (
+              <Badge text="IN STOCK" color="green" />
+            )}
+            {workingCard.sourceLabel === "reference_aggregate" && (
+              <Badge text="CATALOG MATCH" color="yellow" />
+            )}
             {searchResult?.retrievalPath && (
               <span style={{ fontSize: 12, color: "#6b7280" }}>
                 path: <strong>{searchResult.retrievalPath}</strong>
@@ -918,11 +946,27 @@ function SearchArea() {
                 <div style={{ fontWeight: 700, fontSize: 16, color: "#111827", marginBottom: 3 }}>
                   {workingCard.name || workingCard.cardName || "—"}
                 </div>
-                <div style={{ fontSize: 13, color: "#6b7280", marginBottom: 10 }}>
+                <div style={{ fontSize: 13, color: "#6b7280", marginBottom: 4 }}>
                   {workingCard.set || workingCard.setName || "—"}
                   {workingCard.collectorNumber && <span> · #{workingCard.collectorNumber}</span>}
                   {workingCard.condition && <span> · {workingCard.condition}</span>}
                 </div>
+                {workingCard.conditionBucket === "UNK" && (
+                  <div style={{ fontSize: 12, color: "#92400e", marginBottom: 4, fontStyle: "italic" }}>
+                    Condition unassessed
+                  </div>
+                )}
+                {workingCard.sourceLabel === "internal_truth" && (
+                  <div style={{ fontSize: 12, color: "#166534", marginBottom: 8 }}>
+                    Found in your inventory
+                  </div>
+                )}
+                {workingCard.sourceLabel === "reference_aggregate" && (
+                  <div style={{ fontSize: 12, color: "#92400e", marginBottom: 8 }}>
+                    Not in inventory — market reference · Source: TCGPlayer
+                    {workingCard.freshness && <span> · {workingCard.freshness.slice(0, 10)}</span>}
+                  </div>
+                )}
                 <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
                   {(workingCard.price != null || workingCard.priceCents != null) && (
                     <span style={{ fontWeight: 700, fontSize: 15, color: "#111827" }}>
@@ -982,14 +1026,17 @@ function SearchArea() {
         </div>
       )}
 
-      {/* Disambiguation candidate list */}
-      {hasDisambigCandidates && (
+      {/* Disambiguation candidate list / catalog confirmation */}
+      {showCandidateTable && (
         <div style={{ marginBottom: 16 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
-            <Badge text="needs_disambiguation" color="yellow" />
-            <span style={{ fontSize: 13, color: "#6b7280" }}>
-              {candidates.length} candidate{candidates.length !== 1 ? "s" : ""}
-              {disambigReason && <span> — {disambigReason}</span>}
+            {needsCatalogConfirm
+              ? <Badge text="CATALOG MATCH" color="yellow" />
+              : <Badge text="needs_disambiguation" color="yellow" />}
+            <span style={{ fontSize: 13, color: needsCatalogConfirm ? "#92400e" : "#6b7280" }}>
+              {needsCatalogConfirm
+                ? "Catalog reference — confirm to proceed"
+                : <>{candidates.length} candidate{candidates.length !== 1 ? "s" : ""}{disambigReason && <span> — {disambigReason}</span>}</>}
             </span>
           </div>
           <div style={{ overflowX: "auto" }}>
@@ -1001,6 +1048,7 @@ function SearchArea() {
                   <th style={{ padding: "8px 10px", fontWeight: 600, color: "#374151" }}>#</th>
                   <th style={{ padding: "8px 10px", fontWeight: 600, color: "#374151" }}>Condition</th>
                   <th style={{ padding: "8px 10px", fontWeight: 600, color: "#374151" }}>Price</th>
+                  <th style={{ padding: "8px 10px", fontWeight: 600, color: "#374151" }}>Source</th>
                   <th style={{ padding: "8px 10px", fontWeight: 600, color: "#374151" }}>Confidence</th>
                   <th style={{ padding: "8px 10px", fontWeight: 600, color: "#374151" }}></th>
                 </tr>
@@ -1028,6 +1076,13 @@ function SearchArea() {
                           : "—"}
                       </td>
                       <td style={{ padding: "8px 10px" }}>
+                        {c.sourceLabel === "internal_truth"
+                          ? <Badge text="IN STOCK" color="green" />
+                          : c.sourceLabel === "reference_aggregate"
+                          ? <Badge text="CATALOG" color="yellow" />
+                          : null}
+                      </td>
+                      <td style={{ padding: "8px 10px" }}>
                         <Badge text={c.confidence || "—"} color={confColor(c.confidence)} />
                       </td>
                       <td style={{ padding: "8px 10px" }}>
@@ -1035,7 +1090,7 @@ function SearchArea() {
                           onClick={() => handleAccept(c)}
                           style={{
                             padding: "4px 12px",
-                            background: isActive ? "#6b7280" : "#2563eb",
+                            background: isActive ? "#6b7280" : c.sourceLabel === "reference_aggregate" ? "#d97706" : "#2563eb",
                             color: "#fff",
                             border: "none",
                             borderRadius: 4,
@@ -1045,7 +1100,7 @@ function SearchArea() {
                           }}
                           disabled={isActive}
                         >
-                          {isActive ? "Active" : "Accept"}
+                          {isActive ? "Active" : c.sourceLabel === "reference_aggregate" ? "Confirm catalog match" : "Accept"}
                         </button>
                       </td>
                     </tr>
@@ -1086,6 +1141,23 @@ function BulkValuationSection() {
         return;
       }
       const headers = parseCSVLine(lines[0]).map((h) => h.toLowerCase());
+      const totalDataRows = lines.length - 1;
+      if (isTcgSnapshotExport(headers)) {
+        setError(
+          `This file looks like a TCGPlayer snapshot export (${formatNumber(totalDataRows)} rows). ` +
+          "Bulk Valuation only supports smaller operator CSVs. Use the TCG Dashboard link above to upload this file as a snapshot."
+        );
+        setLoading(false);
+        return;
+      }
+      if (totalDataRows > MAX_BULK_VALUATION_ROWS) {
+        setError(
+          `Bulk Valuation supports up to ${formatNumber(MAX_BULK_VALUATION_ROWS)} rows per upload. ` +
+          `This file has ${formatNumber(totalDataRows)} rows.`
+        );
+        setLoading(false);
+        return;
+      }
       const nameIdx = headers.findIndex((h) => /^(product\s*name|card\s*name|name)$/i.test(h));
       const setIdx = headers.findIndex((h) => /^(set\s*name|set)$/i.test(h));
       const numIdx = headers.findIndex((h) => /^(number|card\s*number|collector\s*number|#)$/i.test(h));
@@ -1112,9 +1184,9 @@ function BulkValuationSection() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ rows: csvRows }),
       });
-      const data = await res.json();
+      const { data, rawText } = await readJsonResponseSafe(res);
       if (!res.ok) {
-        setError(data.error || data.message || "Bulk valuation failed");
+        setError(data?.error || data?.message || describeBulkValuationHttpError(res.status, rawText));
       } else {
         setSummary(data.summary);
         setRows(data.rows);
@@ -1267,6 +1339,39 @@ function parseCSVLine(line) {
   }
   cols.push(cur.trim());
   return cols;
+}
+
+function isTcgSnapshotExport(headers) {
+  const requiredHeaders = [
+    "tcgplayer id",
+    "product line",
+    "set name",
+    "product name",
+    "condition",
+    "tcg market price",
+    "total quantity",
+  ];
+  return requiredHeaders.every((header) => headers.includes(header));
+}
+
+async function readJsonResponseSafe(response) {
+  const rawText = await response.text();
+  if (!rawText) return { data: null, rawText: "" };
+  try {
+    return { data: JSON.parse(rawText), rawText };
+  } catch {
+    return { data: null, rawText };
+  }
+}
+
+function describeBulkValuationHttpError(status, rawText) {
+  if (status === 413) {
+    return "Upload is too large for Bulk Valuation. Use smaller operator CSVs, or upload TCGPlayer exports in TCG Dashboard.";
+  }
+  if (rawText && rawText.trim().startsWith("<")) {
+    return "Bulk valuation request failed before the API could return JSON. This usually means the upload is too large for this tool.";
+  }
+  return "Bulk valuation failed";
 }
 
 function esc(v) {
