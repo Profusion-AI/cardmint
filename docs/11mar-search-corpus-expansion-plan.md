@@ -1,8 +1,9 @@
 # Search Corpus Expansion — Phased Implementation Plan
 
 **Date:** 2026-03-11
-**Status:** APPROVED FOR IMPLEMENTATION
-**Codex review:** Incorporated (see Review Notes section)
+**Last updated:** 2026-03-12 — Phase 1 complete and deployed as `prod-2026-03-12a`
+**Status:** Phase 1 COMPLETE ✅ · Phase 2 NEXT · Phase 3 PENDING
+**Codex review:** Phase 1 GREEN (2-pass: YELLOW → GREEN after confirmation gate + health probe fixes)
 **Supersedes:** `search-app-6mar-status.md` (deprecated), partial notes in `10mar-codex-reviewed.md`
 
 ---
@@ -35,23 +36,102 @@ No confident match          → disambiguation panel, no auto-resolve, no badge
 
 ---
 
-## Current State (as of 2026-03-11)
+## Current Blockers From The Top
+
+Status as of 2026-03-12 (Phase 1 deployed):
+
+1. ~~**No reference data on prod yet.**~~
+   **RESOLVED (code-side).** Phase 1 is deployed. The code correctly returns `[]` when no snapshot
+   exists and surfaces `reference=unavailable` in health. **Remaining operator action:** upload the
+   March 6 TCGPlayer CSV at `/admin/analytics/tcgplayer` to seed the first complete snapshot.
+
+2. ~~**Phase 1 health probe checked `tcg_search_corpus`.**~~
+   **RESOLVED.** `connection.ts` now probes `tcg_rows` in the latest complete snapshot. Wrong-schema
+   or mispointed DBs degrade to `connected=false` instead of appearing healthy.
+
+3. ~~**Reference results must not auto-resolve without confirmation.**~~
+   **RESOLVED.** `SearchDashboard` no longer auto-promotes `reference_aggregate` results. Operator
+   must click "Confirm catalog match" explicitly. IN STOCK / CATALOG MATCH source badges deployed.
+
+4. **The CSV upload bottleneck is still memory-bound.** ← **OPEN (Phase 3)**
+   The route uses `multer.diskStorage()` with a 50 MB limit, but still does `fs.readFileSync(tempPath)`
+   and `TcgSnapshotService.ingestCsv(content, fileName)` using `csv-parse/sync`. The real 31 MB /
+   216k-row export will work but is memory-bound; OOM risk under concurrent load.
+
+5. **Search Dashboard `Bulk Valuation` is not the snapshot-ingest path.** ← **BY DESIGN (LIVE)**
+   The guardrail is intentional and deployed. Do not repurpose Bulk Valuation into snapshot ingest.
+
+---
+
+## Current State (as of 2026-03-12)
 
 | Component | Status |
 |-----------|--------|
 | `InventoryAdapter` | LIVE — FTS5, set-constrained, 69 cards |
-| `ReferenceAdapter` | CODE EXISTS — queries `tcg_search_corpus` which does not exist yet |
-| `searchPipeline.ts` | WIRED — already falls back to reference when inventory returns 0 |
-| `tcg_rows` | LIVE on prod — has the data, wrong shape for ReferenceAdapter |
-| `tcg_search_corpus` | MISSING — the planned table ReferenceAdapter expects |
-| Reference corpus | `reference.connected: false` in prod |
-| TCG snapshots on prod | Empty (no uploads yet) |
+| `ReferenceAdapter` | ✅ LIVE (Phase 1) — queries `tcg_rows` in latest complete snapshot; dedup + LP-preferred pricing; `conditionBucket="UNK"` |
+| `searchPipeline.ts` | LIVE — falls back to reference when inventory returns 0 |
+| `connection.ts` health probe | ✅ LIVE (Phase 1) — probes `tcg_rows`, degrades `connected=false` on wrong-schema DB |
+| `tcg_rows` | Schema exists; prod has 0 rows (no snapshot loaded yet) |
+| `tcg_search_corpus` | MISSING — planned for Phase 2; Phase 1 uses `tcg_rows` as temporary source |
+| Reference corpus | `reference=unavailable` on prod (no snapshot yet); will be `connected: true` after first upload |
+| TCG snapshots on prod | `0` complete snapshots — **operator action needed:** upload March 6 CSV at `/admin/analytics/tcgplayer` |
+| Search Dashboard source badges | ✅ LIVE (Phase 1) — IN STOCK (green) / CATALOG MATCH (amber) with behavioral split |
+| Catalog confirmation gate | ✅ LIVE (Phase 1) — reference results require explicit "Confirm catalog match", never auto-promote |
+| Empty-corpus warning | ✅ LIVE (Phase 1) — amber note in status bar when `corpusCount=0` or `!connected` |
+| Search Dashboard bulk upload guard | LIVE — snapshot exports rejected from Bulk Valuation, operator directed to TCG Dashboard |
+| Bulk Valuation route limit | LIVE — EverShop proxy JSON body limit `25mb`, server-side row cap `10,000` by design |
+| CSV ingest scalability | OPEN (Phase 3) — `csv-parse/sync` keeps ingest memory-bound for large exports |
 
-The gap is exactly one table and one query change. The pipeline is already correct.
+The pipeline, fallback, and UI source distinction are now all correct.
+The remaining gap before reference search is usable is **a loaded snapshot on prod**.
+
+---
+
+## Repo State Snapshot (for Claude)
+
+The following are already done in-repo and should be treated as baseline, not future work:
+
+- Search threshold is already `0.70` in prod.
+- Margin guard regression is fixed at card-identity level.
+- Set normalization is already applied in scoring and deterministic inventory lookup.
+- Inventory FTS/LIKE is already set-constrained, so wrong-set inventory candidates like
+  `jungle flareon -> Dark Flareon / Team Rocket` are fixed.
+- The admin search dashboard has already been restructured into:
+  status bar → search hero → inline result panels → utility strip.
+- `Enrich` is TCGDex-backed and `Intel` is snapshot-backed in the live search tester path.
+- `Bulk Valuation` now has an explicit guardrail:
+  full TCGPlayer snapshot exports are rejected client-side with a clear operator message, rather than
+  producing a raw HTML/JSON parse failure.
+
+What remains open is **catalog fallback**, not the inventory search UX pass.
+
+---
+
+## Immediate Task List
+
+1. **Load the March 6 TCGPlayer export as the first complete snapshot.** ← **PENDING (operator action)**
+   File: `docs/TCGplayer__Pricing_Custom_Export_20260306_024500.csv`
+   Upload at `/admin/analytics/tcgplayer`. This is the only remaining gate before reference fallback
+   delivers business value in production.
+
+2. ~~**Implement Phase 1 reference fallback against `tcg_rows`.**~~
+   **DONE** (2026-03-12) — Deployed as `prod-2026-03-12a`. Codex GREEN.
+
+3. ~~**Make the dashboard visually separate `inventory truth` from `catalog fallback`.**~~
+   **DONE** (2026-03-12) — Source badges, confirmation gate, empty-corpus warning all live.
+
+4. **Build Phase 2 corpusization (`tcg_search_corpus` + FTS5).** ← **NEXT**
+   Start after the first snapshot is loaded and Phase 1 reference search is validated in prod.
+
+5. **Keep Phase 3 focused on ingest scalability and automation, not on changing search semantics.**
 
 ---
 
 ## Phase 1 — Business Unlock: Wire Reference to `tcg_rows` Directly
+
+**Status: COMPLETE** — Deployed `prod-2026-03-12a` (2026-03-12). Codex: GREEN (YELLOW → GREEN after 2-pass review).
+**Tests:** 163/163 passing (5 new `tests/db/connection.test.ts` + 20 `referenceAdapter.test.ts`).
+**Remaining operator action:** Upload the March 6 TCGPlayer CSV to seed the first complete snapshot.
 
 **Goal:** Turn `reference.connected: true` in prod today. No schema migration required.
 
@@ -61,27 +141,61 @@ The gap is exactly one table and one query change. The pipeline is already corre
   latest complete snapshot.
 - Add the same set-constrained filtering just applied to `InventoryAdapter` (Option A fix, already
   deployed).
-- Point `referenceAdapter` at `db` (inventory DB) instead of `null` in the server startup.
-- Add `SEARCH_APP_REFERENCE_DB_PATH` env var (or reuse inventory DB path) on prod.
+- Point `referenceAdapter` at a real SQLite DB in server startup by setting
+  `SEARCH_APP_REFERENCE_DB_PATH`. If inventory and snapshot tables live in the same SQLite file, reuse
+  that same path rather than inventing a second DB immediately.
+- Update `cardmint-search-app/src/db/connection.ts` / health reporting for Phase 1 so
+  `reference.connected` and row counts reflect the temporary `tcg_rows` source instead of probing
+  only `tcg_search_corpus`.
+- Treat the absence of a complete snapshot as a valid empty state, not an error.
 
-**SQL shape for Phase 1 `likeSearch`:**
+**Phase 1 query design rule:**
+Do **not** rely on SQLite's permissive `GROUP BY` behavior to return arbitrary `photo_url`,
+`tcgplayer_id`, or finish values. Use a stable representative-row strategy:
+- scope to the latest complete snapshot first,
+- rank rows per identity by preferred condition (`NM`, then `LP`, then `MP`, etc.),
+- choose one representative row with a window function or equivalent subquery,
+- then return that row's metadata consistently.
+
+**SQL shape for Phase 1 `likeSearch` (illustrative, not literal final SQL):**
 
 ```sql
-SELECT product_name   AS card_name,
+WITH latest_rows AS (
+  SELECT *
+  FROM tcg_rows
+  WHERE snapshot_id = (SELECT MAX(id) FROM tcg_snapshots WHERE status = 'complete')
+),
+ranked AS (
+  SELECT *,
+         ROW_NUMBER() OVER (
+           PARTITION BY product_name, set_name, card_number
+           ORDER BY
+             CASE condition_bucket
+               WHEN 'NM' THEN 1
+               WHEN 'LP' THEN 2
+               WHEN 'MP' THEN 3
+               WHEN 'HP' THEN 4
+               WHEN 'DMG' THEN 5
+               ELSE 6
+             END,
+             market_price_cents DESC
+         ) AS rep_rank
+  FROM latest_rows
+  WHERE LOWER(product_name) LIKE '%' || LOWER(?) || '%'
+    -- set constraint when parsed.setName is present
+)
+SELECT product_name AS card_name,
        set_name,
-       card_number    AS collector_no_raw,
+       card_number AS collector_no_raw,
        rarity,
-       AVG(market_price_cents) / 100.0 AS market_price,
-       photo_url      AS image_url,
-       MAX(created_at) AS freshness_ts,
-       tcgplayer_id   AS product_id,
+       market_price_cents / 100.0 AS market_price,
+       photo_url AS image_url,
+       updated_at AS freshness_ts,
+       tcgplayer_id AS product_id,
        condition_bucket AS sub_type_name
-FROM tcg_rows
-WHERE snapshot_id = (SELECT MAX(id) FROM tcg_snapshots WHERE status = 'complete')
-  AND LOWER(product_name) LIKE '%' || LOWER(?) || '%'
-  -- set constraint when parsed.setName is present (same pattern as InventoryAdapter)
-GROUP BY product_name, set_name, card_number
-ORDER BY market_price DESC
+FROM ranked
+WHERE rep_rank = 1
+ORDER BY market_price DESC NULLS LAST
 LIMIT 25
 ```
 
@@ -98,11 +212,16 @@ Reference results reflect the most recent TCGPlayer snapshot loaded into the sys
 is uploaded, reference fallback returns no results. The corpus only grows when a CSV is uploaded.
 
 **Definition of Done:**
-- `reference.connected: true` in prod health endpoint
-- `jungle flareon` → clean no-results (inventory miss, no snapshot loaded yet)
-- After uploading a TCGPlayer CSV → `jungle flareon` resolves against catalog
-- Inventory results and reference results render with distinct visual treatment in the UI
-- 149 existing tests still pass; new tests cover reference adapter querying `tcg_rows`
+- [x] In an environment with at least one complete snapshot, `reference.connected: true` in the health endpoint
+- [x] In prod before any snapshot upload, search behavior unchanged except for clearer empty-state handling (`reference=unavailable`)
+- [ ] After uploading a TCGPlayer CSV on prod, `jungle flareon` resolves against catalog — **pending first snapshot upload**
+- [x] Inventory results and reference results render with distinct visual treatment in the UI
+- [x] Existing tests still pass; new tests cover reference adapter querying `tcg_rows`, set-constrained fallback, and no-snapshot empty behavior
+
+**Implementation note:**
+Phase 1 should be coded so it is safe to merge before the first snapshot is loaded. With zero complete
+snapshots, `ReferenceAdapter` should simply return zero candidates and health/status should make that
+empty-state legible.
 
 **Complexity:** ★★★☆☆
 **Codex gate:** Required before Phase 2
@@ -174,6 +293,10 @@ Path 2: FTS5 on card_name → fast, ranked
 Path 3: LIKE fallback → same as before, kept for robustness
 ```
 
+**Status probe cleanup:**
+Once Phase 2 lands, update the search-app DB health/status code to count rows from
+`tcg_search_corpus` again and stop referencing the temporary Phase 1 `tcg_rows` path.
+
 **Definition of Done:**
 - `tcg_search_corpus` populated after snapshot upload
 - FTS5 path measurably faster than LIKE (log query latency before/after)
@@ -203,13 +326,14 @@ side effect of the upload you have already done.
 
 ### 1. Production-safe ingest path for large CSVs
 
-Current upload route uses `multer.memoryStorage()` with a 10 MB limit. The real TCGPlayer export is
-~31 MB and 216k rows. Fix:
-- Switch to `multer.diskStorage()` with a temp file path
-- Stream-parse with a CSV parser (e.g., `csv-parse` in streaming mode) rather than reading all
-  rows into memory before insert
+Current upload route already uses `multer.diskStorage()` with a 50 MB limit. The real bottleneck is
+that the route still reads the entire temp file into memory and `TcgSnapshotService` still uses
+`csv-parse/sync`. The real TCGPlayer export is ~31 MB and 216k rows. Fix:
+- Change the service contract from `ingestCsv(content, fileName)` to a file/stream-oriented ingest
+  path, e.g. `ingestCsvFile(tempPath, fileName)`
+- Stream-parse with a CSV parser rather than reading all rows into memory before insert
 - Batch insert in transactions of 500–1000 rows
-- Raise the file-size limit to 50 MB
+- Keep the 50 MB file-size limit unless real exports exceed it
 
 ### 2. Upload triggers corpus rebuild
 
@@ -223,6 +347,14 @@ The search dashboard should show:
 - Last corpus refresh date/time (from `MAX(run_id)` join to `tcg_snapshots.snapshot_date`)
 - Row count of current corpus
 - A "Refresh corpus" button that re-triggers the rebuild from the latest complete snapshot
+
+This button is optional for the first pass. Do not block the Phase 3 backend automation on a manual
+rebuild control if the hook is already reliable.
+
+**Current dashboard constraint:**
+The existing `Bulk Valuation` upload on `/admin/search-app` is intentionally *not* the corpus upload
+surface. Operators should use `/admin/analytics/tcgplayer` for snapshot upload until and unless the
+search dashboard explicitly adds a dedicated corpus/snapshot upload affordance.
 
 ### 4. Operator-visible corpus state in health endpoint
 
@@ -328,10 +460,14 @@ Phase 4 ── Separate search DB (DEFERRED — revisit when operationally justi
 
 Phase 1 is justified immediately because:
 - The pipeline fallback is already coded and tested
-- `tcg_rows` already contains the data
-- The operator has a 31 MB TCGPlayer CSV they cannot yet upload
+- the operator already has a 31 MB TCGPlayer CSV that is good enough for MVP corpus seeding
+- the search dashboard now correctly redirects that file away from Bulk Valuation and toward TCG Dashboard
 - Every search query for a card not in the 69-card inventory currently returns an inventory miss
   rather than anything useful — the corpus expansion is a pure improvement
+
+Important nuance:
+- Production does **not** currently have the snapshot ingested. Phase 1 implementation can land first,
+  but business value only appears after the March 6 CSV is successfully loaded.
 
 Phase 2 follows quickly because:
 - Once operators start using reference fallback, search quality becomes a daily-use concern
@@ -340,7 +476,7 @@ Phase 2 follows quickly because:
   temporary
 
 Phase 3 completes the product story:
-- Upload path is currently broken for production-sized files (10 MB limit, all-in-memory)
+- Upload path is still memory-bound for production-sized files, even though disk storage and a 50 MB limit are already in place
 - The workflow story ("upload CSV → search expands") is the canonical operator experience
 - After Phase 3, the operator never needs to think about "corpus management" separately
 
